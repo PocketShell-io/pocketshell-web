@@ -1,0 +1,11 @@
+{
+  "name": "pocketshell-web-bridge",
+  "private": true,
+  "type": "module",
+  "description": "Browser terminal bridge for pocketshell.io — WebSocket to ssh2 (see ../README.md)",
+  "main": "index.mjs",
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.700.0",
+    "ssh2": "^1.16.0"
+  }
+}
