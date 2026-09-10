@@ -1,4 +1,4 @@
-import { createDecipheriv, pbkdf2Sync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { decryptEnvelope, encryptToEnvelope, SyncCryptoError } from '../src/shared/syncCrypto';
 
@@ -7,7 +7,6 @@ import { decryptEnvelope, encryptToEnvelope, SyncCryptoError } from '../src/shar
 // uses node:crypto) — if decryptEnvelope reads one of these, it reads a
 // real desktop blob.
 function desktopStyleEnvelope(plaintext: string, passphrase: string): string {
-  const { createCipheriv, randomBytes } = require('node:crypto') as typeof import('node:crypto');
   const salt = randomBytes(16);
   const iv = randomBytes(12);
   const key = pbkdf2Sync(passphrase, salt, 600_000, 32, 'sha256');

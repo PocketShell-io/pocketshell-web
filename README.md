@@ -16,12 +16,36 @@ browser (Vue 3 SPA) ── HTTPS ──▶ S3 + CloudFront (pocketshell.io)
 ## What lives where
 
 - **This repo** — the SPA. Login, host list, terminal UI (xterm.js), and the
-  WebCrypto half of the sync contract.
+  browser half of the sync contract.
 - **aws-infra `sandbox/pocketshell-web`** — the stack: Route53 zone for
   pocketshell.io, CloudFront distribution, and the `ssh2` bridge Lambda
   behind a WebSocket API (deployed by that directory's `deploy.sh`).
 - **aws-infra `sandbox/pocketshell-sync`** — the Google-login settings sync
   the host list comes from.
+- **PocketShell-io/pocketshell-desktop** — the desktop (Electron) app whose
+  sync contract this app speaks.
+
+## Shared code with the desktop app
+
+The sync contract is not reimplemented here, it is shared with
+pocketshell-desktop:
+
+- `src/shared/{types,syncMerge,sync,syncConfig}.ts` are VERBATIM copies of
+  the desktop's `src/shared/` modules — refresh them with
+  `scripts/sync-shared.sh` after changing them there, never edit the copies.
+  The web host list is parsed by the desktop's `parseSyncPayload`, so a
+  blob either app writes reads identically in both.
+- `src/shared/syncCrypto.ts` is the browser twin of the desktop's
+  `src/main/sync/SyncCrypto.ts` (WebCrypto instead of `node:crypto`, same
+  envelope byte-for-byte) — hand-maintained, change in lockstep.
+- `src/api/sync.ts` ports the desktop's `SyncService` (same errors, same
+  8 KB limit, same conflict shape); only the token source differs, because
+  a browser cannot refresh a Google token silently.
+
+`tests/syncCrypto.test.ts` proves envelope interop with the desktop format
+in BOTH directions (node writes → browser reads, browser writes → node
+reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
+
 
 ## Security model
 
@@ -42,6 +66,7 @@ browser (Vue 3 SPA) ── HTTPS ──▶ S3 + CloudFront (pocketshell.io)
 ```bash
 npm install
 npm run dev        # http://localhost:5173
+npm run test       # vitest (crypto interop + merge rules)
 npm run build      # typecheck + vite build → dist/
 ```
 
