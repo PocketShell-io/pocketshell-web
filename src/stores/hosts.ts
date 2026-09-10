@@ -1,9 +1,11 @@
 import { defineStore } from 'pinia';
-import { syncApi } from '../api/sync';
-import { decryptEnvelope, encryptEnvelope } from '../crypto/envelope';
-import type { HostEntry } from '../types';
+import { makeSyncService } from '../api/sync';
+import { SYNC_SLOT } from '../shared/syncConfig';
+import { parseSyncPayload } from '../shared/syncMerge';
+import { decryptEnvelope, encryptToEnvelope } from '../shared/syncCrypto';
+import type { HostEntry } from '../shared/types';
+import { useAuthStore } from './auth';
 
-const SLOT = 'main';
 const KEYS_STORAGE = 'ps.hostKeys';
 
 /**
@@ -14,6 +16,12 @@ const KEYS_STORAGE = 'ps.hostKeys';
  * or password per host. Those secrets are stored ONLY in this browser,
  * encrypted with the sync passphrase using the same envelope scheme the
  * account uses — localStorage holds one more opaque envelope.
+ *
+ * The host list itself is the desktop app's payload verbatim: pull slot
+ * `main`, open with syncCrypto (the browser twin of the desktop's
+ * SyncCrypto), parse with the DESKTOP's parseSyncPayload — the same
+ * degraded-parse rules, so a blob the desktop wrote is read exactly as the
+ * desktop would read it.
  */
 export const useHostsStore = defineStore('hosts', {
   state: () => ({
@@ -27,19 +35,18 @@ export const useHostsStore = defineStore('hosts', {
     unlocked: (s) => s.pulled && s.passphrase !== '',
   },
   actions: {
-    /** Pull slot `main` and decrypt with the passphrase. */
-    async unlock(idToken: string, passphrase: string): Promise<void> {
-      const blob = await syncApi.getSlot(idToken, SLOT);
+    /** Pull the account slot and decrypt it with the passphrase. */
+    async unlock(passphrase: string): Promise<void> {
+      const auth = useAuthStore();
+      const blob = await makeSyncService(auth).pull(SYNC_SLOT);
       this.version = blob?.version ?? 0;
       if (blob === null) {
         // No account blob yet — an empty list is correct, not an error.
         this.hosts = [];
-        this.passphrase = passphrase;
-        this.pulled = true;
-        return;
+      } else {
+        const plaintext = await decryptEnvelope(blob.data, passphrase);
+        this.hosts = parseSyncPayload(plaintext);
       }
-      const plaintext = await decryptEnvelope(blob.data, passphrase);
-      this.hosts = parseHosts(plaintext);
       this.passphrase = passphrase;
       this.pulled = true;
       this.error = '';
@@ -49,7 +56,7 @@ export const useHostsStore = defineStore('hosts', {
     async setHostSecret(name: string, secret: { privateKeyPem?: string; password?: string }) {
       const keys = this.readKeys();
       keys[name] = secret;
-      localStorage.setItem(KEYS_STORAGE, await encryptEnvelope(JSON.stringify(keys), this.passphrase));
+      localStorage.setItem(KEYS_STORAGE, await encryptToEnvelope(JSON.stringify(keys), this.passphrase));
     },
     async getHostSecret(name: string): Promise<{ privateKeyPem?: string; password?: string } | undefined> {
       const keys = await this.readKeysDecrypted();
@@ -82,22 +89,3 @@ export const useHostsStore = defineStore('hosts', {
     },
   },
 });
-
-/** Same degraded parse as the desktop: not-a-payload → empty list. */
-function parseHosts(plaintext: string): HostEntry[] {
-  try {
-    const parsed: unknown = JSON.parse(plaintext);
-    if (typeof parsed !== 'object' || parsed === null) return [];
-    const hosts = (parsed as Record<string, unknown>)['hosts'];
-    if (!Array.isArray(hosts)) return [];
-    return hosts.filter(
-      (h): h is HostEntry =>
-        typeof h === 'object' &&
-        h !== null &&
-        typeof (h as HostEntry).name === 'string' &&
-        typeof (h as HostEntry).hostname === 'string',
-    );
-  } catch {
-    return [];
-  }
-}

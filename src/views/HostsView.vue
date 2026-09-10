@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
-import type { HostEntry } from '../types';
+import type { HostEntry } from '../shared/types';
 
 const auth = useAuthStore();
 const hosts = useHostsStore();
@@ -23,7 +23,7 @@ async function unlock() {
   unlocking.value = true;
   hosts.error = '';
   try {
-    await hosts.unlock(auth.idToken, passphrase.value);
+    await hosts.unlock(passphrase.value);
   } catch (e) {
     hosts.error = e instanceof Error ? e.message : String(e);
   } finally {
