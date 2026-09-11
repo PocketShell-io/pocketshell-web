@@ -36,11 +36,13 @@ function ctaTo() {
     <main>
       <section class="hero container">
         <div class="hero-copy">
-          <p class="eyebrow">Browser SSH client</p>
-          <h1>Your SSH hosts, in a browser tab.</h1>
+          <p class="eyebrow">Agent-aware SSH, in a browser tab</p>
+          <h1>Drop in on your AI agents from any browser tab.</h1>
           <p class="sub">
-            Sign in with Google, click a host from your synced list, and a real
-            terminal opens in the tab — nothing to install.
+            Your agents run on your own machines. PocketShell opens a real
+            terminal to them — sign in with Google, click a host, and see
+            exactly where Claude Code, Codex, or OpenCode left off. Nothing to
+            install.
           </p>
           <div class="cta-row">
             <RouterLink class="button primary large" :to="ctaTo()">
@@ -52,14 +54,14 @@ function ctaTo() {
           <ul class="chips" aria-label="Key facts">
             <li class="chip">Zero-knowledge sync</li>
             <li class="chip">Keys stay local</li>
-            <li class="chip">Works on iPad &amp; Chromebooks</li>
+            <li class="chip">Sessions live on your machine</li>
           </ul>
         </div>
         <section id="fact-strip" aria-label="Key facts">
           <ul class="fact-strip">
             <li class="fact"><strong>AES-256-GCM · PBKDF2 600k</strong>zero-knowledge, end-to-end</li>
+            <li class="fact"><strong>Claude Code · Codex · OpenCode · Grok Build</strong>first-class sessions, not hidden panes</li>
             <li class="fact"><strong>Real xterm.js terminal</strong>scrollback, copy/paste, resize</li>
-            <li class="fact"><strong>No server-side install</strong>plain SSH is enough</li>
             <li class="fact"><strong>iPad · Chromebook · phone</strong>any browser tab works</li>
           </ul>
         </section>
@@ -67,22 +69,26 @@ function ctaTo() {
           <div class="term-mock">
             <div class="bar">
               <span class="dot" /><span class="dot" /><span class="dot" />
-              <span class="title">ssh — edge-1</span>
+              <span class="title">edge-1 — pocketshell</span>
             </div>
-            <pre><span class="t-prompt">$</span> ssh edge-1
-<span class="t-dim">Last login: Tue Sep  9 08:14 UTC</span>
-<span class="t-user">deploy@edge-1</span>:<span class="t-dir">~</span>$ tmux attach -t agent
-<span class="t-green">●</span> agent — claude is running (2h 14m)
+            <pre><span class="t-prompt">$</span> a list
+<span class="t-dir">~/git/pocketshell</span>
+  review   claude/zai   <span class="t-green">working</span> · 2h
+  api-fix  codex        <span class="t-user">waiting</span> · 6m
+<span class="t-dir">~/git/aplexer</span>
+  spec     shell        <span class="t-dim">idle</span> · 3d
+<span class="t-prompt">$</span> a attach review
+<span class="t-green">●</span> claude — working (2h)
   <span class="t-dim">✓ 14 tests passing</span>
-  <span class="t-dim">→ refactor: extracting sync merge logic</span>
-<span class="t-user">deploy@edge-1</span>:<span class="t-dir">~</span>$ <span class="cursor">█</span></pre>
+  <span class="t-dim">→ refactor: extracting merge logic</span>
+<span class="t-prompt">$</span> <span class="cursor">█</span></pre>
           </div>
         </div>
       </section>
 
       <section id="how" class="band">
         <div class="container">
-          <h2>From zero to a shell in three steps</h2>
+          <h2>From zero to your agents in three steps</h2>
           <ol class="steps">
             <li class="step">
               <span class="num">1</span>
@@ -96,8 +102,8 @@ function ctaTo() {
             </li>
             <li class="step">
               <span class="num">3</span>
-              <h3>Click a host, get a shell</h3>
-              <p>Click Connect — the session rides an authenticated WebSocket straight to SSH, and your server just sees a normal login.</p>
+              <h3>Click a host, drop in on a session</h3>
+              <p>Click Connect — a full terminal opens over an authenticated WebSocket straight to SSH. Your agent sessions are already running on the machine; you're just looking at them.</p>
             </li>
           </ol>
         </div>
@@ -134,30 +140,33 @@ function ctaTo() {
 
           <div class="frow frow--flip">
             <div class="frow-copy">
-              <h3>A real terminal, not a web toy</h3>
+              <h3>Agent sessions that outlive the tab</h3>
               <p class="outcome">
-                Full xterm.js in the tab: colors, scrollback, copy and paste, resize — not a
-                screen-sharing approximation of one. When the connection drops, the tab is the only
-                thing that ends: reattach to tmux and pick up exactly where you left off.
+                Sessions live on your machine, managed by aplexer — the session
+                layer that knows whether Claude Code, Codex, OpenCode, or Grok
+                Build is running in each one. Close the laptop mid-refactor;
+                from any browser, attach again and the screen is exactly where
+                the agent left it — full xterm.js in the tab, not a
+                screen-sharing approximation.
               </p>
               <ul class="chips" aria-label="Highlights">
                 <li class="chip">Full scrollback</li>
-                <li class="chip">Copy/paste</li>
+                <li class="chip">Reattach anywhere</li>
                 <li class="chip">Survives disconnects</li>
               </ul>
-              <a class="text-link" href="/blog/tmux-persistent-ssh-sessions">tmux sessions that survive anything</a>
+              <a class="text-link" href="/blog/ssh-ai-agents-remote-machines">Run AI agents on a remote machine over SSH</a>
             </div>
             <div class="frow-visual">
               <div class="term-mock" aria-hidden="true">
                 <div class="bar">
                   <span class="dot" /><span class="dot" /><span class="dot" />
-                  <span class="title">ssh — edge-1</span>
+                  <span class="title">edge-1 — api-fix</span>
                 </div>
-                <pre><span class="t-prompt">$</span> tmux attach -t work
-<span class="t-user">deploy@edge-1</span>:<span class="t-dir">~</span>$ tail -f logs/api.log
-[api] GET /health 200 2ms
-[api] POST /sync 204 8ms
-<span class="t-user">deploy@edge-1</span>:<span class="t-dir">~</span>$ <span class="cursor">█</span></pre>
+                <pre><span class="t-prompt">$</span> a attach api-fix
+<span class="t-green">●</span> codex — working (6m)
+  <span class="t-dim">✓ auth middleware covered by tests</span>
+  <span class="t-dim">→ editing src/api/handlers.ts</span>
+<span class="t-prompt">$</span> <span class="cursor">█</span></pre>
               </div>
             </div>
           </div>
@@ -186,6 +195,40 @@ function ctaTo() {
                 <div class="device device--tablet"><div class="screen"><span /><span /><span class="hl" /><span /></div></div>
                 <div class="device device--phone"><div class="screen"><span class="hl" /><span /><span /></div></div>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="apps" class="band">
+        <div class="container">
+          <h2>One account, three ways in</h2>
+          <p class="band-sub">PocketShell is a family: the same hosts, the same agent sessions, on every device you work from.</p>
+          <div class="cards">
+            <div class="card">
+              <h3>Desktop</h3>
+              <p>
+                The keyboard-first home base. A session tree with an agent badge
+                on every session, a prompt composer, file browser, port
+                forwards, and provider quota. Hosts come straight from
+                <code>~/.ssh/config</code>; a small helper on the box reads the
+                rest.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Android</h3>
+              <p>
+                Voice-first. Check on your agents from your phone, dictate
+                prompts and commands, and unlock key passphrases biometrically.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Web</h3>
+              <p>
+                This one. A real terminal to any synced host, in a browser tab
+                — for iPads, Chromebooks, and locked-down machines where you
+                can't install anything.
+              </p>
             </div>
           </div>
         </div>
@@ -265,7 +308,7 @@ function ctaTo() {
       <section id="blog" class="band">
         <div class="container">
           <h2>From the blog</h2>
-          <p class="band-sub">Practical notes on SSH and remote machines — the kind of things you'll want a terminal for.</p>
+          <p class="band-sub">Practical notes on SSH, remote machines, and running AI agents on them — the kind of things you'll want a terminal for.</p>
           <div class="cards blog-cards">
             <a v-for="post in latestPosts" :key="post.slug" class="card card-link" :href="`/blog/${post.slug}`">
               <h3>{{ post.title }}</h3>
@@ -328,9 +371,11 @@ function ctaTo() {
             <details>
               <summary>What happens to my session when the tab closes?</summary>
               <p>
-                The SSH session ends with the tab, but anything running under
-                tmux or similar keeps going on your server. Reconnect,
-                reattach, and everything is where you left it.
+                The terminal in the tab ends with it — your agent doesn't.
+                Sessions live on your machine under aplexer, the same session
+                layer the PocketShell desktop and Android apps attach to.
+                Reconnect from any browser, attach again, and the screen is
+                exactly where your agent left it.
               </p>
             </details>
             <details>
@@ -357,8 +402,8 @@ function ctaTo() {
       <section class="band">
         <div class="container">
           <div class="final-cta">
-            <h2>Open a shell in a new tab.</h2>
-            <p>Same hosts, same keys, same account as the desktop app.</p>
+            <h2>Your agents are still running.</h2>
+            <p>Check on them from any browser tab — same hosts, same account as the desktop app.</p>
             <RouterLink class="button primary large" :to="ctaTo()">
               {{ auth.signedIn ? 'Open your hosts' : 'Sign in with Google' }}
             </RouterLink>
