@@ -13,12 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Print token claims
-        env:
-          TOKEN_REQ_URL: ${{ ACTIONS_ID_TOKEN_REQUEST_URL }}
-          TOKEN_REQ_TOKEN: ${{ ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
-          TOKEN=$(curl -sS "${TOKEN_REQ_URL}" \
-            -H "Authorization: Bearer ${TOKEN_REQ_TOKEN}" \
+          TOKEN=$(curl -sS "$ACTIONS_ID_TOKEN_REQUEST_URL" \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["value"])')
           python3 - "$TOKEN" <<'EOF'
           import sys, json, base64
