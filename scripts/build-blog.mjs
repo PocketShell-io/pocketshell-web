@@ -78,21 +78,25 @@ function page({ title, description, canonical, type = 'website', published, cont
   <script type="application/ld+json">${JSON.stringify(jsonld)}</script>
 </head>
 <body>
-  <header class="site-header">
-    <div class="shell header-row">
+  <header class="topbar landing-topbar">
+    <div class="topbar-rail">
       <a class="brand" href="/"><span class="brand-mark">&gt;_</span> PocketShell</a>
       <nav class="site-nav">
-        <a href="/blog">Blog</a>
-        <a href="https://github.com/alexeygrigorev">GitHub</a>
-        <a class="button primary" data-auth href="/login">Sign in</a>
+        <a class="nav-link" href="/#features">Features</a>
+        <a class="nav-link" href="/#how">How it works</a>
+        <a class="nav-link" href="/#security">Security</a>
+        <a class="nav-link" href="/#faq">FAQ</a>
+        <a class="nav-link" href="/blog">Blog</a>
       </nav>
+      <span class="spacer" />
+      <a class="button" data-auth href="/login">Sign in</a>
     </div>
   </header>
   <main>
 ${content}
   </main>
-  <footer class="site-footer">
-    <div class="shell footer-row">
+  <footer class="landing-footer">
+    <div class="footer-row">
       <span class="foot-brand"><span class="brand-mark">&gt;_</span> PocketShell</span>
       <span class="foot-dim">Built by Alexey Grigorev — a developer who wanted his servers from an iPad.</span>
       <nav class="footer-nav">
@@ -127,7 +131,7 @@ function postPage(post, others) {
     .slice(0, 2)
     .map(
       (p) =>
-        `\n      <a class="next-post" href="/blog/${p.slug}"><strong>${esc(p.title)}</strong><span>${esc(p.description)}</span></a>`,
+        `\n        <a class="card card-link" href="/blog/${p.slug}"><h3>${esc(p.title)}</h3><p>${esc(p.description)}</p></a>`,
     )
     .join('');
   return page({
@@ -136,34 +140,38 @@ function postPage(post, others) {
     canonical: `${SITE}/blog/${post.slug}`,
     type: 'article',
     published: post.date,
-    content: `    <article class="shell post">
-      <h1>${esc(post.title)}</h1>
-      <p class="post-meta">${fmtDate(post.date)} · ${post.readingMinutes} min read</p>
-      <div class="prose">
+    content: `    <div class="container">
+      <article class="post">
+        <h1>${esc(post.title)}</h1>
+        <p class="post-meta">${fmtDate(post.date)} · ${post.readingMinutes} min read</p>
+        <div class="prose">
 ${post.html}
-      </div>
-      <aside class="post-cta">
-        <div>
-          <strong>PocketShell</strong>
-          <p>Your saved SSH hosts, a real terminal in a browser tab. Nothing to install.</p>
         </div>
-        <a class="button primary" data-auth href="/login">Sign in</a>
-      </aside>
-      <nav class="keep-reading">
-        <h2>Keep reading</h2>${more}
-      </nav>
-    </article>`,
+        <aside class="post-cta">
+          <div>
+            <strong>PocketShell</strong>
+            <p>Your saved SSH hosts, a real terminal in a browser tab. Nothing to install.</p>
+          </div>
+          <a class="button primary" data-auth href="/login">Sign in</a>
+        </aside>
+        <nav class="keep-reading band">
+          <h2>Keep reading</h2>
+          <div class="cards blog-cards">${more}
+          </div>
+        </nav>
+      </article>
+    </div>`,
   });
 }
 
 function indexPage(posts) {
   const cards = posts
     .map(
-      (p) => `\n      <a class="post-card" href="/blog/${p.slug}">
-        <h2>${esc(p.title)}</h2>
-        <p>${esc(p.description)}</p>
-        <span class="post-card-meta">${fmtDate(p.date)} · ${p.readingMinutes} min read</span>
-      </a>`,
+      (p) => `\n        <a class="card card-link" href="/blog/${p.slug}">
+          <h3>${esc(p.title)}</h3>
+          <p>${esc(p.description)}</p>
+          <span class="card-meta">${fmtDate(p.date)} · ${p.readingMinutes} min read</span>
+        </a>`,
     )
     .join('');
   return page({
@@ -171,12 +179,16 @@ function indexPage(posts) {
     description:
       'Practical notes on SSH, terminals, and running things on remote machines — from building PocketShell, an SSH client in a browser tab.',
     canonical: `${SITE}/blog`,
-    content: `    <div class="shell post">
+    content: `    <div class="container blog-index">
       <h1>Blog</h1>
-      <p class="post-meta">SSH, terminals, and running things on remote machines.</p>
-      <div class="post-cards">${cards}
+      <p class="band-sub">SSH, terminals, and running things on remote machines.</p>
+    </div>
+    <section class="band">
+      <div class="container">
+        <div class="cards blog-cards">${cards}
+        </div>
       </div>
-    </div>`,
+    </section>`,
   });
 }
 
