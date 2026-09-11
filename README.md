@@ -5,7 +5,7 @@ Web sibling of the PocketShell Android app and pocketshell-electron: open
 pull the encrypted host list from the `pocketshell-sync` API, and open real
 terminal sessions on those hosts from the browser.
 
-Two halves, one stack (plus the us-east-1 cert sidecar):
+Two halves, one stack, plus the us-east-1 certificate deploy.sh owns:
 
 ```
 browser ──HTTPS──▶ CloudFront ──OAC──▶ private S3 (static SPA)
@@ -46,16 +46,23 @@ GOOGLE_WEB_CLIENT_ID=<id> ./deploy.sh      # accept the web client's tokens
 ```
 
 `deploy.sh` builds `lambda/node_modules` with npm, zips, uploads to the
-deploy bucket, and runs `aws cloudformation deploy` — for the main stack,
-then the cert sidecar, then the custom-domain stack, in that order. Outputs
-include `NameServers` (point GoDaddy at these), `CloudFrontDomain` (works
-before delegation), and `WsUrl` (bake into the web app's `src/config.ts`).
+deploy bucket, then: `aws cloudformation deploy` of the main stack (zone,
+site bucket, CloudFront, bridge), the ACM certificate, and the
+custom-domain stack (aliased CloudFront + Route53 records). Outputs include
+`NameServers` (point GoDaddy at these), `CloudFrontDomain` (works before
+delegation), and `WsUrl` (bake into the web app's `src/config.ts`).
 
-`cert.yaml` (us-east-1) holds the CloudFront viewer certificate and, via a
-custom resource, mirrors its DNS validation CNAMEs into the pocketshell.io
-zone. Validation completes as soon as GoDaddy delegates; run against a not
-yet delegated domain, the deploy waits (and eventually fails its wait) at
-PENDING_VALIDATION — re-run once the delegation is live.
+The viewer certificate is NOT in CloudFormation. An
+`AWS::CertificateManager::Certificate` resource blocks its stack until DNS
+validation succeeds, while any in-stack helper that would write the
+validation CNAMEs cannot run until the stack exists — a deadlock on
+first-ever create (hit in practice 2026-09-11). deploy.sh therefore drives
+ACM directly: finds or requests the pocketshell.io cert in us-east-1,
+mirrors its validation CNAMEs into the zone (idempotent UPSERTs; the
+records stay, which also keeps renewals free), and waits for ISSUED before
+deploying the domain stack. With GoDaddy delegated, one run completes
+end-to-end; before delegation it waits ~30 min for validation and exits —
+re-run once the delegation is live.
 
 ## Prerequisites the owner does by hand
 
@@ -76,7 +83,9 @@ PENDING_VALIDATION — re-run once the delegation is live.
 
 ```bash
 aws cloudformation delete-stack --stack-name pocketshell-web --region eu-west-1
-aws cloudformation delete-stack --stack-name pocketshell-web-cert --region us-east-1
+aws cloudformation delete-stack --stack-name pocketshell-web-domain --region eu-west-1
+# the ACM certificate is script-owned: delete by hand if wanted
+# aws acm delete-certificate --region us-east-1 --certificate-arn <arn>
 ```
 
 The hosted zone, buckets, and log groups are retained (no DeletionPolicy

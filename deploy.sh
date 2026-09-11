@@ -14,7 +14,6 @@ REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
 : "${REGION:=eu-west-1}"
 STACK_NAME="pocketshell-web"
 CERT_REGION="us-east-1"
-CERT_STACK_NAME="pocketshell-web-cert"
 DOMAIN_STACK_NAME="pocketshell-web-domain"
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
@@ -64,18 +63,62 @@ aws cloudformation deploy "${DEPLOY_ARGS[@]}"
 
 ZONE_ID="$(output_of "$STACK_NAME" ZoneId)"
 
-aws cloudformation deploy \
-  --region "$CERT_REGION" \
-  --stack-name "$CERT_STACK_NAME" \
-  --template-file cert.yaml \
-  --capabilities CAPABILITY_IAM \
-  --no-fail-on-empty-changeset \
-  --parameter-overrides "ZoneId=$ZONE_ID"
-CERT_ARN="$(aws cloudformation describe-stacks --region "$CERT_REGION" \
-  --stack-name "$CERT_STACK_NAME" \
-  --query 'Stacks[0].Outputs[?OutputKey==`CertArn`].OutputValue' --output text)"
+# ---- Certificate (ACM us-east-1, owned by this script, not CloudFormation) -
+# A AWS::CertificateManager::Certificate resource inside a stack deadlocks on
+# first create: it blocks the stack until DNS validation succeeds, while the
+# in-stack helper that would write the validation CNAMEs cannot run until the
+# stack's resources exist. So deploy.sh drives ACM directly: find-or-request,
+# mirror the validation CNAMEs into the zone ourselves, wait for ISSUED.
+find_cert_arn() {
+  aws acm list-certificates --region "$CERT_REGION" \
+    --query "CertificateSummaryList[?DomainName=='pocketshell.io'].CertificateArn" \
+    --output text | head -n1
+}
+
+CERT_ARN="$(find_cert_arn)"
+if [ -z "$CERT_ARN" ]; then
+  echo "Requesting ACM certificate for pocketshell.io"
+  CERT_ARN="$(aws acm request-certificate --region "$CERT_REGION" \
+    --domain-name pocketshell.io \
+    --subject-alternative-names www.pocketshell.io \
+    --validation-method DNS \
+    --idempotency-token pocketshell-web \
+    --query Certificate.CertificateArn --output text)"
+fi
+
+# ACM publishes its validation CNAMEs a few seconds after the request, so
+# this re-seeds on every pass while waiting; the UPSERT is idempotent and the
+# records stay in the zone afterwards, which is also what keeps renewals free.
+seed_validation_records() {
+  aws acm describe-certificate --region "$CERT_REGION" --certificate-arn "$CERT_ARN" \
+    --query "Certificate.DomainValidationOptions[].ResourceRecord" --output json |
+  ZONE_ID="$ZONE_ID" python3 - <<'PYEOF'
+import json, os, subprocess, sys
+records = [r for r in json.load(sys.stdin) if r and r.get("Name") and r.get("Value")]
+if not records:
+    sys.exit(0)  # ACM has not published the options yet; the caller retries
+changes = [{"Action": "UPSERT",
+            "ResourceRecordSet": {"Name": r["Name"], "Type": "CNAME", "TTL": 300,
+                                  "ResourceRecords": [{"Value": r["Value"]}]}}
+           for r in records]
+subprocess.run(["aws", "route53", "change-resource-record-sets",
+                "--hosted-zone-id", os.environ["ZONE_ID"],
+                "--change-batch", json.dumps({"Changes": changes})],
+               check=True, stdout=subprocess.DEVNULL)
+print(f"seeded {len(records)} validation CNAME(s) into the zone")
+PYEOF
+}
+
 echo "Waiting for certificate issuance: $CERT_ARN"
-aws acm wait certificate-validated --region "$CERT_REGION" --certificate-arn "$CERT_ARN"
+status="PENDING_VALIDATION"
+for attempt in $(seq 1 60); do
+  status="$(aws acm describe-certificate --region "$CERT_REGION" --certificate-arn "$CERT_ARN" \
+    --query Certificate.Status --output text 2>/dev/null || echo UNKNOWN)"
+  [ "$status" = "ISSUED" ] && break
+  seed_validation_records || true
+  sleep 30
+done
+[ "$status" = "ISSUED" ] || { echo "certificate still $status after ~30 min" >&2; exit 1; }
 
 aws cloudformation deploy \
   --region "$REGION" \
