@@ -3,10 +3,10 @@ Description: >
   pocketshell.io custom domain for the pocketshell-web site: a CloudFront
   distribution carrying the apex/www aliases and the us-east-1 viewer
   certificate, plus Route53 alias records in the delegated zone. Deployed by
-  deploy.sh (ENABLE_CUSTOM_DOMAIN=true) only after GoDaddy delegates
-  pocketshell.io to the sandbox zone and the certificate has issued — kept
-  out of the main stack because CloudFormation early validation
-  existence-checks certificate ARNs even behind false conditions.
+  deploy.sh after the certificate has issued — kept out of the main stack
+  because CloudFormation early validation existence-checks certificate ARNs
+  even behind false conditions, and because the wait for issuance must not
+  block the plain site deploy.
 
 Parameters:
   ZoneId:

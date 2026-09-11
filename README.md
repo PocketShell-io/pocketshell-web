@@ -41,21 +41,21 @@ the browser-generated key's PEM or a pasted key/password, in memory only.
 ## Deploy
 
 ```bash
-./deploy.sh                                # zone + site + bridge
-ENABLE_CUSTOM_DOMAIN=true ./deploy.sh      # after GoDaddy NS delegation
+./deploy.sh                                # zone + site + bridge + pocketshell.io
 GOOGLE_WEB_CLIENT_ID=<id> ./deploy.sh      # accept the web client's tokens
 ```
 
 `deploy.sh` builds `lambda/node_modules` with npm, zips, uploads to the
-deploy bucket, and runs `aws cloudformation deploy`. Outputs include
-`NameServers` (point GoDaddy at these), `CloudFrontDomain` (works before
-delegation), and `WsUrl` (bake into the web app's `src/config.ts`).
+deploy bucket, and runs `aws cloudformation deploy` — for the main stack,
+then the cert sidecar, then the custom-domain stack, in that order. Outputs
+include `NameServers` (point GoDaddy at these), `CloudFrontDomain` (works
+before delegation), and `WsUrl` (bake into the web app's `src/config.ts`).
 
 `cert.yaml` (us-east-1) holds the CloudFront viewer certificate and, via a
 custom resource, mirrors its DNS validation CNAMEs into the pocketshell.io
-zone. Validation completes as soon as GoDaddy delegates; until then the
-cert sits at PENDING_VALIDATION and the custom-domain deploy step fails its
-wait — that is expected on the first run.
+zone. Validation completes as soon as GoDaddy delegates; run against a not
+yet delegated domain, the deploy waits (and eventually fails its wait) at
+PENDING_VALIDATION — re-run once the delegation is live.
 
 ## Prerequisites the owner does by hand
 

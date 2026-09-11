@@ -2,10 +2,9 @@
 # Package and deploy the pocketshell-web stacks (sandbox account).
 #
 # Usage:
-#   ./deploy.sh                                # zone + site on the
-#                                              # cloudfront.net URL + bridge
-#   ENABLE_CUSTOM_DOMAIN=true ./deploy.sh      # after GoDaddy NS delegation:
-#                                              # cert, aliases, Route53 records
+#   ./deploy.sh                                # zone + site + pocketshell.io
+#                                              # custom domain (cert, aliases,
+#                                              # Route53 records) + bridge
 #   GOOGLE_WEB_CLIENT_ID=<id> ./deploy.sh      # add the pocketshell.io web
 #                                              # client to accepted audiences
 set -euo pipefail
@@ -63,34 +62,32 @@ if [ "${#OVERRIDES[@]}" -gt 0 ]; then
 fi
 aws cloudformation deploy "${DEPLOY_ARGS[@]}"
 
-if [ "${ENABLE_CUSTOM_DOMAIN:-false}" = "true" ]; then
-  ZONE_ID="$(output_of "$STACK_NAME" ZoneId)"
+ZONE_ID="$(output_of "$STACK_NAME" ZoneId)"
 
-  aws cloudformation deploy \
-    --region "$CERT_REGION" \
-    --stack-name "$CERT_STACK_NAME" \
-    --template-file cert.yaml \
-    --capabilities CAPABILITY_IAM \
-    --no-fail-on-empty-changeset \
-    --parameter-overrides "ZoneId=$ZONE_ID"
-  CERT_ARN="$(aws cloudformation describe-stacks --region "$CERT_REGION" \
-    --stack-name "$CERT_STACK_NAME" \
-    --query 'Stacks[0].Outputs[?OutputKey==`CertArn`].OutputValue' --output text)"
-  echo "Waiting for certificate issuance: $CERT_ARN"
-  aws acm wait certificate-validated --region "$CERT_REGION" --certificate-arn "$CERT_ARN"
+aws cloudformation deploy \
+  --region "$CERT_REGION" \
+  --stack-name "$CERT_STACK_NAME" \
+  --template-file cert.yaml \
+  --capabilities CAPABILITY_IAM \
+  --no-fail-on-empty-changeset \
+  --parameter-overrides "ZoneId=$ZONE_ID"
+CERT_ARN="$(aws cloudformation describe-stacks --region "$CERT_REGION" \
+  --stack-name "$CERT_STACK_NAME" \
+  --query 'Stacks[0].Outputs[?OutputKey==`CertArn`].OutputValue' --output text)"
+echo "Waiting for certificate issuance: $CERT_ARN"
+aws acm wait certificate-validated --region "$CERT_REGION" --certificate-arn "$CERT_ARN"
 
-  aws cloudformation deploy \
-    --region "$REGION" \
-    --stack-name "$DOMAIN_STACK_NAME" \
-    --template-file domain.yaml \
-    --capabilities CAPABILITY_IAM \
-    --no-fail-on-empty-changeset \
-    --parameter-overrides \
-      "ZoneId=$ZONE_ID" \
-      "CertificateArn=$CERT_ARN" \
-      "OriginDistributionDomain=$(output_of "$STACK_NAME" CloudFrontDomain | sed 's|https://||')" \
-      "OriginDistributionId=$(output_of "$STACK_NAME" SiteDistributionId)"
-fi
+aws cloudformation deploy \
+  --region "$REGION" \
+  --stack-name "$DOMAIN_STACK_NAME" \
+  --template-file domain.yaml \
+  --capabilities CAPABILITY_IAM \
+  --no-fail-on-empty-changeset \
+  --parameter-overrides \
+    "ZoneId=$ZONE_ID" \
+    "CertificateArn=$CERT_ARN" \
+    "OriginDistributionDomain=$(output_of "$STACK_NAME" CloudFrontDomain | sed 's|https://||')" \
+    "OriginDistributionId=$(output_of "$STACK_NAME" SiteDistributionId)"
 
 echo
 aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \

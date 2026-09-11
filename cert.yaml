@@ -2,9 +2,8 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   pocketshell.io viewer certificate for CloudFront (must live in us-east-1)
   plus its DNS validation records in the Route53 zone owned by the
-  sandbox/pocketshell-web stack. Deployed by that stack's deploy.sh with
-  ENABLE_CUSTOM_DOMAIN=true once GoDaddy delegates to the zone; validation
-  completes as soon as the delegation is live.
+  sandbox/pocketshell-web stack. Deployed by that stack's deploy.sh; DNS
+  validation completes as soon as the GoDaddy delegation to the zone is live.
 
 Parameters:
   ZoneId:
