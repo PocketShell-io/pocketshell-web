@@ -10,6 +10,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# One deploy at a time — concurrent runs pick the same changeset names and
+# race each other into AlreadyExistsException (hit in practice).
+exec 9>build/deploy.lock
+flock -n 9 || { echo "another deploy.sh is already running" >&2; exit 1; }
+
 REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
 : "${REGION:=eu-west-1}"
 STACK_NAME="pocketshell-web"
@@ -78,13 +83,20 @@ find_cert_arn() {
 CERT_ARN="$(find_cert_arn)"
 if [ -z "$CERT_ARN" ]; then
   echo "Requesting ACM certificate for pocketshell.io"
+  # request-certificate returns CertificateArn at the TOP level (unlike
+  # describe-certificate's Certificate.* nesting) — a nested query silently
+  # yields the literal "None" and poisons everything downstream.
   CERT_ARN="$(aws acm request-certificate --region "$CERT_REGION" \
     --domain-name pocketshell.io \
     --subject-alternative-names www.pocketshell.io \
     --validation-method DNS \
-    --idempotency-token pocketshell-web \
-    --query Certificate.CertificateArn --output text)"
+    --idempotency-token pocketshellweb \
+    --query CertificateArn --output text)"
 fi
+case "$CERT_ARN" in
+  arn:aws:acm:*) : ;; # looks like a certificate ARN
+  *) echo "no usable certificate ARN: '$CERT_ARN'" >&2; exit 1 ;;
+esac
 
 # ACM publishes its validation CNAMEs a few seconds after the request, so
 # this re-seeds on every pass while waiting; the UPSERT is idempotent and the
@@ -94,7 +106,10 @@ seed_validation_records() {
     --query "Certificate.DomainValidationOptions[].ResourceRecord" --output json |
   ZONE_ID="$ZONE_ID" python3 - <<'PYEOF'
 import json, os, subprocess, sys
-records = [r for r in json.load(sys.stdin) if r and r.get("Name") and r.get("Value")]
+try:
+    records = [r for r in json.load(sys.stdin) if r and r.get("Name") and r.get("Value")]
+except json.JSONDecodeError:
+    sys.exit(0)  # describe failed upstream; the caller's next pass retries
 if not records:
     sys.exit(0)  # ACM has not published the options yet; the caller retries
 changes = [{"Action": "UPSERT",
