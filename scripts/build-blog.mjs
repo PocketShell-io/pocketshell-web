@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 // Render content/blog/*.md into static pages under dist/ and dist/sitemap.xml.
-// URLs are extensionless ("pretty"): dist/blog/<slug> for posts, dist/blog for
-// the index. deploy.sh re-copies those keys with an explicit text/html type,
-// which `aws s3 sync` cannot infer without a file suffix.
+// URLs are extensionless ("pretty"), but posts are written as
+// dist/blog/<slug>/index.html — a real directory index — so /blog/<slug>
+// renders on every static server (python -m http.server, Live Server, nginx)
+// instead of downloading: bare extensionless files get
+// application/octet-stream from servers that infer content type from the file
+// suffix. deploy.sh uploads the same bytes to the flat blog/<slug> and
+// blog/<slug>/ S3 keys, which S3 REST needs because it never maps directory
+// URIs to index documents itself.
 //
 //   node scripts/build-blog.mjs --list   # only emit src/generated/blog-posts.ts
 //                                        # (imported by the landing page; runs
@@ -163,7 +168,7 @@ ${post.html}
         <aside class="post-cta">
           <div>
             <strong>PocketShell</strong>
-            <p>Your saved SSH hosts, a real terminal in a browser tab. Nothing to install.</p>
+            <p>Your saved SSH hosts, a real terminal in a browser tab.</p>
           </div>
           <a class="button primary" data-auth href="/login">Sign in</a>
         </aside>
@@ -287,7 +292,12 @@ if (listOnly) {
 
 await mkdir(path.join(DIST, 'blog'), { recursive: true });
 for (const post of posts) {
-  await writeFile(path.join(DIST, 'blog', post.slug), postPage(post, posts.filter((p) => p.slug !== post.slug)));
+  const dir = path.join(DIST, 'blog', post.slug);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    path.join(dir, 'index.html'),
+    postPage(post, posts.filter((p) => p.slug !== post.slug)),
+  );
 }
 // The index goes to blog/index.html; deploy.sh additionally copies it to the
 // bare "blog" key so https://pocketshell.io/blog resolves (S3 REST origins do
