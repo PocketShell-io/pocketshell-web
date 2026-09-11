@@ -1,6 +1,7 @@
 ---
 title: "Stop losing work when SSH drops: tmux sessions that survive anything"
 slug: tmux-persistent-ssh-sessions
+cover: /images/blog/tmux-persistent-ssh-sessions.png
 date: 2026-09-11
 featured: true
 published: true

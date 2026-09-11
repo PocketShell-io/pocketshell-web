@@ -1,6 +1,7 @@
 ---
 title: "How to Keep SSH Sessions Alive: Keepalives, tmux, Mosh"
 slug: keep-ssh-session-alive
+cover: /images/blog/keep-ssh-session-alive.png
 date: 2026-09-11
 description: "Stop SSH freezing on idle: ServerAliveInterval keepalives, server-side timeouts, tmux for detachable sessions, and when mosh is worth installing."
 keywords: [keep ssh session alive, ssh session timeout, ServerAliveInterval, mosh vs tmux]

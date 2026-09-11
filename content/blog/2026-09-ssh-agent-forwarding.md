@@ -1,6 +1,7 @@
 ---
 title: "SSH Agent Forwarding: Setup, Risks, and Safer Paths"
 slug: ssh-agent-forwarding
+cover: /images/blog/ssh-agent-forwarding.png
 date: 2026-09-11
 published: true
 description: "How SSH agent forwarding works, how to enable it with ForwardAgent and ssh-add -h, the real security risks, and when ProxyJump is the better choice."

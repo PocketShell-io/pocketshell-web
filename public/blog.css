@@ -194,6 +194,20 @@ a {
   padding: var(--card-pad);
 }
 
+/* Generated cover art (1200x630) on index and keep-reading cards. Inset,
+   not full-bleed, so it reads as part of the card at both grid widths. */
+.card-cover {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1200 / 630;
+  object-fit: cover;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  margin-bottom: 14px;
+}
+
 .card h3 {
   margin: 0 0 8px;
   font-size: var(--text-h3);
@@ -247,6 +261,17 @@ a {
   margin: 0 0 32px;
   color: #8b949e;
   font-size: var(--text-small);
+}
+
+/* Post hero cover, same art as the card. Sits between the meta line and prose. */
+.post-cover {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  margin: 0 0 32px;
 }
 
 .prose {

@@ -1,6 +1,7 @@
 ---
 title: "The SSH config file: ~/.ssh/config with examples"
 slug: ssh-config-file
+cover: /images/blog/ssh-config-file.png
 date: 2026-09-11
 published: true
 description: "How to use the ~/.ssh/config file: host aliases, per-host keys, wildcards, ProxyJump, connection reuse and includes, with examples and debugging tips."

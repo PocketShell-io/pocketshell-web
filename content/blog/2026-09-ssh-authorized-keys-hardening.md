@@ -1,6 +1,7 @@
 ---
 title: "SSH Keys and authorized_keys: Setup and Hardening"
 slug: ssh-authorized-keys-hardening
+cover: /images/blog/ssh-authorized-keys-hardening.png
 date: 2026-09-11
 description: "Generate ed25519 keys with ssh-keygen, install them with ssh-copy-id, then harden the server: disable passwords and restrict each key's scope."
 keywords: [ssh authorized_keys, ssh-keygen ed25519, ssh-copy-id, disable ssh password authentication]

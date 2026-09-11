@@ -1,6 +1,7 @@
 ---
 title: "SSH from an iPad or iPhone: what actually works"
 slug: ssh-from-ipad-iphone
+cover: /images/blog/ssh-from-ipad-iphone.png
 date: 2026-09-12
 featured: false
 published: true
