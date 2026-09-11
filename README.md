@@ -96,6 +96,9 @@ The script reads bucket/distribution/WSS from the aws-infra stack outputs
    - put the client ID into `config.js` (`googleClientId`),
    - redeploy the stack with `GOOGLE_WEB_CLIENT_ID=<id> ./deploy.sh` so the
      bridge (and later the sync API's authorizer) accept its tokens.
-3. **Custom domain**: after the delegation is live,
-   `ENABLE_CUSTOM_DOMAIN=true ./deploy.sh` in the aws-infra stack issues the
-   ACM cert (DNS-validated) and moves the site onto pocketshell.io.
+3. **Custom domain**: every `./deploy.sh` of the aws-infra stack now brings
+   pocketshell.io up with the site (ACM cert, aliases, Route53 records); it
+   only completes once the delegation from step 1 is live. This repo's
+   `scripts/deploy.sh` keeps serving from the `CloudFrontDomain` output
+   until then — no change needed when the domain goes live, `config.js`
+   never hardcodes the hostname.
