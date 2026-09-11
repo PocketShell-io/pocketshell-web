@@ -21,6 +21,46 @@ STACK_NAME="pocketshell-web"
 CERT_REGION="us-east-1"
 DOMAIN_STACK_NAME="pocketshell-web-domain"
 
+# The high-level `aws cloudformation deploy` is gone from this box's CLI
+# (aws-cli 1.44 dropped the deploy/package customizations) — do its job with
+# the raw changeset APIs: create → wait → skip when empty → execute → wait.
+cfn_deploy() {
+  local region="$1" stack="$2" template="$3"; shift 3
+  local param_args=() p
+  for p in "$@"; do
+    param_args+=("ParameterKey=${p%%=*},ParameterValue=${p#*=}")
+  done
+  local cs="deploysh-$(date +%s)-$$"
+  local type=UPDATE
+  if ! aws cloudformation describe-stacks --region "$region" --stack-name "$stack" \
+       --query Stacks[0].StackId --output text >/dev/null 2>&1; then
+    type=CREATE
+  fi
+  aws cloudformation create-change-set --region "$region" \
+    --stack-name "$stack" --change-set-name "$cs" --change-set-type "$type" \
+    --template-body "file://$template" --capabilities CAPABILITY_IAM \
+    ${param_args[@]+"${param_args[@]}"} >/dev/null
+  aws cloudformation wait change-set-create-complete --region "$region" \
+    --stack-name "$stack" --change-set-name "$cs" >&2
+  if [ "$(aws cloudformation describe-change-set --region "$region" \
+         --stack-name "$stack" --change-set-name "$cs" \
+         --query HasChanges --output text)" = "false" ]; then
+    echo "No changes to deploy. Stack $stack is up to date"
+    aws cloudformation delete-change-set --region "$region" \
+      --stack-name "$stack" --change-set-name "$cs" >/dev/null
+    return 0
+  fi
+  aws cloudformation execute-change-set --region "$region" \
+    --stack-name "$stack" --change-set-name "$cs" >/dev/null
+  if [ "$type" = "CREATE" ]; then
+    aws cloudformation wait stack-create-complete --region "$region" \
+      --stack-name "$stack" >&2
+  else
+    aws cloudformation wait stack-update-complete --region "$region" \
+      --stack-name "$stack" >&2
+  fi
+}
+
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="pocketshell-web-deploy-${ACCOUNT_ID}-${REGION}"
 
@@ -54,17 +94,7 @@ output_of() {
     --query "Stacks[0].Outputs[?OutputKey==\`$2\`].OutputValue" --output text
 }
 
-DEPLOY_ARGS=(
-  --region "$REGION"
-  --stack-name "$STACK_NAME"
-  --template-file template.yaml
-  --capabilities CAPABILITY_IAM
-  --no-fail-on-empty-changeset
-)
-if [ "${#OVERRIDES[@]}" -gt 0 ]; then
-  DEPLOY_ARGS+=(--parameter-overrides "${OVERRIDES[@]}")
-fi
-aws cloudformation deploy "${DEPLOY_ARGS[@]}"
+cfn_deploy "$REGION" "$STACK_NAME" template.yaml ${OVERRIDES[@]+"${OVERRIDES[@]}"}
 
 ZONE_ID="$(output_of "$STACK_NAME" ZoneId)"
 
@@ -135,17 +165,11 @@ for attempt in $(seq 1 60); do
 done
 [ "$status" = "ISSUED" ] || { echo "certificate still $status after ~30 min" >&2; exit 1; }
 
-aws cloudformation deploy \
-  --region "$REGION" \
-  --stack-name "$DOMAIN_STACK_NAME" \
-  --template-file domain.yaml \
-  --capabilities CAPABILITY_IAM \
-  --no-fail-on-empty-changeset \
-  --parameter-overrides \
-    "ZoneId=$ZONE_ID" \
-    "CertificateArn=$CERT_ARN" \
-    "OriginDistributionDomain=$(output_of "$STACK_NAME" CloudFrontDomain | sed 's|https://||')" \
-    "OriginDistributionId=$(output_of "$STACK_NAME" SiteDistributionId)"
+cfn_deploy "$REGION" "$DOMAIN_STACK_NAME" domain.yaml \
+  "ZoneId=$ZONE_ID" \
+  "CertificateArn=$CERT_ARN" \
+  "OriginDistributionDomain=$(output_of "$STACK_NAME" CloudFrontDomain | sed 's|https://||')" \
+  "OriginDistributionId=$(output_of "$STACK_NAME" SiteDistributionId)"
 
 echo
 aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \
