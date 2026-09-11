@@ -22,16 +22,6 @@ Parameters:
     Description: ID of the main stack's site distribution (comment/trace only).
 
 Resources:
-  DomainOac:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: pocketshell-web-domain-oac
-        Description: Custom-domain distribution access to the pocketshell-web site bucket.
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
   WwwRedirectFunction:
     Type: AWS::CloudFront::Function
     Properties:
@@ -71,10 +61,18 @@ Resources:
           SslSupportMethod: sni-only
           MinimumProtocolVersion: TLSv1.2_2021
         Origins:
+          # Chained distributions: the origin is the main stack's site
+          # distribution (*.cloudfront.net), so this MUST be a custom-origin
+          # config — S3OriginConfig+OAC is validated against a real bucket
+          # name and fails with "does not refer to a valid S3 bucket". HTTP
+          # to a cloudfront.net origin is the only supported protocol; the
+          # viewer-facing side stays HTTPS, and the inner distribution owns
+          # the bucket access (OAC) and the SPA fallback errors.
           - Id: site
             DomainName: !Ref OriginDistributionDomain
-            OriginAccessControlId: !Ref DomainOac
-            S3OriginConfig: {OriginReadTimeout: 30}
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 30
         DefaultCacheBehavior:
           TargetOriginId: site
           ViewerProtocolPolicy: redirect-to-https
