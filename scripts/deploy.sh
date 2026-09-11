@@ -47,6 +47,10 @@ aws s3 sync dist/ "s3://$SITE_BUCKET" --delete --region "$REGION"
 # directory indexes itself).
 find dist/blog -maxdepth 1 -type f ! -name "*.*" -print0 2>/dev/null | while IFS= read -r -d '' f; do
   aws s3 cp "$f" "s3://$SITE_BUCKET/blog/${f##*/}" --content-type "text/html; charset=utf-8" --region "$REGION"
+  # /blog/<slug>/ (trailing slash) is a distinct S3 request; without this key
+  # it 404s into the SPA fallback and serves the landing page.
+  aws s3api put-object --bucket "$SITE_BUCKET" --key "blog/${f##*/}/" --body "$f" \
+    --content-type "text/html; charset=utf-8" --region "$REGION" >/dev/null
 done
 if [ -f dist/blog/index.html ]; then
   aws s3 cp dist/blog/index.html "s3://$SITE_BUCKET/blog" --content-type "text/html; charset=utf-8" --region "$REGION"
