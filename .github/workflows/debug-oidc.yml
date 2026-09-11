@@ -1,0 +1,30 @@
+# Temporary: print the OIDC token claims GitHub issues for this repo,
+# to debug sts:AssumeRoleWithWebIdentity authorization.
+name: Debug OIDC claims
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+
+jobs:
+  claims:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print token claims
+        env:
+          TOKEN_REQ_URL: ${{ ACTIONS_ID_TOKEN_REQUEST_URL }}
+          TOKEN_REQ_TOKEN: ${{ ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        run: |
+          TOKEN=$(curl -sS "${TOKEN_REQ_URL}" \
+            -H "Authorization: Bearer ${TOKEN_REQ_TOKEN}" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["value"])')
+          python3 - "$TOKEN" <<'EOF'
+          import sys, json, base64
+          payload = sys.argv[1].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          keep = ("aud", "sub", "repository", "ref", "sha", "workflow", "event_name", "job_workflow_ref")
+          print(json.dumps({k: claims.get(k) for k in keep}, indent=2))
+          EOF
