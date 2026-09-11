@@ -16,7 +16,7 @@ export const router = createRouter({
 });
 
 const titles: Record<string, string> = {
-  landing: 'PocketShell - SSH in your browser tab',
+  landing: 'PocketShell - SSH client in your browser tab',
   login: 'Sign in — PocketShell',
   hosts: 'Hosts — PocketShell',
   term: 'PocketShell',
@@ -24,4 +24,9 @@ const titles: Record<string, string> = {
 
 router.afterEach((to) => {
   document.title = titles[String(to.name)] ?? 'PocketShell';
+  // Only the landing page should rank; auth and terminal routes are
+  // functional views sharing this document, so keep them out of the index.
+  document
+    .querySelector('meta[name="robots"]')
+    ?.setAttribute('content', to.name === 'landing' ? 'index, follow' : 'noindex, nofollow');
 });

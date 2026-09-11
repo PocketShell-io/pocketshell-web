@@ -5,21 +5,37 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Your AI agents run on your own machines. PocketShell opens a real SSH terminal to them in a browser tab - sign in with Google, pick a host, and check on Claude Code, Codex, or OpenCode. Nothing to install."
+      content="Your AI agents run on your own machines. PocketShell opens a real SSH terminal to them in a browser tab - sign in with Google, pick a host, and check on Claude Code, Codex, or OpenCode. Your browser is the terminal."
     />
     <meta name="theme-color" content="#0d1117" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://pocketshell.io/" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://pocketshell.io/" />
-    <meta property="og:title" content="PocketShell - SSH in your browser tab" />
+    <meta property="og:site_name" content="PocketShell" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content="PocketShell - SSH client in your browser tab" />
     <meta
       property="og:description"
-      content="Your AI agents run on your own machines. PocketShell opens a real SSH terminal to them in a browser tab - sign in with Google, pick a host, and check on Claude Code, Codex, or OpenCode. Nothing to install."
+      content="Your AI agents run on your own machines. PocketShell opens a real SSH terminal to them in a browser tab - sign in with Google, pick a host, and check on Claude Code, Codex, or OpenCode. Your browser is the terminal."
     />
+    <meta property="og:image" content="https://pocketshell.io/images/og-cover.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="PocketShell - SSH client in your browser tab" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="PocketShell - SSH client in your browser tab" />
+    <meta
+      name="twitter:description"
+      content="Your AI agents run on your own machines. PocketShell opens a real SSH terminal to them in a browser tab - sign in with Google, pick a host, and check on Claude Code, Codex, or OpenCode. Your browser is the terminal."
+    />
+    <meta name="twitter:image" content="https://pocketshell.io/images/og-cover.png" />
+    <link rel="alternate" type="application/rss+xml" title="PocketShell blog" href="/feed.xml" />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117' stroke='%2330363d' stroke-width='2'/%3E%3Ctext x='12' y='45' font-family='ui-monospace,monospace' font-size='30' font-weight='bold' fill='%233fb950'%3E%3E_%3C/text%3E%3C/svg%3E"
     />
-    <title>PocketShell - SSH in your browser tab</title>
+    <title>PocketShell - SSH client in your browser tab</title>
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -46,7 +62,7 @@
             "name": "Do I need the desktop app?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Yes — PocketShell web opens the hosts you saved in the PocketShell desktop app. The two sync end-to-end encrypted through your Google account, so the web client stays in step with the desktop."
+              "text": "No. The Android app works on its own. The one awkward part is getting an SSH key onto your phone, so we suggest configuring the key in the web or desktop app first, then using the mobile version from there."
             }
           },
           {
@@ -54,7 +70,7 @@
             "name": "Do I need to install anything on my servers?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "No. Servers need nothing beyond the SSH port you already use. Sessions arrive at the SSH bridge on AWS (eu-west-1) over an authenticated WebSocket and continue to your host as a normal SSH login — no agent, no daemon, no extra ports."
+              "text": "Yes — the PocketShell CLI. That's the one thing to install on each host you want in PocketShell. Your agent sessions live on the machine — aplexer is the session layer that hosts them — and the desktop, web, and Android apps all work against those sessions. Nothing else to install."
             }
           },
           {
@@ -78,7 +94,7 @@
             "name": "What if I lose my sync passphrase?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Then the synced blob is undecryptable — by design. Zero-knowledge means there is no reset: you'd sign in again, re-enter your hosts, and set a new passphrase. That's the trade for a server that can never read your data."
+              "text": "Then the synced blob is undecryptable — by design. Zero-knowledge means there is no reset: you set a new passphrase, re-upload your hosts, and re-encrypt the SSH key with it. That's the trade for a server that can never read your data."
             }
           },
           {
@@ -86,7 +102,7 @@
             "name": "What does it cost?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Nothing. PocketShell is free while access is allowlisted — no card, no tiers. If that ever changes, existing users will hear it from us first."
+              "text": "For now, nothing — PocketShell is in active alpha development, and it's free. Later, the open-source version stays free; syncing between your devices is the part that will be paid."
             }
           }
         ]
@@ -107,8 +123,8 @@
             <p class="sub">
               Your agents run on your own machines. PocketShell opens a real
               terminal to them — sign in with Google, click a host, and see
-              exactly where Claude Code, Codex, or OpenCode left off. Nothing
-              to install.
+              exactly where Claude Code, Codex, or OpenCode left off. Your
+              browser is the terminal.
             </p>
             <p><a class="button primary large" href="/login">Sign in with Google</a></p>
           </section>

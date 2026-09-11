@@ -45,6 +45,8 @@ const rank = (p) => (p.featured === 'true' ? 0 : 1);
 const fmtDate = (iso) =>
   new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(iso));
 
+const OG_IMAGE = `${SITE}/images/og-cover.png`;
+
 function page({ title, description, canonical, type = 'website', published, content }) {
   const jsonld = {
     '@context': 'https://schema.org',
@@ -67,12 +69,23 @@ function page({ title, description, canonical, type = 'website', published, cont
   <title>${esc(title)}</title>
   <meta name="description" content="${esc(description)}" />
   <link rel="canonical" href="${esc(canonical)}" />
+  <meta name="robots" content="index, follow" />
   <meta name="theme-color" content="#0d1117" />
   <meta property="og:type" content="${type}" />
   <meta property="og:site_name" content="PocketShell" />
+  <meta property="og:locale" content="en_US" />
   <meta property="og:url" content="${esc(canonical)}" />
   <meta property="og:title" content="${esc(title)}" />
-  <meta property="og:description" content="${esc(description)}" />${published ? `\n  <meta property="article:published_time" content="${published}" />` : ''}
+  <meta property="og:description" content="${esc(description)}" />
+  <meta property="og:image" content="${OG_IMAGE}" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="PocketShell — SSH client in your browser tab" />${published ? `\n  <meta property="article:published_time" content="${published}" />\n  <meta property="article:author" content="Alexey Grigorev" />` : ''}
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="${esc(title)}" />
+  <meta name="twitter:description" content="${esc(description)}" />
+  <meta name="twitter:image" content="${OG_IMAGE}" />
+  <link rel="alternate" type="application/rss+xml" title="PocketShell blog" href="/feed.xml" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117' stroke='%2330363d' stroke-width='2'/%3E%3Ctext x='12' y='45' font-family='ui-monospace,monospace' font-size='30' font-weight='bold' fill='%233fb950'%3E%3E_%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/blog.css" />
   <script type="application/ld+json">${JSON.stringify(jsonld)}</script>
@@ -143,7 +156,7 @@ function postPage(post, others) {
     content: `    <div class="container">
       <article class="post">
         <h1>${esc(post.title)}</h1>
-        <p class="post-meta">${fmtDate(post.date)} · ${post.readingMinutes} min read</p>
+        <p class="post-meta"><time datetime="${post.date}">${fmtDate(post.date)}</time> · ${post.readingMinutes} min read</p>
         <div class="prose">
 ${post.html}
         </div>
@@ -175,7 +188,7 @@ function indexPage(posts) {
     )
     .join('');
   return page({
-    title: 'Blog — PocketShell',
+    title: 'SSH and terminal guides — PocketShell blog',
     description:
       'Practical notes on SSH, terminals, and running things on remote machines — from building PocketShell, an SSH client in a browser tab.',
     canonical: `${SITE}/blog`,
@@ -204,6 +217,32 @@ function sitemapXml(posts) {
         `  <url><loc>${SITE}${p}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ''}</url>`,
     )
     .join('\n')}\n</urlset>\n`;
+}
+
+function feedXml(posts) {
+  const items = posts
+    .map(
+      (p) =>
+        `  <item>
+    <title>${esc(p.title)}</title>
+    <link>${SITE}/blog/${p.slug}</link>
+    <guid isPermaLink="true">${SITE}/blog/${p.slug}</guid>
+    <pubDate>${new Date(p.date).toUTCString()}</pubDate>
+    <description>${esc(p.description)}</description>
+  </item>`,
+    )
+    .join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>PocketShell blog</title>
+    <link>${SITE}/blog</link>
+    <description>Practical notes on SSH, terminals, and running things on remote machines.</description>
+    <language>en</language>
+${items}
+  </channel>
+</rss>
+`;
 }
 
 const postsMeta = () =>
@@ -255,4 +294,5 @@ for (const post of posts) {
 // not map directory URIs to index documents themselves).
 await writeFile(path.join(DIST, 'blog', 'index.html'), indexPage(posts));
 await writeFile(path.join(DIST, 'sitemap.xml'), sitemapXml(posts));
-console.log(`blog: wrote ${posts.length} post(s), index, sitemap`);
+await writeFile(path.join(DIST, 'feed.xml'), feedXml(posts));
+console.log(`blog: wrote ${posts.length} post(s), index, sitemap, feed`);
