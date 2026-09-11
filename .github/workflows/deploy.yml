@@ -1,0 +1,45 @@
+# Deploys pocketshell.io on every push to main (and manual dispatch).
+# Auth is GitHub OIDC -> the pocketshell-web-github-actions-deploy IAM role;
+# no stored AWS keys. The inner distribution is invalidated by deploy.sh;
+# the outer custom-domain distribution (E2H01B6MN5ZDSI) must be invalidated
+# on every deploy, so it happens here as a second step.
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-pocketshell-io
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::817685572750:role/pocketshell-web-github-actions-deploy
+          aws-region: eu-west-1
+
+      - name: Build, sync to S3, invalidate CloudFront
+        run: |
+          SITE_BUCKET=pocketshell-web-site-817685572750-eu-west-1 \
+          CF_DISTRIBUTION_ID=E2OY1IN2FXNSFE \
+          WS_URL=wss://feqwtdkaw4.execute-api.eu-west-1.amazonaws.com/main \
+          ./scripts/deploy.sh
+          aws cloudfront create-invalidation --distribution-id E2H01B6MN5ZDSI --paths "/*"
