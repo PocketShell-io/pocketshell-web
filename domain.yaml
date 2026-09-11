@@ -81,6 +81,12 @@ Resources:
           TargetOriginId: site
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # Managed-CachingOptimized
+          # Forward every viewer header except Host: CloudFront custom origins
+          # otherwise pass the viewer's Host (pocketshell.io) to the inner
+          # distribution, which rejects the unknown alias and 301s to its own
+          # *.cloudfront.net domain. With this policy the origin sees its own
+          # hostname and serves the alias request normally.
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # Managed-AllViewerExceptHostHeader
           Compress: true
           FunctionAssociations:
             - EventType: viewer-request
