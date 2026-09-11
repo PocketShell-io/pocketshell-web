@@ -16,7 +16,8 @@ const keyHost = ref<HostEntry | null>(null);
 const keySaved = ref('');
 
 onMounted(() => {
-  if (!auth.signedIn) router.replace({ name: 'login' });
+  // Unsigned visitors poking /app get the landing page, not a sign-in error.
+  if (!auth.signedIn) router.replace({ name: 'landing' });
 });
 
 async function unlock() {

@@ -18,7 +18,14 @@ a {
   color: #58a6ff;
 }
 
-button {
+:focus-visible {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
+}
+
+/* Buttons and button-looking links share one idiom (6px radius, family hues). */
+button,
+.button {
   font: inherit;
   background: #21262d;
   color: #e6edf3;
@@ -26,24 +33,42 @@ button {
   border-radius: 6px;
   padding: 6px 14px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
-button:hover {
+button:hover,
+.button:hover {
   background: #30363d;
 }
 
-button.primary {
+button.primary,
+.button.primary {
   background: #1f6feb;
   border-color: #1f6feb;
 }
 
-button.primary:hover {
+.button.primary {
+  color: #fff;
+}
+
+button.primary:hover,
+.button.primary:hover {
   background: #388bfd;
 }
 
-button:disabled {
+button:disabled,
+.button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.button.large {
+  padding: 12px 22px;
+  font-size: 16px;
+  font-weight: 600;
 }
 
 input,
@@ -80,6 +105,14 @@ textarea {
 
 .topbar .spacer {
   flex: 1;
+}
+
+/* Long account emails must not push the Sign out button off-screen. */
+.topbar .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 main.page {
@@ -129,4 +162,893 @@ details.keybox textarea {
 .terminal-wrap .term {
   width: 100%;
   height: 100%;
+}
+
+/* ---- Landing (/) ---- */
+
+.landing {
+  /* Type scale: every landing font-size maps to one of these steps. */
+  --text-fine: 13px;
+  --text-small: 14px;
+  --text-body: 16px;
+  --text-lede: 18px;
+  --text-h3: 18px;
+  --text-h2: clamp(26px, 3vw, 32px);
+  --text-h1: clamp(36px, 5vw, 54px);
+  /* One vertical rhythm: every section sits --gap-section below the previous. */
+  --gap-section: 96px;
+  /* One card padding for every card-like surface. */
+  --card-pad: 24px;
+}
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+.topbar.landing-topbar {
+  /* Block: the base .topbar is flex, which would shrink-to-fit the rail.
+     The outer bar carries only the border; the rail aligns to .container. */
+  display: block;
+  padding: 0;
+}
+
+.topbar.landing-topbar .topbar-rail {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.topbar.landing-topbar .brand {
+  padding: 4px 0;
+}
+
+.brand-mark {
+  font-family: ui-monospace, monospace;
+  color: #3fb950;
+  margin-right: 2px;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.landing .nav-link {
+  color: #e6edf3;
+  text-decoration: none;
+  padding: 6px 0;
+  font-size: var(--text-body);
+}
+
+.landing .nav-link:hover {
+  color: #58a6ff;
+}
+
+.landing .text-link {
+  color: #58a6ff;
+  text-decoration: underline;
+  text-decoration-color: #30363d;
+  text-underline-offset: 3px;
+  display: inline-block;
+  padding: 6px 2px;
+  font-size: var(--text-body);
+}
+
+.landing .text-link:hover {
+  text-decoration-color: #58a6ff;
+}
+
+/* Hero: centered copy, product visual right below the fold line. */
+
+.hero {
+  padding-top: 72px;
+  text-align: center;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-small);
+  color: #58a6ff;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 999px;
+  padding: 4px 14px;
+  margin: 0 0 20px;
+}
+
+.hero h1 {
+  font-size: var(--text-h1);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0 auto 18px;
+  max-width: 16ch;
+  text-wrap: balance;
+}
+
+.hero .sub {
+  font-size: var(--text-lede);
+  line-height: 1.6;
+  color: #8b949e;
+  max-width: 56ch;
+  margin: 0 auto 28px;
+}
+
+.cta-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  padding: 0;
+  margin: 22px 0 0;
+}
+
+.chip {
+  border: 1px solid #30363d;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: var(--text-fine);
+  color: #8b949e;
+  background: rgba(22, 27, 34, 0.6);
+}
+
+.cta-note {
+  margin: 14px 0 0;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+/* Fact strip: one hairline-grid row of concrete claims under the hero. */
+
+.fact-strip {
+  list-style: none;
+  margin: 48px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: #30363d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.fact {
+  background: #161b22;
+  padding: 16px 20px;
+  font-size: var(--text-fine);
+  line-height: 1.5;
+  color: #8b949e;
+}
+
+.fact strong {
+  display: block;
+  color: #e6edf3;
+  font-size: var(--text-small);
+  margin-bottom: 2px;
+}
+
+.hero-visual {
+  margin-top: 52px;
+}
+
+.term-mock {
+  max-width: 860px;
+  margin: 0 auto;
+  text-align: left;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+  /* Lift the dark terminal off the dark page with an existing-tone glow. */
+  box-shadow:
+    0 16px 48px rgba(31, 109, 235, 0.12),
+    0 24px 64px rgba(1, 4, 9, 0.6);
+}
+
+.term-mock .bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #21262d;
+}
+
+.term-mock .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #30363d;
+}
+
+.term-mock .title {
+  margin-left: 8px;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.term-mock pre {
+  margin: 0;
+  padding: 18px 22px;
+  font-family: ui-monospace, monospace;
+  font-size: 15px;
+  line-height: 1.75;
+  overflow: hidden;
+}
+
+.t-prompt {
+  color: #58a6ff;
+}
+
+.t-user {
+  color: #3fb950;
+}
+
+.t-dir {
+  color: #58a6ff;
+}
+
+.t-dim {
+  color: #8b949e;
+}
+
+.t-green {
+  color: #3fb950;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cursor {
+    animation: blink 1.2s steps(1) infinite;
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Sections share one rhythm and one heading scale. */
+
+.band {
+  /* Hairline divider between bands: gap, line, then breathing room. */
+  margin-top: 56px;
+  border-top: 1px solid #21262d;
+  padding-top: 40px;
+}
+
+.band h2 {
+  font-size: var(--text-h2);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  margin: 0 0 12px;
+}
+
+.band-sub {
+  margin: 0;
+  font-size: var(--text-lede);
+  line-height: 1.6;
+  color: #8b949e;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: var(--card-pad);
+}
+
+.card h3,
+.step h3 {
+  margin: 0 0 8px;
+  font-size: var(--text-h3);
+}
+
+.card p,
+.step p {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: 1.6;
+  color: #8b949e;
+}
+
+.card-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-link:hover {
+  border-color: #58a6ff;
+}
+
+.card-link h3 {
+  color: #58a6ff;
+}
+
+.card-meta {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.blog-cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.band-more {
+  margin: 20px 0 0;
+}
+
+.steps {
+  list-style: none;
+  margin: 32px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.step {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: var(--card-pad);
+}
+
+.step .num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #30363d;
+  border-radius: 50%;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-small);
+  color: #58a6ff;
+  margin-bottom: 12px;
+}
+
+/* Feature rows: benefit copy on one side, a product visual on the other. */
+
+.frow {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: 48px;
+  align-items: center;
+  padding: 36px 0;
+}
+
+.frow > * {
+  min-width: 0;
+}
+
+.frow + .frow {
+  border-top: 1px solid #21262d;
+}
+
+.frow--flip .frow-copy {
+  order: 2;
+}
+
+.frow h3 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.frow .outcome {
+  margin: 0 0 16px;
+  font-size: var(--text-body);
+  line-height: 1.65;
+  color: #8b949e;
+}
+
+.frow .chips {
+  justify-content: flex-start;
+  padding: 0;
+  margin: 0 0 16px;
+}
+
+/* Keep the shared term-mock idiom but let rows use the full column. */
+.frow .term-mock {
+  max-width: none;
+  margin: 0;
+}
+
+.hosts-mock {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.hosts-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid #21262d;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.hosts-bar .pill {
+  color: #3fb950;
+  border: 1px solid #30363d;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+
+.hosts-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #21262d;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+}
+
+.hosts-row:last-child {
+  border-bottom: 0;
+}
+
+.hosts-row .hname {
+  color: #e6edf3;
+  font-weight: 600;
+}
+
+.hosts-row .hmeta {
+  flex: 1;
+  color: #8b949e;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hosts-row .hbtn {
+  color: #58a6ff;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+/* Any-device panel: three CSS device silhouettes with terminal lines. */
+
+.devices {
+  display: flex;
+  flex-wrap: wrap; /* the silhouettes are fixed-size: wrap, never overflow */
+  align-items: flex-end;
+  justify-content: center;
+  gap: 24px;
+  padding: 32px 24px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+}
+
+.device .screen {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.device .screen span {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: #30363d;
+}
+
+.device .screen span.hl {
+  width: 62%;
+  background: #3fb950;
+}
+
+.device--laptop .screen {
+  width: 190px;
+  height: 118px;
+}
+
+.device--laptop .base {
+  height: 9px;
+  margin: 0 -16px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+}
+
+.device--tablet .screen {
+  width: 122px;
+  height: 150px;
+}
+
+.device--phone .screen {
+  width: 68px;
+  height: 118px;
+  border-radius: 10px;
+}
+
+/* Security band: the data path as a numbered flow, CTA below. */
+
+.security {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 32px;
+}
+
+.security .chips {
+  justify-content: flex-start;
+  margin-top: 18px;
+}
+
+.security-copy > p {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: 1.7;
+  color: #8b949e;
+  max-width: 58ch;
+}
+
+.sec-flow {
+  list-style: none;
+  margin: 24px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.sec-item {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.sec-item .n {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #58a6ff;
+  margin-bottom: 8px;
+}
+
+.sec-item h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.sec-item p {
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: 1.55;
+  color: #8b949e;
+}
+
+.sec-bridge {
+  margin: 20px 0 0;
+  font-size: var(--text-small);
+  line-height: 1.6;
+  color: #8b949e;
+}
+
+.security .button {
+  margin-top: 20px;
+}
+
+/* Built in the open: the GitHub figure matted inside the card idiom. */
+
+.oss {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 32px;
+}
+
+.oss-copy {
+  max-width: 68ch;
+}
+
+.oss-copy p {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: 1.6;
+  color: #8b949e;
+}
+
+.oss-figure {
+  margin: 24px 0 0;
+}
+
+.oss-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+}
+
+.oss-figure figcaption {
+  margin-top: 12px;
+  font-size: var(--text-small);
+  color: #8b949e;
+  text-align: center;
+}
+
+/* FAQ: collapsible cards, centered column. */
+
+.faq {
+  display: grid;
+  gap: 12px;
+  max-width: 760px;
+  margin: 24px auto 0;
+}
+
+.faq details {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+}
+
+.faq summary {
+  cursor: pointer;
+  padding: 16px 20px;
+  font-size: var(--text-body);
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq summary::after {
+  content: '+';
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-h3);
+  color: #8b949e;
+}
+
+.faq details[open] summary::after {
+  content: '\2212';
+}
+
+.faq details p {
+  margin: 0;
+  padding: 0 20px 16px;
+  font-size: var(--text-body);
+  line-height: 1.6;
+  color: #8b949e;
+}
+
+/* Closing CTA and footer. */
+
+.final-cta {
+  text-align: center;
+  padding: 8px 0;
+}
+
+.final-cta p {
+  margin: 0 0 24px;
+  color: #8b949e;
+  font-size: var(--text-lede);
+}
+
+.landing-footer {
+  margin-top: var(--gap-section);
+  border-top: 1px solid #21262d;
+}
+
+.footer-row {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: var(--text-fine);
+}
+
+.foot-brand {
+  font-weight: 700;
+  font-size: var(--text-small);
+  color: #e6edf3;
+}
+
+.footer-row .foot-dim {
+  color: #8b949e;
+}
+
+.footer-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+}
+
+.footer-nav a {
+  color: #8b949e;
+  padding: 6px 0;
+}
+
+.footer-nav a:hover {
+  color: #58a6ff;
+}
+
+/* Bare links get an observable hover change without leaving the palette:
+   dim underline -> accent (the same idiom as .nav-link). */
+.landing .brand:hover {
+  color: #58a6ff;
+}
+
+.faq summary:hover {
+  color: #58a6ff;
+}
+
+.oss-copy a,
+.oss-figure a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: #30363d;
+}
+
+.oss-copy a:hover,
+.oss-figure a:hover {
+  text-decoration-color: #58a6ff;
+}
+
+@media (max-width: 900px) {
+  .landing {
+    --gap-section: 56px;
+  }
+
+  .hero {
+    padding-top: 48px;
+  }
+
+  .hero-visual {
+    margin-top: 40px;
+  }
+
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .steps {
+    grid-template-columns: 1fr;
+  }
+
+  .fact-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .frow {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    padding: 28px 0;
+  }
+
+  .frow--flip .frow-copy {
+    order: 0;
+  }
+
+  .band {
+    margin-top: 32px;
+    padding-top: 24px;
+  }
+
+  .sec-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .security,
+  .oss {
+    padding: 24px 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Wrap the section anchors onto a second row instead of hiding them. */
+  .topbar.landing-topbar .topbar-rail {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  .topbar.landing-topbar .site-nav {
+    order: 3;
+    width: 100%;
+    padding-bottom: 10px;
+    gap: 18px;
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  /* Tap targets: keep anchor rows ~44px tall on touch screens. */
+  .topbar.landing-topbar .site-nav a {
+    padding: 12px 0;
+  }
+
+  .footer-nav a {
+    padding: 12px 0;
+  }
+
+  .cards,
+  .blog-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .fact-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .sec-flow {
+    grid-template-columns: 1fr;
+  }
+
+  /* Scale the device trio into the 1-col row (350px inside the rail). */
+  .devices {
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .device--laptop .screen {
+    width: 138px;
+    height: 92px;
+  }
+
+  .device--tablet .screen {
+    width: 94px;
+    height: 116px;
+  }
+
+  .device--phone .screen {
+    width: 54px;
+    height: 92px;
+  }
+
+  .term-mock pre {
+    font-size: var(--text-fine);
+  }
 }

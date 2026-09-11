@@ -38,5 +38,6 @@ onMounted(async () => {
     </div>
     <div v-else ref="buttonEl" />
     <p v-if="error" class="error">{{ error }}</p>
+    <p class="muted"><RouterLink :to="{ name: 'landing' }">← What is PocketShell?</RouterLink></p>
   </main>
 </template>

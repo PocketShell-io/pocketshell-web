@@ -3,12 +3,116 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PocketShell</title>
+    <meta
+      name="description"
+      content="PocketShell opens SSH terminal sessions to the hosts your desktop app syncs - right in a browser tab. Sign in with Google, pick a host, connect. Nothing to install."
+    />
+    <meta name="theme-color" content="#0d1117" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://pocketshell.io/" />
+    <meta property="og:title" content="PocketShell - SSH in your browser tab" />
+    <meta
+      property="og:description"
+      content="PocketShell opens SSH terminal sessions to the hosts your desktop app syncs - right in a browser tab. Sign in with Google, pick a host, connect. Nothing to install."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117' stroke='%2330363d' stroke-width='2'/%3E%3Ctext x='12' y='45' font-family='ui-monospace,monospace' font-size='30' font-weight='bold' fill='%233fb950'%3E%3E_%3C/text%3E%3C/svg%3E"
+    />
+    <title>PocketShell - SSH in your browser tab</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Who can see my host list?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Only you. The list is encrypted in your browser before it syncs — PBKDF2 with 600,000 iterations derives the key from your sync passphrase, AES-256-GCM encrypts the blob. The server stores ciphertext it cannot read, and the passphrase never leaves your device."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is my SSH private key safe?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Private keys never sync. A key you attach to a host is encrypted with your sync passphrase, stored only in this browser, decrypted in memory when the session starts, and never uploaded."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Do I need the desktop app?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes — PocketShell web opens the hosts you saved in the PocketShell desktop app. The two sync end-to-end encrypted through your Google account, so the web client stays in step with the desktop."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Do I need to install anything on my servers?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. Servers need nothing beyond the SSH port you already use. Sessions arrive at the SSH bridge on AWS (eu-west-1) over an authenticated WebSocket and continue to your host as a normal SSH login — no agent, no daemon, no extra ports."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Which devices can I use?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Anything with a modern browser: Linux, macOS, Windows, Chromebooks, iPads, and Android tablets — including locked-down machines where you can't install software."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What happens to my session when the tab closes?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "The SSH session ends with the tab, but anything running under tmux or similar keeps going on your server. Reconnect, reattach, and everything is where you left it."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What if I lose my sync passphrase?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Then the synced blob is undecryptable — by design. Zero-knowledge means there is no reset: you'd sign in again, re-enter your hosts, and set a new passphrase. That's the trade for a server that can never read your data."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What does it cost?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Nothing. PocketShell is free while access is allowlisted — no card, no tiers. If that ever changes, existing users will hear it from us first."
+            }
+          }
+        ]
+      }
+    </script>
     <script src="/config.js"></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <!-- Prerendered hero: crawlers and no-JS visitors get the H1, sub, and
+           CTA in the initial HTML. Vue replaces this content on mount. -->
+      <div class="landing">
+        <main>
+          <section class="hero container">
+            <p class="eyebrow">Browser SSH client</p>
+            <h1>Your SSH hosts, in a browser tab.</h1>
+            <p class="sub">
+              Sign in with Google, click a host from your synced list, and a
+              real terminal opens in the tab — nothing to install.
+            </p>
+            <p><a class="button primary large" href="/login">Sign in with Google</a></p>
+          </section>
+        </main>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -40,5 +40,17 @@ path.write_text(f"window.POCKETSHELL_WEB = {json.dumps(merged, indent=2)};\n")
 EOF
 
 aws s3 sync dist/ "s3://$SITE_BUCKET" --delete --region "$REGION"
+
+# Blog pages are extensionless keys (…/blog/<slug>) so sync uploads them with
+# a generic content type; re-copy with an explicit HTML one. The index is
+# additionally copied to the bare "blog" key (S3 REST does not serve
+# directory indexes itself).
+find dist/blog -maxdepth 1 -type f ! -name "*.*" -print0 2>/dev/null | while IFS= read -r -d '' f; do
+  aws s3 cp "$f" "s3://$SITE_BUCKET/blog/${f##*/}" --content-type "text/html; charset=utf-8" --region "$REGION"
+done
+if [ -f dist/blog/index.html ]; then
+  aws s3 cp dist/blog/index.html "s3://$SITE_BUCKET/blog" --content-type "text/html; charset=utf-8" --region "$REGION"
+fi
+
 aws cloudfront create-invalidation --distribution-id "$CF_DISTRIBUTION_ID" --paths "/*" >/dev/null
 echo "Deployed to s3://$SITE_BUCKET (distribution $CF_DISTRIBUTION_ID)"

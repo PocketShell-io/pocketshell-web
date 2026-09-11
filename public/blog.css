@@ -1,0 +1,382 @@
+/* Standalone stylesheet for the static blog pages (/blog, /blog/<slug>).
+   Kept in public/ so pages can link an unhashed URL; tokens mirror the
+   SPA's GitHub-dark design system in src/style.css. */
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: #0d1117;
+  color: #e6edf3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+main {
+  flex: 1;
+}
+
+a {
+  color: #58a6ff;
+}
+
+:focus-visible {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
+}
+
+.shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+.site-header {
+  border-bottom: 1px solid #21262d;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.brand {
+  font-weight: 700;
+  color: #e6edf3;
+  text-decoration: none;
+  /* Lifts the header touch target to >= 24px. */
+  padding: 4px 0;
+}
+
+.brand:hover {
+  color: #58a6ff;
+}
+
+.brand-mark {
+  font-family: ui-monospace, monospace;
+  color: #3fb950;
+  margin-right: 2px;
+}
+
+.site-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.site-nav a {
+  color: #e6edf3;
+  text-decoration: none;
+  padding: 6px 0;
+}
+
+.site-nav a:not(.button):hover {
+  color: #58a6ff;
+}
+
+/* Same button idiom as the SPA (src/style.css). */
+.button {
+  font: inherit;
+  background: #21262d;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 6px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: #30363d;
+}
+
+.button.primary {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+}
+
+.button.primary:hover {
+  background: #388bfd;
+}
+
+.post {
+  max-width: 760px;
+  padding-top: 40px;
+  padding-bottom: 24px;
+}
+
+.post h1 {
+  font-size: clamp(30px, 4.5vw, 40px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  text-wrap: balance;
+}
+
+.post-meta {
+  margin: 0 0 32px;
+  color: #8b949e;
+  font-size: 14px;
+}
+
+.prose {
+  line-height: 1.7;
+  font-size: 16.5px;
+}
+
+.prose h2 {
+  font-size: 25px;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 44px 0 14px;
+}
+
+.prose h3 {
+  font-size: 19px;
+  margin: 32px 0 10px;
+}
+
+.prose p {
+  margin: 0 0 16px;
+}
+
+.prose ul,
+.prose ol {
+  margin: 0 0 16px;
+  padding-left: 24px;
+}
+
+.prose li {
+  margin-bottom: 6px;
+}
+
+.prose a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: #30363d;
+}
+
+.prose a:hover {
+  text-decoration-color: #58a6ff;
+}
+
+.prose code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prose pre {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
+.prose pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 14px;
+}
+
+.prose blockquote {
+  margin: 0 0 16px;
+  padding: 2px 18px;
+  border-left: 3px solid #30363d;
+  color: #8b949e;
+}
+
+.prose img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.prose hr {
+  border: none;
+  border-top: 1px solid #21262d;
+  margin: 36px 0;
+}
+
+.post-cta {
+  margin-top: 44px;
+  border: 1px solid #30363d;
+  background: #161b22;
+  border-radius: 6px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.post-cta p {
+  margin: 4px 0 0;
+  color: #8b949e;
+  font-size: 15px;
+}
+
+.post-cta .button {
+  flex-shrink: 0;
+}
+
+.keep-reading {
+  margin-top: 44px;
+}
+
+.keep-reading h2 {
+  font-size: 20px;
+  margin: 0 0 14px;
+}
+
+.next-post {
+  display: block;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.next-post:hover {
+  border-color: #58a6ff;
+}
+
+.next-post strong {
+  color: #58a6ff;
+}
+
+.next-post span {
+  display: block;
+  margin-top: 4px;
+  color: #8b949e;
+  font-size: 14.5px;
+}
+
+.post-cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.post-card {
+  display: block;
+  border: 1px solid #30363d;
+  background: #161b22;
+  border-radius: 6px;
+  padding: 22px 24px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.post-card:hover {
+  border-color: #58a6ff;
+}
+
+.post-card h2 {
+  margin: 0 0 8px;
+  font-size: 19px;
+  color: #58a6ff;
+}
+
+.post-card p {
+  margin: 0 0 12px;
+  color: #8b949e;
+  line-height: 1.6;
+}
+
+.post-card-meta {
+  color: #8b949e;
+  font-size: 13px;
+}
+
+.site-footer {
+  margin-top: 56px;
+  border-top: 1px solid #21262d;
+}
+
+.footer-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-top: 20px;
+  padding-bottom: 20px;
+  font-size: 13px;
+  color: #8b949e;
+}
+
+.footer-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+}
+
+.footer-nav a {
+  color: #8b949e;
+  padding: 6px 0;
+  display: inline-block;
+}
+
+.footer-nav a:hover {
+  color: #58a6ff;
+}
+
+.foot-brand {
+  font-weight: 700;
+  font-size: 14px;
+  color: #e6edf3;
+}
+
+@media (max-width: 640px) {
+  .post {
+    padding-top: 28px;
+  }
+
+  /* Wrap the section anchors onto a second row instead of hiding them. */
+  .header-row {
+    flex-wrap: wrap;
+  }
+
+  .site-nav {
+    order: 3;
+    width: 100%;
+    padding-bottom: 4px;
+  }
+
+  .site-nav a:not(.button) {
+    display: inline;
+    padding: 12px 0;
+  }
+
+  .footer-nav a {
+    padding: 12px 0;
+  }
+
+  .post-cta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
