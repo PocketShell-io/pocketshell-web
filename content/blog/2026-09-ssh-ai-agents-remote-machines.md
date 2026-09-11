@@ -141,10 +141,22 @@ cd ~/workspace && a attach --workspace "$PWD" --tag review
 Everything the agent did while you were gone is still there. Long refactors,
 test loops, and installs all survive disconnects.
 
-tmux keeps a single agent alive just as well if it's already your habit. Start
-it with `tmux new -s agent` and come back with `tmux attach -t agent`. What
-tmux won't tell you is what's running inside each session, and that's exactly
-the question you keep asking once the sessions are agents.
+tmux is the default answer. If it's already your habit, stick with it:
+`tmux new -s agent` starts a session and `tmux attach -t agent` brings it
+back.
+
+If you're choosing a session layer from scratch, compare the alternatives to
+tmux:
+
+- GNU screen is the veteran. It's preinstalled almost everywhere and does the
+  job, with a keymap that shows its age.
+- Zellij is a modern multiplexer with discoverable keybindings and layout
+  files that make it a solid pick for plain shell work.
+- aplexer is the main one for agent work and the session layer PocketShell
+  runs on.
+
+All three keep a process alive through a disconnect. Only the last one tells
+you what's running inside when you come back.
 
 ## 6. Stay in the loop
 
