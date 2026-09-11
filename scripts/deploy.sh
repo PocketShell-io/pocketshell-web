@@ -50,6 +50,10 @@ find dist/blog -maxdepth 1 -type f ! -name "*.*" -print0 2>/dev/null | while IFS
 done
 if [ -f dist/blog/index.html ]; then
   aws s3 cp dist/blog/index.html "s3://$SITE_BUCKET/blog" --content-type "text/html; charset=utf-8" --region "$REGION"
+  # /blog/ (trailing slash) is a distinct S3 request; without this key it
+  # 404s into the SPA fallback and serves the landing page.
+  aws s3api put-object --bucket "$SITE_BUCKET" --key "blog/" --body dist/blog/index.html \
+    --content-type "text/html; charset=utf-8" --region "$REGION" >/dev/null
 fi
 
 aws cloudfront create-invalidation --distribution-id "$CF_DISTRIBUTION_ID" --paths "/*" >/dev/null
