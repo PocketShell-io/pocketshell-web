@@ -38,7 +38,7 @@ existing results are forum threads and half-working scripts — beatable.
 
 | Keyword | Intent | Post (outline) | PS mention |
 |---|---|---|---|
-| ssh from ipad / iphone / android | how-to | Honest landscape: Termius, Blink, TermAI, mobile-terminal apps; keyboard/Mosh realities; then "or none of the above — a browser tab" (PS) | yes, as one option |
+| ssh from ipad / iphone / android | how-to | ✅ drafted: `2026-09-ssh-from-ipad-iphone.md` (apps landscape, key setup, mosh, keyboard, browser route) | yes, as one option |
 | browser based ssh client | commercial | Roundup post — list competitors honestly *including ourselves as one row*. Ranks eventually, converts well | yes |
 | manage server from chromebook / locked-down laptop | how-to | Corporate-laptop angle: no installs allowed, browser is your only tool → SSH in a tab | yes |
 | raspberry pi remote access | how-to | Classic Pi post: enable SSH, keys, dynamic DNS, Tailscale, port-forwarding warnings. PS mention: check on the Pi from your phone | light |
