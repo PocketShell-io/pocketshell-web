@@ -66,22 +66,122 @@ function ctaTo() {
           </ul>
         </section>
         <div class="hero-visual" aria-hidden="true">
-          <div class="term-mock">
+          <!-- The PocketShell desktop window, recreated from the app itself:
+               session panel (root -> folder tree, agent badges), the folder
+               workspace's tab bar with agent marks, a live agent session in
+               the terminal, and the prompt composer. Tokens match the app's
+               dark theme (src/pocketshell-electron App.vue). -->
+          <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <symbol id="mi-arrow-left" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></symbol>
+              <symbol id="mi-ports" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></symbol>
+              <symbol id="mi-usage" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></symbol>
+              <symbol id="mi-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></symbol>
+              <symbol id="mi-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></symbol>
+              <symbol id="mi-collapse" viewBox="0 0 24 24"><polyline points="11 17 6 12 11 7" /><polyline points="18 17 13 12 18 7" /></symbol>
+              <symbol id="mi-hexagon" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /></symbol>
+              <symbol id="mi-code" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></symbol>
+              <symbol id="mi-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></symbol>
+              <symbol id="mi-close" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></symbol>
+              <symbol id="mi-attach" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></symbol>
+              <symbol id="mi-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></symbol>
+            </defs>
+          </svg>
+          <div class="desktop-mock">
             <div class="bar">
               <span class="dot" /><span class="dot" /><span class="dot" />
               <span class="title">edge-1 — pocketshell</span>
             </div>
-            <pre><span class="t-prompt">$</span> a list
-<span class="t-dir">~/git/pocketshell</span>
-  review   claude/zai   <span class="t-green">working</span> · 2h
-  api-fix  codex        <span class="t-user">waiting</span> · 6m
-<span class="t-dir">~/git/aplexer</span>
-  spec     shell        <span class="t-dim">idle</span> · 3d
-<span class="t-prompt">$</span> a attach review
-<span class="t-green">●</span> claude — working (2h)
-  <span class="t-dim">✓ 14 tests passing</span>
-  <span class="t-dim">→ refactor: extracting merge logic</span>
-<span class="t-prompt">$</span> <span class="cursor">█</span></pre>
+            <div class="desk-body">
+              <aside class="desk-side">
+                <div class="side-head">
+                  <span class="side-btn"><svg><use href="#mi-arrow-left" /></svg></span>
+                  <span class="side-spacer" />
+                  <span class="side-btn"><svg><use href="#mi-ports" /></svg></span>
+                  <span class="side-btn"><svg><use href="#mi-usage" /></svg></span>
+                  <span class="side-btn"><svg><use href="#mi-refresh" /></svg></span>
+                  <span class="side-btn"><svg><use href="#mi-gear" /></svg></span>
+                  <span class="side-btn"><svg><use href="#mi-collapse" /></svg></span>
+                </div>
+                <div class="side-tree">
+                  <div class="root-row">
+                    <span class="sdot on" />
+                    <span class="dlabel">git</span>
+                    <span class="count">5</span>
+                    <span class="row-add"><svg><use href="#mi-plus" /></svg></span>
+                  </div>
+                  <div class="dir-row current">
+                    <span class="sdot on" />
+                    <span class="dlabel">pocketshell</span>
+                    <span class="count">2</span>
+                    <span class="badge">claude</span>
+                    <span class="badge">codex</span>
+                    <span class="time">6m</span>
+                  </div>
+                  <div class="dir-row">
+                    <span class="sdot" />
+                    <span class="dlabel">dtc-website</span>
+                    <span class="badge">codex</span>
+                    <span class="time">3h</span>
+                  </div>
+                  <div class="dir-row">
+                    <span class="sdot" />
+                    <span class="dlabel">aplexer</span>
+                    <span class="time">3d</span>
+                  </div>
+                  <div class="dir-row">
+                    <span class="sdot" />
+                    <span class="dlabel">dataops</span>
+                    <span class="time">22h</span>
+                  </div>
+                  <div class="root-row">
+                    <span class="sdot" />
+                    <span class="dlabel">other</span>
+                    <span class="count">1</span>
+                  </div>
+                  <div class="dir-row">
+                    <span class="sdot" />
+                    <span class="dlabel mono">backup-script</span>
+                    <span class="time">5d</span>
+                  </div>
+                </div>
+              </aside>
+              <section class="desk-main">
+                <div class="tabbar">
+                  <span class="tab on"><svg><use href="#mi-hexagon" /></svg>review<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
+                  <span class="tab"><svg><use href="#mi-code" /></svg>api-fix<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
+                  <span class="tab">spec<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
+                  <span class="tab">Files<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
+                  <span class="tab-add"><svg><use href="#mi-plus" /></svg></span>
+                </div>
+                <div class="desk-term">
+                  <pre><span class="t-bullet">●</span> Update(src/agent/merge.ts)
+  <span class="t-dim">└  Updated src/agent/merge.ts ·</span> <span class="t-add">+12</span> <span class="t-del">−8</span>
+
+<span class="t-bullet">●</span> Bash(npm test -- merge)
+  <span class="t-dim">└</span>  <span class="t-add">✓ 14 tests passing</span> <span class="t-dim">(2.4s)</span>
+
+<span class="t-bullet">●</span> Merge logic now lives in mergeSessions() — all three
+  callers hand off to it instead of re-implementing the
+  diff. PR notes updated.
+
+<span class="t-run">✻</span> <span class="t-dim">Refactoring… (esc to interrupt · 2h 6m)</span></pre>
+                </div>
+                <div class="desk-composer">
+                  <div class="comp-head">
+                    <span class="comp-title">Prompt</span>
+                    <span class="comp-x"><svg><use href="#mi-close" /></svg></span>
+                  </div>
+                  <div class="comp-draft">run the full suite, then update the PR description with what moved</div>
+                  <div class="comp-controls">
+                    <span class="comp-tool"><svg><use href="#mi-attach" /></svg></span>
+                    <span class="comp-tool"><svg><use href="#mi-terminal" /></svg></span>
+                    <span class="comp-hint">Enter send · Shift+Enter newline</span>
+                    <span class="comp-send">Send</span>
+                  </div>
+                </div>
+              </section>
+            </div>
           </div>
         </div>
       </section>
@@ -404,6 +504,15 @@ function ctaTo() {
       <section class="band">
         <div class="container">
           <div class="final-cta">
+            <!-- Brand illustration: generated art in the site's dark/green palette. -->
+            <img
+              class="final-cta-visual"
+              src="/images/landing-agents.png"
+              alt=""
+              width="1536"
+              height="1024"
+              loading="lazy"
+            />
             <h2>Your agents are still running.</h2>
             <p>Check on them from any browser tab — same hosts, same account as the desktop app.</p>
             <RouterLink class="button primary large" :to="ctaTo()">
