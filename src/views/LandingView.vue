@@ -41,8 +41,8 @@ function ctaTo() {
           <p class="sub">
             Your agents run on your own machines. PocketShell opens a real
             terminal to them — sign in with Google, click a host, and see
-            exactly where Claude Code, Codex, or OpenCode left off. Nothing to
-            install.
+            exactly where Claude Code, Codex, or OpenCode left off. Your
+            browser is the terminal.
           </p>
           <div class="cta-row">
             <RouterLink class="button primary large" :to="ctaTo()">
@@ -50,7 +50,7 @@ function ctaTo() {
             </RouterLink>
             <a class="text-link" href="#how">See how it works</a>
           </div>
-          <p class="cta-note">Free · access is currently allowlisted · nothing to install on your servers</p>
+          <p class="cta-note">Free · access is currently allowlisted · servers run the PocketShell CLI and nothing else</p>
           <ul class="chips" aria-label="Key facts">
             <li class="chip">Zero-knowledge sync</li>
             <li class="chip">Keys stay local</li>
@@ -60,7 +60,7 @@ function ctaTo() {
         <section id="fact-strip" aria-label="Key facts">
           <ul class="fact-strip">
             <li class="fact"><strong>AES-256-GCM · PBKDF2 600k</strong>zero-knowledge, end-to-end</li>
-            <li class="fact"><strong>Claude Code · Codex · OpenCode · Grok Build</strong>first-class sessions, not hidden panes</li>
+            <li class="fact"><strong>Claude Code · Codex · OpenCode · Grok</strong>first-class sessions, not hidden panes</li>
             <li class="fact"><strong>Real xterm.js terminal</strong>scrollback, copy/paste, resize</li>
             <li class="fact"><strong>iPad · Chromebook · phone</strong>any browser tab works</li>
           </ul>
@@ -103,7 +103,7 @@ function ctaTo() {
             <li class="step">
               <span class="num">3</span>
               <h3>Click a host, drop in on a session</h3>
-              <p>Click Connect — a full terminal opens over an authenticated WebSocket straight to SSH. Your agent sessions are already running on the machine; you're just looking at them.</p>
+              <p>Click Connect — a full terminal opens in the tab. Your agent sessions are already running on the machine; you're just attaching to them.</p>
             </li>
           </ol>
         </div>
@@ -144,7 +144,7 @@ function ctaTo() {
               <p class="outcome">
                 Sessions live on your machine, managed by aplexer — the session
                 layer that knows whether Claude Code, Codex, OpenCode, or Grok
-                Build is running in each one. Close the laptop mid-refactor;
+                is running in each one. Close the laptop mid-refactor;
                 from any browser, attach again and the screen is exactly where
                 the agent left it — full xterm.js in the tab, not a
                 screen-sharing approximation.
@@ -263,8 +263,9 @@ function ctaTo() {
                 </li>
               </ol>
               <p class="sec-bridge">
-                Sessions ride an authenticated WebSocket to an SSH bridge on AWS (eu-west-1); your
-                servers see a normal SSH login and need nothing installed.
+                On your servers, the one dependency is the PocketShell CLI — it
+                hosts the agent sessions (aplexer is the session layer) that
+                every PocketShell app attaches to.
               </p>
               <RouterLink class="button primary large" :to="ctaTo()">
                 {{ auth.signedIn ? 'Open your hosts' : 'Sign in with Google' }}
@@ -345,19 +346,20 @@ function ctaTo() {
             <details>
               <summary>Do I need the desktop app?</summary>
               <p>
-                Yes — PocketShell web opens the hosts you saved in the
-                PocketShell desktop app. The two sync end-to-end encrypted
-                through your Google account, so the web client stays in step
-                with the desktop.
+                No. The Android app works on its own. The one awkward part is
+                getting an SSH key onto your phone, so we suggest configuring
+                the key in the web or desktop app first, then using the mobile
+                version from there.
               </p>
             </details>
             <details>
               <summary>Do I need to install anything on my servers?</summary>
               <p>
-                No. Servers need nothing beyond the SSH port you already use.
-                Sessions arrive at the SSH bridge on AWS (eu-west-1) over an
-                authenticated WebSocket and continue to your host as a normal
-                SSH login — no agent, no daemon, no extra ports.
+                Yes — the PocketShell CLI. That's the one thing to install on
+                each host you want in PocketShell. Your agent sessions live on
+                the machine — aplexer is the session layer that hosts them —
+                and the desktop, web, and Android apps all work against those
+                sessions. Nothing else to install.
               </p>
             </details>
             <details>
@@ -382,17 +384,17 @@ function ctaTo() {
               <summary>What if I lose my sync passphrase?</summary>
               <p>
                 Then the synced blob is undecryptable — by design. Zero-knowledge
-                means there is no reset: you'd sign in again, re-enter your
-                hosts, and set a new passphrase. That's the trade for a server
-                that can never read your data.
+                means there is no reset: you set a new passphrase, re-upload
+                your hosts, and re-encrypt the SSH key with it. That's the trade
+                for a server that can never read your data.
               </p>
             </details>
             <details>
               <summary>What does it cost?</summary>
               <p>
-                Nothing. PocketShell is free while access is allowlisted — no
-                card, no tiers. If that ever changes, existing users will hear
-                it from us first.
+                For now, nothing — PocketShell is in active alpha development,
+                and it's free. Later, the open-source version stays free;
+                syncing between your devices is the part that will be paid.
               </p>
             </details>
           </div>
