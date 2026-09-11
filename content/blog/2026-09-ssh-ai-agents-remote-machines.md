@@ -4,7 +4,7 @@ slug: ssh-ai-agents-remote-machines
 date: 2026-09-11
 featured: true
 published: true
-description: "How to run Claude Code or Codex CLI on a remote server over SSH: key-based access, a sandboxed user, headless authentication, and tmux for long-running jobs."
+description: "How to run Claude Code or Codex CLI on a remote server over SSH: key-based access, a sandboxed user, headless authentication, and aplexer sessions for long-running jobs."
 keywords: [ssh, claude code remote server, codex cli headless, ai agent ssh, configure remote server]
 ---
 
@@ -107,34 +107,43 @@ Either way, once the dance is done the auth state sits on the server.
 `~/.claude` holds Claude Code's state and `~/.codex` holds Codex CLI's, and you
 authenticate exactly once.
 
-## 5. Put the agent inside tmux
+## 5. Give the agent a session that outlives your SSH connection
 
 The difference between "agent finished while I commuted" and "agent died when
-the train went through a tunnel" is the session layer.
+the train went through a tunnel" is the session layer. The agent has to run on
+the server, independent of your SSH connection, and you need a way to check on
+it later.
 
-tmux keeps it alive on the server, independent of your SSH connection:
+For agent work we use [aplexer](https://github.com/PocketShell-io/aplexer), a
+session layer built for agents. A session is a workspace, a tag, and an engine,
+not a flat pane name.
+
+Instead of remembering which pane held which job, you address sessions by name:
 
 ```bash
-tmux new -s agent        # on the server
-claude                   # start the agent inside it
+a start --workspace "$PWD" --tag review -- claude   # on the server
 # Ctrl+b, d — detach; walk away
 ```
 
-When you come back, whether from the same laptop, a different one, or your phone:
+`a list` shows every session with its engine and whether the agent inside is
+working or waiting. Checking on a long refactor becomes a glance instead of an
+archaeology dig through panes.
+
+When you come back, whether from the same laptop, a different one, or your
+phone:
 
 ```bash
 ssh build
-tmux attach -t agent
+cd ~/workspace && a attach --workspace "$PWD" --tag review
 ```
 
-Everything the agent did is still scrolling in that session. Long refactors,
+Everything the agent did while you were gone is still there. Long refactors,
 test loops, and installs all survive disconnects.
 
-tmux is the general-purpose answer. When most of what you keep alive is agents
-rather than shells, [aplexer](https://github.com/PocketShell-io/aplexer) is built
-for exactly that: `a start --workspace "$PWD" --tag review -- claude` runs Claude
-in a session that holds its workspace, tag, and engine, and `a list` shows
-which agent is working or waiting in each one.
+tmux keeps a single agent alive just as well if it's already your habit. Start
+it with `tmux new -s agent` and come back with `tmux attach -t agent`. What
+tmux won't tell you is what's running inside each session, and that's exactly
+the question you keep asking once the sessions are agents.
 
 ## 6. Stay in the loop
 
@@ -155,7 +164,7 @@ favor:
 The one annoyance with the setup above is that it still requires an SSH client
 and your config file on whatever machine you're sitting at. That's the reason I
 built [PocketShell](https://pocketshell.io/#how): it's a real terminal to your
-saved hosts, in a browser tab. The `tmux attach` step above works from an iPad
+saved hosts, in a browser tab. The `a attach` step above works from an iPad
 or a locked-down work laptop with nothing installed, which is where a lot of
 agent babysitting happens.
 
