@@ -9,9 +9,9 @@ keywords: [ssh, claude code remote server, codex cli headless, ai agent ssh, con
 ---
 
 AI coding agents are at their best on a box that isn't your laptop. Think a cheap VPS for staging, a beefy build server, or a Raspberry Pi on your desk. The agent gets a real shell on that machine, and you get your CPU
-back. Everything you take for granted locally (your dotfiles, your logged-in
-browser, a terminal that survives a Wi-Fi blip) has to be set up deliberately
-over SSH.
+back. Everything you take for granted locally has to be set up deliberately
+over SSH. Nothing is there by default: the dotfiles, the logged-in
+browser, the terminal that survives a Wi-Fi blip.
 
 I wrote down the setup I wish I'd had on day one. It works the same for Claude
 Code, Codex CLI, Gemini CLI, or any other terminal-based agent.
@@ -78,7 +78,7 @@ If the server has no Node yet, install it via your package manager or
 Both CLIs normally want to open a browser. A headless server has no browser, so
 you complete the OAuth dance from your laptop instead.
 
-**Claude Code** has a clean path for servers: on your machine run
+Claude Code has a clean path for servers: on your machine run
 `claude setup-token`, which yields a long-lived token, then on the server:
 
 ```bash
@@ -91,8 +91,8 @@ rather reuse an interactive login, run `claude` on the server. Copy the
 authorization URL it prints into your laptop's browser, and paste the resulting
 code back into the terminal.
 
-**Codex CLI** needs one extra step: `codex login` prints an authorization URL,
-but its OAuth callback targets port 1455 *on the server*.
+Codex CLI needs one extra step: `codex login` prints an authorization URL,
+but its OAuth callback targets port 1455 on the server.
 
 Connect with a local port forward first. Then run the login on the server and
 open the printed URL in your laptop's browser.
@@ -151,13 +151,13 @@ the question you keep asking once the sessions are agents.
 An agent with a shell will happily run commands, so stack the odds in your
 favor:
 
-- **Work on a branch.** Tell the agent to commit to `agent/...` branches, and
+- Work on a branch. Tell the agent to commit to `agent/...` branches, and
   you review the diff and merge.
-- **Commit early, commit often.** Git is your undo button - instruct the agent
+- Commit early, commit often. Git is your undo button - instruct the agent
   to commit after each step.
-- **Read the transcript.** Detaching doesn't mean approving. Scroll through what
+- Read the transcript. Detaching doesn't mean approving. Scroll through what
   it ran before you merge.
-- **Audit periodically.** `last`, `history` under the agent user, and your usual
+- Audit periodically. `last`, `history` under the agent user, and your usual
   log rotation will show you anything odd.
 
 ## Doing this from anywhere
