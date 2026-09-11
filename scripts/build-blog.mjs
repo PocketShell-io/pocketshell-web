@@ -88,7 +88,7 @@ function page({ title, description, canonical, type = 'website', published, cont
         <a class="nav-link" href="/#faq">FAQ</a>
         <a class="nav-link" href="/blog">Blog</a>
       </nav>
-      <span class="spacer" />
+      <span class="spacer"></span>
       <a class="button" data-auth href="/login">Sign in</a>
     </div>
   </header>
