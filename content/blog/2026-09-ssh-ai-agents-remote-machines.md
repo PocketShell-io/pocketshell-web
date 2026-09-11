@@ -95,8 +95,8 @@ code back into the terminal.
 but its OAuth callback targets port 1455 *on the server*.
 
 Connect with a local port forward first. Then run the login on the server and
-open the printed URL in your laptop's browser, and the callback is tunneled back
-to the server:
+open the printed URL in your laptop's browser. The callback tunnels back to
+the server:
 
 ```bash
 ssh -L 1455:localhost:1455 build   # from your laptop
