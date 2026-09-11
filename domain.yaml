@@ -71,7 +71,11 @@ Resources:
           - Id: site
             DomainName: !Ref OriginDistributionDomain
             CustomOriginConfig:
-              OriginProtocolPolicy: http-only
+              # https-only, not http-only: the inner distribution redirects
+              # plain-HTTP viewers to HTTPS (its own redirect-to-https
+              # policy), and that 301 is what the chain would hand back.
+              # The *.cloudfront.net certificate covers the origin fetch.
+              OriginProtocolPolicy: https-only
               OriginReadTimeout: 30
         DefaultCacheBehavior:
           TargetOriginId: site
