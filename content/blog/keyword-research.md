@@ -51,10 +51,24 @@ existing results are forum threads and half-working scripts — beatable.
 | ssh keeps disconnecting / timeout | troubleshooting | `ServerAliveInterval`, NAT timeouts, MTU, Mosh, autossh. PS: reconnects are cheap when the terminal is a tab | light |
 | dotfiles management | how-to | The "same environment everywhere" problem (dotfiles repos, bare git). PS mention: same problem for hosts | light |
 
+## Cluster 5 — Managing a fleet of agents (day-two ops; aplexer-led)
+
+Intent shift from "get an agent running" to "I have N agents on M machines —
+how do I run them". People search: managing many agents, agents over SSH,
+checking on agents from a phone. ✅ drafted 2026-09-12, all four cross-linked.
+
+| Keyword | Intent | Post | PS mention |
+|---|---|---|---|
+| aplexer / agent multiplexer / tmux alternative for agents | brand + comparison | ✅ `2026-09-aplexer-agent-multiplexer.md`: identity model (workspace+tag+engine), isolation, engines/profiles/shortcuts, whoami, inboxes, transcript | yes, closing section |
+| run multiple ai agents / multiple claude code sessions in parallel | how-to | ✅ `2026-09-multiple-ai-coding-agents.md`: git worktrees, named sessions, status board, sequencing, blast radius | light |
+| manage/monitor ai agents over ssh | how-to | ✅ `2026-09-manage-ai-agents-over-ssh.md`: list states, attach on purpose, send/capture/transcript, kill/forget/cap | yes, "one view across servers" |
+| claude code from phone / check agents from phone | how-to | ✅ `2026-09-check-ai-agents-from-phone.md`: 30-second check-in, aliases, voice input, field setup from aishippingblog | yes, browser route |
+
 ## Cadence
 
 1/week. Order: AI-agents post → tmux post → ssh-config → permission-denied →
-mobile SSH → tunneling → rest. Each post: ≥1 working code block per H2, no
+mobile SSH → tunneling → rest. Cluster 5 shipped as a batch on 2026-09-12.
+Each post: ≥1 working code block per H2, no
 fluff intro, `Further reading` linking 2–3 other cluster posts (internal
 linking matters more than any single keyword).
 
@@ -71,3 +85,6 @@ linking matters more than any single keyword).
 - [Keep Claude Code Running After SSH Disconnects (tmux guide)](https://codeongrass.com/blog/how-to-keep-claude-code-running-after-terminal-close/)
 - [Best SSH clients for iPad in 2026 (TermAI)](https://termai.sh/blog/best-ssh-client-ipad)
 - [Termius — free SSH client for iPad](https://termius.com/free-ssh-client-for-ipad)
+- [The system I built to ship code from a phone (AI Shipping Blog)](https://aishippingblog.com/p/the-system-i-built-to-ship-code-from) — field material for the check-from-phone post
+- [I built an AI agent team for software development (AI Shipping Blog)](https://aishippingblog.com/p/i-built-an-ai-agent-team-for-software) — field material for the parallel-agents post
+- [aplexer README](https://github.com/PocketShell-io/aplexer) — every command in the cluster-5 posts is verified against it
