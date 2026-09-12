@@ -40,7 +40,7 @@ function ctaTo() {
           <h1>Drop in on your AI agents from any browser tab.</h1>
           <p class="sub">
             Your agents run on your own machines. PocketShell opens a real
-            terminal to them — sign in with Google, click a host, and see
+            terminal to them&nbsp;— sign in with Google, click a host, and see
             exactly where Claude Code, Codex, or OpenCode left off. Your
             browser is the terminal.
           </p>
@@ -90,7 +90,7 @@ function ctaTo() {
           <div class="desktop-mock">
             <div class="bar">
               <span class="dot" /><span class="dot" /><span class="dot" />
-              <span class="title">edge-1 — pocketshell</span>
+              <span class="title">edge-1&nbsp;— pocketshell</span>
             </div>
             <div class="desk-body">
               <aside class="desk-side">
@@ -193,7 +193,7 @@ function ctaTo() {
             <li class="step">
               <span class="num">1</span>
               <h3>Your hosts are already there</h3>
-              <p>Sign in with the same Google account the desktop app syncs with — your host list is already yours.</p>
+              <p>Sign in with the same Google account the desktop app syncs with&nbsp;— your host list is already yours.</p>
             </li>
             <li class="step">
               <span class="num">2</span>
@@ -203,7 +203,7 @@ function ctaTo() {
             <li class="step">
               <span class="num">3</span>
               <h3>Click a host, drop in on a session</h3>
-              <p>Click Connect — a full terminal opens in the tab. Your agent sessions are already running on the machine; you're just attaching to them.</p>
+              <p>Click Connect&nbsp;— a full terminal opens in the tab. Your agent sessions are already running on the machine; you're just attaching to them.</p>
             </li>
           </ol>
         </div>
@@ -216,7 +216,7 @@ function ctaTo() {
             <div class="frow-copy">
               <h3>Your hosts, already there</h3>
               <p class="outcome">
-                Hosts saved in the desktop app appear on the web automatically — no re-entering
+                Hosts saved in the desktop app appear on the web automatically&nbsp;— no re-entering
                 addresses, users, and ports a second time. The sync is zero-knowledge: the blob is
                 encrypted in your browser before it leaves it, and the server stores ciphertext it
                 can't read.
@@ -242,11 +242,11 @@ function ctaTo() {
             <div class="frow-copy">
               <h3>Agent sessions that outlive the tab</h3>
               <p class="outcome">
-                Sessions live on your machine, managed by aplexer — the session
+                Sessions live on your machine, managed by aplexer&nbsp;— the session
                 layer that knows whether Claude Code, Codex, OpenCode, or Grok
                 is running in each one. Close the laptop mid-refactor;
                 from any browser, attach again and the screen is exactly where
-                the agent left it — full xterm.js in the tab, not a
+                the agent left it&nbsp;— full xterm.js in the tab, not a
                 screen-sharing approximation.
               </p>
               <ul class="chips" aria-label="Highlights">
@@ -260,10 +260,10 @@ function ctaTo() {
               <div class="term-mock" aria-hidden="true">
                 <div class="bar">
                   <span class="dot" /><span class="dot" /><span class="dot" />
-                  <span class="title">edge-1 — api-fix</span>
+                  <span class="title">edge-1&nbsp;— api-fix</span>
                 </div>
                 <pre><span class="t-prompt">$</span> a attach api-fix
-<span class="t-green">●</span> codex — working (6m)
+<span class="t-green">●</span> codex&nbsp;— working (6m)
   <span class="t-dim">✓ auth middleware covered by tests</span>
   <span class="t-dim">→ editing src/api/handlers.ts</span>
 <span class="t-prompt">$</span> <span class="cursor">█</span></pre>
@@ -275,7 +275,7 @@ function ctaTo() {
             <div class="frow-copy">
               <h3>Works where clients can't</h3>
               <p class="outcome">
-                iPad, Chromebook, a locked-down work laptop — if it has a browser, it's your
+                iPad, Chromebook, a locked-down work laptop&nbsp;— if it has a browser, it's your
                 terminal. Nothing to install, and private keys never sync: a key you attach is
                 encrypted in this browser only and used once, in memory.
               </p>
@@ -325,8 +325,7 @@ function ctaTo() {
             <div class="card">
               <h3>Web</h3>
               <p>
-                This one. A real terminal to any synced host, in a browser tab
-                — for iPads, Chromebooks, and locked-down machines where you
+                This one. A real terminal to any synced host, in a browser tab&nbsp;— for iPads, Chromebooks, and locked-down machines where you
                 can't install anything.
               </p>
             </div>
@@ -339,12 +338,12 @@ function ctaTo() {
           <div class="security">
             <div class="security-copy">
               <h2>Zero-knowledge by design</h2>
-              <p>No badges, no promises — this is the actual data path, step by step.</p>
+              <p>No badges, no promises&nbsp;— this is the actual data path, step by step.</p>
               <ol class="sec-flow">
                 <li class="sec-item">
                   <span class="n">01</span>
                   <h3>Passphrase stays local</h3>
-                  <p>Typed once per session and used in your browser, never sent — there is no server-side reset, because the server never had it.</p>
+                  <p>Typed once per session and used in your browser, never sent&nbsp;— there is no server-side reset, because the server never had it.</p>
                 </li>
                 <li class="sec-item">
                   <span class="n">02</span>
@@ -363,7 +362,7 @@ function ctaTo() {
                 </li>
               </ol>
               <p class="sec-bridge">
-                On your servers, the one dependency is the PocketShell CLI — it
+                On your servers, the one dependency is the PocketShell CLI&nbsp;— it
                 hosts the agent sessions (aplexer is the session layer) that
                 every PocketShell app attaches to.
               </p>
@@ -383,7 +382,7 @@ function ctaTo() {
               <p>
                 PocketShell is an independent project by
                 <a href="https://github.com/alexeygrigorev">Alexey Grigorev</a>,
-                developed out in the open — the commit history below is the
+                developed out in the open&nbsp;— the commit history below is the
                 actual GitHub record.
               </p>
             </div>
@@ -399,7 +398,7 @@ function ctaTo() {
                 />
               </a>
               <figcaption>
-                The real commit history behind PocketShell — follow along on GitHub.
+                The real commit history behind PocketShell&nbsp;— follow along on GitHub.
               </figcaption>
             </figure>
           </div>
@@ -409,7 +408,7 @@ function ctaTo() {
       <section id="blog" class="band">
         <div class="container">
           <h2>From the blog</h2>
-          <p class="band-sub">Practical notes on SSH, remote machines, and running AI agents on them — the kind of things you'll want a terminal for.</p>
+          <p class="band-sub">Practical notes on SSH, remote machines, and running AI agents on them&nbsp;— the kind of things you'll want a terminal for.</p>
           <div class="cards blog-cards">
             <a v-for="post in latestPosts" :key="post.slug" class="card card-link" :href="`/blog/${post.slug}`">
               <h3>{{ post.title }}</h3>
@@ -428,8 +427,9 @@ function ctaTo() {
             <details>
               <summary>Who can see my host list?</summary>
               <p>
-                Only you. The list is encrypted in your browser before it syncs —
-                PBKDF2 with 600,000 iterations derives the key from your sync
+                Only you. The list is encrypted in your browser before it
+                syncs&nbsp;— PBKDF2 with 600,000 iterations derives the key from
+                your sync
                 passphrase, AES-256-GCM encrypts the blob. The server stores
                 ciphertext it cannot read, and the passphrase never leaves your
                 device.
@@ -455,10 +455,11 @@ function ctaTo() {
             <details>
               <summary>Do I need to install anything on my servers?</summary>
               <p>
-                Yes — the PocketShell CLI. That's the one thing to install on
+                Yes&nbsp;— the PocketShell CLI. That's the one thing to install on
                 each host you want in PocketShell. Your agent sessions live on
-                the machine — aplexer is the session layer that hosts them —
-                and the desktop, web, and Android apps all work against those
+                the machine&nbsp;— aplexer is the session layer that hosts
+                them&nbsp;— and the desktop, web, and Android apps all work
+                against those
                 sessions. Nothing else to install.
               </p>
             </details>
@@ -466,14 +467,14 @@ function ctaTo() {
               <summary>Which devices can I use?</summary>
               <p>
                 Anything with a modern browser: Linux, macOS, Windows,
-                Chromebooks, iPads, and Android tablets — including locked-down
+                Chromebooks, iPads, and Android tablets&nbsp;— including locked-down
                 machines where you can't install software.
               </p>
             </details>
             <details>
               <summary>What happens to my session when the tab closes?</summary>
               <p>
-                The terminal in the tab ends with it — your agent doesn't.
+                The terminal in the tab ends with it&nbsp;— your agent doesn't.
                 Sessions live on your machine under aplexer, the same session
                 layer the PocketShell desktop and Android apps attach to.
                 Reconnect from any browser, attach again, and the screen is
@@ -483,7 +484,7 @@ function ctaTo() {
             <details>
               <summary>What if I lose my sync passphrase?</summary>
               <p>
-                Then the synced blob is undecryptable — by design. Zero-knowledge
+                Then the synced blob is undecryptable&nbsp;— by design. Zero-knowledge
                 means there is no reset: you set a new passphrase, re-upload
                 your hosts, and re-encrypt the SSH key with it. That's the trade
                 for a server that can never read your data.
@@ -492,7 +493,7 @@ function ctaTo() {
             <details>
               <summary>What does it cost?</summary>
               <p>
-                For now, nothing — PocketShell is in active alpha development,
+                For now, nothing&nbsp;— PocketShell is in active alpha development,
                 and it's free. Later, the open-source version stays free;
                 syncing between your devices is the part that will be paid.
               </p>
@@ -514,7 +515,7 @@ function ctaTo() {
               loading="lazy"
             />
             <h2>Your agents are still running.</h2>
-            <p>Check on them from any browser tab — same hosts, same account as the desktop app.</p>
+            <p>Check on them from any browser tab&nbsp;— same hosts, same account as the desktop app.</p>
             <RouterLink class="button primary large" :to="ctaTo()">
               {{ auth.signedIn ? 'Open your hosts' : 'Sign in with Google' }}
             </RouterLink>
@@ -526,7 +527,7 @@ function ctaTo() {
     <footer class="landing-footer">
       <div class="footer-row">
         <span class="foot-brand"><span class="brand-mark">&gt;_</span> PocketShell</span>
-        <span class="foot-dim">Built by Alexey Grigorev — a developer who wanted his servers from an iPad.</span>
+        <span class="foot-dim">Built by Alexey Grigorev&nbsp;— a developer who wanted his servers from an iPad.</span>
         <nav class="footer-nav">
           <RouterLink :to="{ name: 'landing', hash: '#how' }">How it works</RouterLink>
           <RouterLink :to="{ name: 'landing', hash: '#security' }">Security</RouterLink>
