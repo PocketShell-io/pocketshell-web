@@ -156,16 +156,18 @@ function ctaTo() {
                 </div>
                 <div class="desk-term">
                   <pre><span class="t-bullet">●</span> Update(src/agent/merge.ts)
-  <span class="t-dim">└  Updated src/agent/merge.ts ·</span> <span class="t-add">+12</span> <span class="t-del">−8</span>
+  <span class="t-dim">└  src/agent/merge.ts ·</span> <span class="t-add">+12</span> <span class="t-del">−8</span>
 
 <span class="t-bullet">●</span> Bash(npm test -- merge)
   <span class="t-dim">└</span>  <span class="t-add">✓ 14 tests passing</span> <span class="t-dim">(2.4s)</span>
 
-<span class="t-bullet">●</span> Merge logic now lives in mergeSessions()&nbsp;— all three
-  callers hand off to it instead of re-implementing the
-  diff. PR notes updated.
+<span class="t-bullet">●</span> Merge logic now lives in
+  mergeSessions()&nbsp;— all three
+  callers hand off to it instead
+  of re-implementing the diff.
+  PR notes updated.
 
-<span class="t-run">✻</span> <span class="t-dim">Refactoring… (esc to interrupt · 2h 6m)</span></pre>
+<span class="t-run">✻</span> <span class="t-dim">Refactoring… (esc · 2h 6m)</span></pre>
                 </div>
                 <div class="desk-composer">
                   <div class="comp-head">
@@ -264,7 +266,7 @@ function ctaTo() {
                 </div>
                 <pre><span class="t-prompt">$</span> a attach api-fix
 <span class="t-green">●</span> codex&nbsp;— working (6m)
-  <span class="t-dim">✓ auth middleware covered by tests</span>
+  <span class="t-dim">✓ auth middleware tested</span>
   <span class="t-dim">→ editing src/api/handlers.ts</span>
 <span class="t-prompt">$</span> <span class="cursor">█</span></pre>
               </div>
