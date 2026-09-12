@@ -1208,7 +1208,8 @@ button.dir-row {
   margin-top: 20px;
 }
 
-/* Built in the open: the GitHub figure matted inside the card idiom. */
+/* Keep your agents busy at work: the GitHub calendar drawn by the page
+   from the synced snapshot (scripts/sync-gh-history.py), not a screenshot. */
 
 .oss {
   background: #161b22;
@@ -1232,13 +1233,57 @@ button.dir-row {
   margin: 24px 0 0;
 }
 
-.oss-image {
+.oss-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+}
+
+.oss-total {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.oss-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-small);
+  color: #8b949e;
+}
+
+.oss-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.oss-graph {
+  display: block;
+}
+
+.contrib {
   display: block;
   width: 100%;
   height: auto;
   background: #0d1117;
   border: 1px solid #30363d;
   border-radius: 6px;
+}
+
+.contrib-month,
+.contrib-wday {
+  fill: #8b949e;
+  font-size: 10px;
+}
+
+.contrib-wday {
+  text-anchor: end;
 }
 
 .oss-figure figcaption {
@@ -1440,6 +1485,13 @@ button.dir-row {
 }
 
 @media (max-width: 640px) {
+  /* SVG labels scale below readability on phone widths — GitHub's own
+     mobile view drops them too; the grid alone still reads. */
+  .contrib-month,
+  .contrib-wday {
+    display: none;
+  }
+
   /* Wrap the section anchors onto a second row instead of hiding them. */
   .topbar.landing-topbar .topbar-rail {
     flex-wrap: wrap;

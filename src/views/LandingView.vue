@@ -2,7 +2,7 @@
 import { computed, reactive, ref } from 'vue';
 import { useAuthStore } from '../stores/auth';
 import { blogPosts } from '../generated/blog-posts';
-import githubGraph from '../assets/github-contributions-dark.png';
+import { ghHistory } from '../generated/gh-history';
 
 const auth = useAuthStore();
 // Tease the four newest posts; the full list lives at /blog. tmux-centric
@@ -224,6 +224,103 @@ function openFolder(id: string) {
 function selectTab(id: string) {
   activeFolder.value.activeTab = id;
 }
+
+// ---- The contribution calendar -------------------------------------------
+//
+// The "keep your agents busy" figure is drawn by the page from a snapshot
+// synced by scripts/sync-gh-history.py (run it occasionally; it does not
+// need to be fresh). Geometry mirrors GitHub's calendar: Sunday-first week
+// columns, 10px cells on a 13px pitch, GitHub's dark level colors on the
+// card's #0d1117 matte.
+
+const CELL = 10;
+const PITCH = CELL + 3;
+const PAD_LEFT = 30;
+const PAD_TOP = 18;
+
+const LEVEL_COLORS = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+interface GraphDay {
+  date: string;
+  count: number;
+  x: number;
+  y: number;
+  level: number;
+}
+
+const dayDate = (iso: string) => new Date(`${iso}T00:00:00Z`);
+
+// Levels are quartiles over the nonzero days, like GitHub's own coloring.
+const cutoffs = (() => {
+  const counts = ghHistory.weeks
+    .flatMap((w) => w.days.map((d) => d.count))
+    .filter((c) => c > 0)
+    .sort((a, b) => a - b);
+  const at = (q: number) => counts[Math.min(counts.length - 1, Math.floor(counts.length * q))] ?? 1;
+  return [at(0.25), at(0.5), at(0.75)] as const;
+})();
+
+const graphDays: GraphDay[] = ghHistory.weeks.flatMap((w, wi) =>
+  w.days.map((d) => ({
+    date: d.date,
+    count: d.count,
+    x: PAD_LEFT + wi * PITCH,
+    y: PAD_TOP + dayDate(d.date).getUTCDay() * PITCH,
+    level:
+      d.count <= 0
+        ? 0
+        : d.count <= cutoffs[0]
+          ? 1
+          : d.count <= cutoffs[1]
+            ? 2
+            : d.count <= cutoffs[2]
+              ? 3
+              : 4,
+  })),
+);
+
+const graphWidth = PAD_LEFT + (ghHistory.weeks.length - 1) * PITCH + CELL + 8;
+const graphHeight = PAD_TOP + 6 * PITCH + CELL + 4;
+
+// Labels: the first week carries its own month; after that, a month is
+// labeled at the first week that ends in it. Comparing against the previous
+// week's Saturday catches months that start mid-week and months that start
+// on a Sunday alike — one label per month, no collisions.
+const monthLabels = (() => {
+  const out: { x: number; name: string }[] = [];
+  ghHistory.weeks.forEach((w, wi) => {
+    const first = w.days[0];
+    const last = w.days[w.days.length - 1];
+    if (!first || !last) return;
+    const b = dayDate(last.date);
+    if (wi === 0) {
+      out.push({ x: PAD_LEFT, name: MONTHS[dayDate(first.date).getUTCMonth()] });
+      return;
+    }
+    const prev = ghHistory.weeks[wi - 1];
+    const prevLast = dayDate(prev.days[prev.days.length - 1].date);
+    if (prevLast.getUTCMonth() !== b.getUTCMonth()) {
+      out.push({ x: PAD_LEFT + wi * PITCH, name: MONTHS[b.getUTCMonth()] });
+    }
+  });
+  return out;
+})();
+
+const wdayLabels = [
+  { name: 'Mon', row: 1 },
+  { name: 'Wed', row: 3 },
+  { name: 'Fri', row: 5 },
+].map((w) => ({ name: w.name, y: PAD_TOP + w.row * PITCH + CELL - 2 }));
+
+const fmtGraphDay = (iso: string) =>
+  new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(
+    dayDate(iso),
+  );
+
+const fmtSynced = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(
+  new Date(`${ghHistory.syncedAt}T00:00:00Z`),
+);
 </script>
 
 <template>
@@ -590,27 +687,54 @@ function selectTab(id: string) {
         <div class="container">
           <div class="oss">
             <div class="oss-copy">
-              <h2>Built in the open</h2>
+              <h2>Keep your agents busy at work</h2>
               <p>
-                PocketShell is an independent project by
-                <a href="https://github.com/alexeygrigorev">Alexey Grigorev</a>,
-                developed out in the open&nbsp;— the commit history below is the
-                actual GitHub record.
+                This is the GitHub contribution graph of the author,
+                <a href="https://github.com/alexeygrigorev">Alexey Grigorev</a>&nbsp;— a
+                year of working on many projects in parallel, with agents
+                running in PocketShell sessions on his machines and check-ins
+                from a phone, a tablet, a laptop. Keep yours just as busy:
+                sign in, pick a host, and drop in on what they're doing right now.
               </p>
             </div>
             <figure class="oss-figure">
-              <a href="https://github.com/alexeygrigorev">
-                <img
-                  class="oss-image"
-                  :src="githubGraph"
-                  alt="GitHub contribution calendar for alexeygrigorev: 30,111 contributions in the last year"
-                  width="924"
-                  height="231"
-                  loading="lazy"
-                />
+              <div class="oss-meta">
+                <span class="oss-total">{{ ghHistory.total.toLocaleString('en-US') }} contributions in the last year</span>
+                <span class="oss-legend" aria-hidden="true">Less<i v-for="(c, i) in LEVEL_COLORS" :key="i" :style="{ background: c }" />More</span>
+              </div>
+              <a
+                class="oss-graph"
+                href="https://github.com/alexeygrigorev"
+                aria-label="GitHub contribution calendar for alexeygrigorev — follow along on GitHub"
+              >
+                <!-- Drawn from the synced snapshot (scripts/sync-gh-history.py);
+                     per-rect <title> gives the hover tooltip for free. -->
+                <svg
+                  class="contrib"
+                  :viewBox="`0 0 ${graphWidth} ${graphHeight}`"
+                  role="img"
+                  :aria-label="`${ghHistory.total} contributions by alexeygrigorev in the last year`"
+                >
+                  <text v-for="m in monthLabels" :key="`m${m.x}`" class="contrib-month" :x="m.x" y="12">{{ m.name }}</text>
+                  <text v-for="w in wdayLabels" :key="w.name" class="contrib-wday" :x="PAD_LEFT - 6" :y="w.y">{{ w.name }}</text>
+                  <rect
+                    v-for="d in graphDays"
+                    :key="d.date"
+                    :x="d.x"
+                    :y="d.y"
+                    :width="CELL"
+                    :height="CELL"
+                    rx="2"
+                    :fill="LEVEL_COLORS[d.level]"
+                  >
+                    <title>{{ d.count === 0 ? 'No contributions' : `${d.count} contribution${d.count === 1 ? '' : 's'}` }} on {{ fmtGraphDay(d.date) }}</title>
+                  </rect>
+                </svg>
               </a>
               <figcaption>
-                The real commit history behind PocketShell&nbsp;— follow along on GitHub.
+                Synced from GitHub on {{ fmtSynced }}&nbsp;— a snapshot, not a
+                live feed. The live version is on
+                <a href="https://github.com/alexeygrigorev">GitHub</a>.
               </figcaption>
             </figure>
           </div>
