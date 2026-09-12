@@ -318,9 +318,10 @@ const fmtGraphDay = (iso: string) =>
     dayDate(iso),
   );
 
-const fmtSynced = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).format(
-  new Date(`${ghHistory.syncedAt}T00:00:00Z`),
-);
+// Day under the cursor for the contribution tooltip. Native SVG <title>
+// tooltips take about a second to appear; this one is instant. Client coords
+// because the SVG scales with the layout — rect x/y would need transforming.
+const tip = ref<{ count: number; date: string; x: number; y: number } | null>(null);
 </script>
 
 <template>
@@ -689,12 +690,11 @@ const fmtSynced = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeri
             <div class="oss-copy">
               <h2>Keep your agents busy at work</h2>
               <p>
-                This is the GitHub contribution graph of the author,
-                <a href="https://github.com/alexeygrigorev">Alexey Grigorev</a>&nbsp;— a
-                year of working on many projects in parallel, with agents
-                running in PocketShell sessions on his machines and check-ins
-                from a phone, a tablet, a laptop. Keep yours just as busy:
-                sign in, pick a host, and drop in on what they're doing right now.
+                A year of
+                <a href="https://github.com/alexeygrigorev">Alexey Grigorev</a>'s GitHub
+                contributions&nbsp;— agents committing in PocketShell sessions on his
+                machines, while he checks in from a phone. Sign in, pick a host, and
+                drop in on what they're doing right now.
               </p>
             </div>
             <figure class="oss-figure">
@@ -702,18 +702,16 @@ const fmtSynced = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeri
                 <span class="oss-total">{{ ghHistory.total.toLocaleString('en-US') }} contributions in the last year</span>
                 <span class="oss-legend" aria-hidden="true">Less<i v-for="(c, i) in LEVEL_COLORS" :key="i" :style="{ background: c }" />More</span>
               </div>
-              <a
+              <div
                 class="oss-graph"
-                href="https://github.com/alexeygrigorev"
+                role="img"
                 aria-label="GitHub contribution calendar for alexeygrigorev — follow along on GitHub"
               >
                 <!-- Drawn from the synced snapshot (scripts/sync-gh-history.py);
-                     per-rect <title> gives the hover tooltip for free. -->
+                     hover shows a per-day tooltip, see `tip`. -->
                 <svg
                   class="contrib"
                   :viewBox="`0 0 ${graphWidth} ${graphHeight}`"
-                  role="img"
-                  :aria-label="`${ghHistory.total} contributions by alexeygrigorev in the last year`"
                 >
                   <text v-for="m in monthLabels" :key="`m${m.x}`" class="contrib-month" :x="m.x" y="12">{{ m.name }}</text>
                   <text v-for="w in wdayLabels" :key="w.name" class="contrib-wday" :x="PAD_LEFT - 6" :y="w.y">{{ w.name }}</text>
@@ -726,16 +724,15 @@ const fmtSynced = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeri
                     :height="CELL"
                     rx="2"
                     :fill="LEVEL_COLORS[d.level]"
-                  >
-                    <title>{{ d.count === 0 ? 'No contributions' : `${d.count} contribution${d.count === 1 ? '' : 's'}` }} on {{ fmtGraphDay(d.date) }}</title>
-                  </rect>
+                    @mouseenter="tip = { count: d.count, date: d.date, x: $event.clientX, y: $event.clientY }"
+                    @mouseleave="tip = null"
+                  />
                 </svg>
-              </a>
-              <figcaption>
-                Synced from GitHub on {{ fmtSynced }}&nbsp;— a snapshot, not a
-                live feed. The live version is on
-                <a href="https://github.com/alexeygrigorev">GitHub</a>.
-              </figcaption>
+                <div v-if="tip" class="contrib-tip" :style="{ left: `${tip.x}px`, top: `${tip.y}px` }">
+                  <strong>{{ tip.count === 0 ? 'No contributions' : `${tip.count} contribution${tip.count === 1 ? '' : 's'}` }}</strong>
+                  {{ fmtGraphDay(tip.date) }}
+                </div>
+              </div>
             </figure>
           </div>
         </div>

@@ -1286,11 +1286,26 @@ button.dir-row {
   text-anchor: end;
 }
 
-.oss-figure figcaption {
-  margin-top: 12px;
+/* Per-day tooltip on the contribution graph: fixed to the viewport at the
+   cursor so the responsive SVG needs no coordinate mapping. */
+.contrib-tip {
+  position: fixed;
+  z-index: 10;
+  pointer-events: none;
+  transform: translate(12px, 14px);
+  padding: 6px 10px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
   font-size: var(--text-small);
   color: #8b949e;
-  text-align: center;
+  white-space: nowrap;
+}
+
+.contrib-tip strong {
+  color: #e6edf3;
+  font-weight: 600;
+  margin-right: 6px;
 }
 
 /* FAQ: collapsible cards, centered column. */
@@ -1422,15 +1437,13 @@ button.dir-row {
   color: #58a6ff;
 }
 
-.oss-copy a,
-.oss-figure a {
+.oss-copy a {
   text-decoration: underline;
   text-underline-offset: 3px;
   text-decoration-color: #30363d;
 }
 
-.oss-copy a:hover,
-.oss-figure a:hover {
+.oss-copy a:hover {
   text-decoration-color: #58a6ff;
 }
 
