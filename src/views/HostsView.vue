@@ -14,6 +14,7 @@ const unlocking = ref(false);
 const keyDraft = ref('');
 const keyHost = ref<HostEntry | null>(null);
 const keySaved = ref('');
+const keyRemoved = ref('');
 
 onMounted(() => {
   // Unsigned visitors poking /app get the landing page, not a sign-in error.
@@ -50,6 +51,12 @@ async function saveKey() {
   keyHost.value = null;
 }
 
+async function removeKey(host: HostEntry) {
+  await hosts.removeHostSecret(host.name);
+  keySaved.value = '';
+  keyRemoved.value = host.name;
+}
+
 function open(host: HostEntry) {
   router.push({ name: 'term', params: { name: host.name } });
 }
@@ -80,13 +87,15 @@ function open(host: HostEntry) {
           <div class="meta">{{ describe(host) }}<span v-if="host.identityFile" class="muted"> · key {{ host.identityFile }}</span></div>
         </div>
         <span class="spacer" />
+        <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>
         <button @click="attachKey(host)">Key…</button>
         <button class="primary" @click="open(host)">Connect</button>
       </div>
       <p v-if="keySaved" class="muted">Key for {{ keySaved }} stored in this browser.</p>
+      <p v-if="keyRemoved" class="muted">Key for {{ keyRemoved }} removed from this browser.</p>
 
       <details v-if="keyHost" class="keybox" open>
-        <summary>Private key for {{ keyHost.name }} (stored encrypted in this browser only)</summary>
+        <summary>Private key for {{ keyHost.name }} (stored encrypted in this browser; sent to the bridge only when you connect)</summary>
         <textarea v-model="keyDraft" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
         <button class="primary" @click="saveKey">Save</button>
         <button @click="keyHost = null">Cancel</button>

@@ -17,7 +17,9 @@
  *
  * The ID token rides the `?token=` query parameter; the bridge verifies it
  * against Google's JWKS (+ audience and email allowlist) on $connect. SSH
- * secrets live only in the browser and in the `connect` frame.
+ * secrets live in the browser and travel once, in the `connect` frame, to
+ * the bridge — which uses them in memory to open the SSH connection; the
+ * Lambda neither persists nor logs them (verified in aws-infra source).
  */
 export interface BridgeAuth {
   kind: 'key' | 'password';

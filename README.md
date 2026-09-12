@@ -60,6 +60,24 @@ reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
   host and stores it in `localStorage`, encrypted with the sync passphrase
   using the same envelope scheme. On connect it rides the already
   authenticated WebSocket to the bridge and is used once, in memory.
+- That bridge handling is verified in source, not asserted:
+  `aws-infra/sandbox/pocketshell-web/lambda/index.mjs` feeds the `connect`
+  frame's key/password straight into the ssh2 client — never onto the
+  session object, never logged, never persisted. The Lambda has no table;
+  its warm session state dies on disconnect, after 10 idle minutes, and at
+  the 110-minute connection cap.
+- No telemetry: the browser app ships no analytics or error reporting, and
+  the bridge's CloudWatch logs carry connection ids and error strings only.
+  The ID token rides the `?token=` query string; the WebSocket API stage has
+  no access logging configured, so the token is not written to logs either.
+- Stored credentials are deletable per host: "Remove key" on the Hosts
+  screen re-encrypts the browser's envelope without that credential.
+  Signing out clears the session token and in-memory state but keeps the
+  encrypted envelope in `localStorage` — it is useless without the sync
+  passphrase, and clearing site data removes it entirely.
+- `tests/publicClaims.test.ts` pins the public copy to this model: every
+  key-safety surface must disclose the bridge hop, and absolute
+  "keys never leave your browser" claims must not reappear.
 
 ## Development
 

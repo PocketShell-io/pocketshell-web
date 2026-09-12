@@ -54,7 +54,7 @@
             "name": "Is my SSH private key safe?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Private keys never sync. A key you attach to a host is encrypted with your sync passphrase, stored only in this browser, decrypted in memory when the session starts, and never uploaded."
+              "text": "Private keys never sync. A key you attach to a host is encrypted with your sync passphrase and stored only in this browser. When you connect, the key travels once, over the authenticated WebSocket (WSS), to the PocketShell bridge — which uses it in memory to open your SSH session and neither stores nor logs it. The sync server never sees key material."
             }
           },
           {
@@ -94,7 +94,7 @@
             "name": "What if I lose my sync passphrase?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Then the synced blob is undecryptable — by design. Zero-knowledge means there is no reset: you set a new passphrase, re-upload your hosts, and re-encrypt the SSH key with it. That's the trade for a server that can never read your data."
+              "text": "Then the synced blob is undecryptable — by design. Zero-knowledge means there is no reset: you set a new passphrase, re-upload your hosts, and re-encrypt the SSH key with it. That's the trade for a server that can never read your synced data."
             }
           },
           {

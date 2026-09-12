@@ -57,7 +57,7 @@ function ctaTo() {
           <p class="cta-note">Free · access is currently allowlisted · servers run the PocketShell CLI and nothing else</p>
           <ul class="chips" aria-label="Key facts">
             <li class="chip">Zero-knowledge sync</li>
-            <li class="chip">Keys stay local</li>
+            <li class="chip">Keys never sync</li>
             <li class="chip">Sessions live on your machine</li>
           </ul>
         </div>
@@ -230,7 +230,7 @@ function ctaTo() {
               <ul class="chips" aria-label="Highlights">
                 <li class="chip">Zero-knowledge sync</li>
                 <li class="chip">AES-256-GCM</li>
-                <li class="chip">Passphrase never uploaded</li>
+                <li class="chip">Passphrase never leaves the device</li>
               </ul>
               <a class="text-link" href="/blog/ssh-config-file">Keep ~/.ssh/config tidy across machines</a>
             </div>
@@ -282,11 +282,13 @@ function ctaTo() {
               <h3>Works where clients can't</h3>
               <p class="outcome">
                 iPad, Chromebook, a locked-down work laptop&nbsp;— if it has a browser, it's your
-                terminal. Nothing to install, and private keys never sync: a key you attach is
-                encrypted in this browser only and used once, in memory.
+                terminal. Nothing to install, and private keys never sync: a key you
+                attach stays encrypted in this browser, and when you connect it
+                travels once, over the authenticated WebSocket, to the PocketShell
+                bridge&nbsp;— used in memory to open your session, never stored there.
               </p>
               <ul class="chips" aria-label="Highlights">
-                <li class="chip">Keys stay local</li>
+                <li class="chip">Keys never sync</li>
                 <li class="chip">Nothing to install</li>
                 <li class="chip">Any modern browser</li>
               </ul>
@@ -364,7 +366,7 @@ function ctaTo() {
                 <li class="sec-item">
                   <span class="n">04</span>
                   <h3>Keys never sync at all</h3>
-                  <p>SSH private keys are entered per host, encrypted with your passphrase, and stored in that one browser only.</p>
+                  <p>SSH private keys are entered per host and encrypted with your passphrase in that one browser. On connect, a key goes once to the PocketShell bridge over the authenticated WebSocket and is used in memory to open the session&nbsp;— the sync server never sees it.</p>
                 </li>
               </ol>
               <p class="sec-bridge">
@@ -444,9 +446,12 @@ function ctaTo() {
             <details>
               <summary>Is my SSH private key safe?</summary>
               <p>
-                Private keys never sync. A key you attach to a host is encrypted
-                with your sync passphrase, stored only in this browser, decrypted
-                in memory when the session starts, and never uploaded.
+                Private keys never sync. A key you attach to a host is
+                encrypted with your sync passphrase and stored only in this
+                browser. When you connect, the key travels once, over the
+                authenticated WebSocket (WSS), to the PocketShell bridge&nbsp;—
+                which uses it in memory to open your SSH session and neither
+                stores nor logs it. The sync server never sees key material.
               </p>
             </details>
             <details>
@@ -493,7 +498,7 @@ function ctaTo() {
                 Then the synced blob is undecryptable&nbsp;— by design. Zero-knowledge
                 means there is no reset: you set a new passphrase, re-upload
                 your hosts, and re-encrypt the SSH key with it. That's the trade
-                for a server that can never read your data.
+                for a server that can never read your synced data.
               </p>
             </details>
             <details>

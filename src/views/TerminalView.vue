@@ -54,6 +54,19 @@ onMounted(async () => {
     ? { kind: 'key' as const, privateKey: secret!.privateKeyPem! }
     : { kind: 'password' as const, password: secret!.password! };
 
+  // The bridge deliberately returns one generic message for every SSH
+  // failure (bad key, refused connection, timeout) so it never leaks which
+  // part failed; expand it into something actionable here.
+  const friendly = (message: string) => {
+    if (message === 'ssh connect failed') {
+      return `Could not open an SSH session on ${host.hostname} — check the address, the stored key, and that the machine accepts SSH.`;
+    }
+    if (message === 'WebSocket connection failed') {
+      return 'Could not reach the PocketShell bridge — check your network and try again.';
+    }
+    return message;
+  };
+
   session = new BridgeSession(config.wsUrl, auth.idToken, {
     onData: (bytes) => term?.write(bytes),
     onExit: () => {
@@ -61,7 +74,7 @@ onMounted(async () => {
       term?.write('\r\n[session closed]');
     },
     onError: (message) => {
-      error.value = message;
+      error.value = friendly(message);
     },
     onStatus: (s) => {
       status.value = s;
@@ -81,7 +94,7 @@ onMounted(async () => {
     });
   } catch (e) {
     status.value = 'failed';
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = friendly(e instanceof Error ? e.message : String(e));
     return;
   }
   status.value = 'connected';
