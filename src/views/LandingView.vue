@@ -705,7 +705,7 @@ const tip = ref<{ count: number; date: string; x: number; y: number } | null>(nu
               <div
                 class="oss-graph"
                 role="img"
-                aria-label="GitHub contribution calendar for alexeygrigorev — follow along on GitHub"
+                aria-label="GitHub contribution calendar for alexeygrigorev, last 12 months"
               >
                 <!-- Drawn from the synced snapshot (scripts/sync-gh-history.py);
                      hover shows a per-day tooltip, see `tip`. -->
