@@ -119,6 +119,7 @@ ${content}
       <span class="foot-brand"><span class="brand-mark">&gt;_</span> PocketShell</span>
       <span class="foot-dim">Built by Alexey Grigorev — a developer who wanted his servers from an iPad.</span>
       <nav class="footer-nav">
+        <a href="/#features">Features</a>
         <a href="/#how">How it works</a>
         <a href="/#security">Security</a>
         <a href="/#faq">FAQ</a>
