@@ -161,7 +161,7 @@ function ctaTo() {
 <span class="t-bullet">●</span> Bash(npm test -- merge)
   <span class="t-dim">└</span>  <span class="t-add">✓ 14 tests passing</span> <span class="t-dim">(2.4s)</span>
 
-<span class="t-bullet">●</span> Merge logic now lives in mergeSessions() — all three
+<span class="t-bullet">●</span> Merge logic now lives in mergeSessions()&nbsp;— all three
   callers hand off to it instead of re-implementing the
   diff. PR notes updated.
 

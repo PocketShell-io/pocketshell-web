@@ -1304,12 +1304,14 @@ details.keybox textarea {
 .footer-nav {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
 }
 
 .footer-nav a {
   color: #8b949e;
   padding: 6px 0;
+  white-space: nowrap;
 }
 
 .footer-nav a:hover {
