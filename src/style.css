@@ -188,20 +188,35 @@ main.page {
   text-overflow: ellipsis;
 }
 
+/* Bases are sized so each field's placeholder fits without truncating:
+   "Name (e.g. prod-box)" needs ~195px and "User (optional)" ~140px of
+   content width; Hostname and Port have slack to donate. */
 .hostform .f-name {
-  flex: 1 1 170px;
+  flex: 1 1 200px;
 }
 
 .hostform .f-host {
-  flex: 2 1 200px;
+  flex: 1 1 150px;
 }
 
 .hostform .f-user {
-  flex: 1 1 130px;
+  flex: 1 1 150px;
 }
 
 .hostform .f-port {
-  flex: 0 1 80px;
+  flex: 0 1 70px;
+}
+
+/* Phones: stack the fields. Below ~620px of viewport the four bases stop
+   fitting on one line and flex-shrink truncates placeholders ("User
+   (optio…"), so full-width rows beat a squeezed row. */
+@media (max-width: 640px) {
+  .hostform .f-name,
+  .hostform .f-host,
+  .hostform .f-user,
+  .hostform .f-port {
+    flex: 1 1 100%;
+  }
 }
 
 /* Edit mode locks the name (it keys the synced entry); show it as locked,
