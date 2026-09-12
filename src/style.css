@@ -454,6 +454,11 @@ details.keybox textarea {
 .dir-row {
   display: flex;
   align-items: center;
+  /* Rows are <button>s, and Chromium's UA sheet centers button content
+     (justify-content: center). With the auto-margined .time that free space
+     splits both ways and short rows visibly drift off the shared left line —
+     pin the start edge. */
+  justify-content: flex-start;
   gap: 6px;
   height: 28px;
   padding: 0 10px;
@@ -534,6 +539,42 @@ details.keybox textarea {
 
 .dir-row.current .time {
   margin-left: 0;
+}
+
+/* Rows and tabs are real <button>s: strip the UA chrome (border, buttonface
+   background, system font) so the row/tab styles above still read, then add
+   the affordances an interactive mock owes the visitor. Root rows stay plain
+   headers — in the app they are grouping headers, not buttons. */
+button.dir-row,
+button.tab {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 0.12s ease;
+}
+
+button.dir-row {
+  border-left: 2px solid transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.dir-row:not(.current):hover,
+.tab:not(.on):hover {
+  background: #1c2129;
+}
+
+.desktop-mock button:focus-visible {
+  outline: 1px solid #22d3ee;
+  outline-offset: -1px;
+}
+
+.desk-side,
+.tabbar {
+  user-select: none;
 }
 
 /* Workspace: tab bar with agent marks, the terminal holding a live agent
@@ -666,9 +707,17 @@ details.keybox textarea {
 }
 
 .comp-draft {
+  min-height: 20px;
   padding: 10px 12px 4px;
   font-size: 13px;
   color: #e6edf3;
+}
+
+/* The Files tab has no draft; the composer shows its placeholder, like the
+   app's empty composer does. */
+.comp-draft:empty::before {
+  content: 'Prompt the agent…';
+  color: #6e7681;
 }
 
 .comp-controls {

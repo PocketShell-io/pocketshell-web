@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, reactive, ref } from 'vue';
 import { useAuthStore } from '../stores/auth';
 import { blogPosts } from '../generated/blog-posts';
 import githubGraph from '../assets/github-contributions-dark.png';
@@ -15,6 +16,213 @@ const latestPosts = blogPosts
 // visitor skips straight past it to the app.
 function ctaTo() {
   return { name: auth.signedIn ? 'hosts' : 'login' } as const;
+}
+
+// ---- The interactive desktop mock ----------------------------------------
+//
+// The hero recreates the desktop window and it is actually clickable: a
+// folder row opens that folder's workspace, a tab switches the session, and
+// the terminal + composer follow. Same shapes as the app: panel is
+// root -> folder (SESSIONLIST.md), the tab bar carries the folder's
+// sessions with their agent marks (agentMark.ts: hexagon = Claude Code,
+// code = Codex), and a session with no cwd is a mono-label row.
+
+interface MockTab {
+  id: string;
+  label: string;
+  /** Agent mark icon; absent = plain shell or the Files tab. */
+  mark?: string;
+  term: string;
+  draft: string;
+}
+
+interface MockFolder {
+  id: string;
+  root: 'git' | 'other';
+  label: string;
+  /** Green status dot: something in the folder is attached. */
+  attached?: boolean;
+  /** Session count; the app shows one only from 2 up. */
+  count?: number;
+  badges?: string[];
+  time: string;
+  /** Untracked row: labelled by the session's name, in mono. */
+  mono?: boolean;
+  activeTab: string;
+  tabs: MockTab[];
+}
+
+const mockFolders = reactive<MockFolder[]>([
+  {
+    id: 'pocketshell',
+    root: 'git',
+    label: 'pocketshell',
+    attached: true,
+    count: 2,
+    badges: ['claude', 'codex'],
+    time: '6m',
+    activeTab: 'review',
+    tabs: [
+      {
+        id: 'review',
+        label: 'review',
+        mark: 'hexagon',
+        draft: 'run the full suite, then update the PR description with what moved',
+        term: `<span class="t-bullet">●</span> Update(src/agent/merge.ts)
+  <span class="t-dim">└  src/agent/merge.ts ·</span> <span class="t-add">+12</span> <span class="t-del">−8</span>
+
+<span class="t-bullet">●</span> Bash(npm test -- merge)
+  <span class="t-dim">└</span>  <span class="t-add">✓ 14 tests passing</span> <span class="t-dim">(2.4s)</span>
+
+<span class="t-bullet">●</span> Merge logic now lives in
+  mergeSessions() — all three
+  callers hand off to it instead
+  of re-implementing the diff.
+  PR notes updated.
+
+<span class="t-run">✻</span> <span class="t-dim">Refactoring… (esc · 2h 6m)</span>`,
+      },
+      {
+        id: 'api-fix',
+        label: 'api-fix',
+        mark: 'code',
+        draft: 'ship it — bump the patch version and tag',
+        term: `<span class="t-bullet">●</span> Update(src/api/handlers.ts)
+  <span class="t-dim">└  src/api/handlers.ts ·</span> <span class="t-add">+9</span> <span class="t-del">−3</span>
+
+<span class="t-bullet">●</span> Bash(npm run lint)
+  <span class="t-dim">└</span>  <span class="t-add">✓ no issues</span> <span class="t-dim">(1.1s)</span>
+
+<span class="t-bullet">●</span> The 500s came from a missing
+  await on the session lookup —
+  retries raced the close. Added
+  the await and a regression test.
+
+<span class="t-run">✻</span> <span class="t-dim">Patching… (esc · 6m)</span>`,
+      },
+      {
+        id: 'spec',
+        label: 'spec',
+        draft: 'check the spec index for stale links',
+        term: `<span class="t-prompt">$</span> npm run spec:check
+<span class="t-green">✓</span> <span class="t-dim">12 specs · 0 failed · 1.8s</span>
+
+<span class="t-prompt">$</span> <span class="cursor">█</span>`,
+      },
+      {
+        id: 'files',
+        label: 'Files',
+        draft: '',
+        term: `<span class="t-dir">src/</span>
+<span class="t-dir">src/agent/</span>
+  merge.ts
+  merge.test.ts
+  types.ts
+<span class="t-dir">docs/</span>
+package.json
+README.md`,
+      },
+    ],
+  },
+  {
+    id: 'dtc-website',
+    root: 'git',
+    label: 'dtc-website',
+    badges: ['codex'],
+    time: '3h',
+    activeTab: 'git-dtc-website',
+    tabs: [
+      {
+        id: 'git-dtc-website',
+        label: 'git-dtc-website',
+        mark: 'code',
+        draft: 'tighten the pricing page copy too',
+        term: `<span class="t-bullet">●</span> Update(content/courses.mdx)
+  <span class="t-dim">└  content/courses.mdx ·</span> <span class="t-add">+21</span> <span class="t-del">−6</span>
+
+<span class="t-bullet">●</span> Rewrote the cohort section
+  lead and trimmed the FAQ
+  answers to two sentences each.
+
+<span class="t-run">✻</span> <span class="t-dim">Editing… (esc · 3h 12m)</span>`,
+      },
+    ],
+  },
+  {
+    id: 'aplexer',
+    root: 'git',
+    label: 'aplexer',
+    time: '3d',
+    activeTab: 'spec',
+    tabs: [
+      {
+        id: 'spec',
+        label: 'spec',
+        draft: 'summarise the open questions from the sync doc',
+        term: `<span class="t-prompt">$</span> ./scripts/lint-docs
+<span class="t-green">✓</span> <span class="t-dim">stylelint clean · 4.2s</span>
+
+<span class="t-prompt">$</span> <span class="cursor">█</span>`,
+      },
+    ],
+  },
+  {
+    id: 'dataops',
+    root: 'git',
+    label: 'dataops',
+    time: '22h',
+    activeTab: 'git-dataops',
+    tabs: [
+      {
+        id: 'git-dataops',
+        label: 'git-dataops',
+        draft: "re-run yesterday's rollup",
+        term: `<span class="t-prompt">$</span> make rollup
+<span class="t-dim">daily rollup finished · 3 partitions</span>
+
+<span class="t-prompt">$</span> <span class="cursor">█</span>`,
+      },
+    ],
+  },
+  {
+    id: 'backup-script',
+    root: 'other',
+    label: 'backup-script',
+    mono: true,
+    time: '5d',
+    activeTab: 'backup-script',
+    tabs: [
+      {
+        id: 'backup-script',
+        label: 'backup-script',
+        draft: 'why did the 4am run skip Tuesday?',
+        term: `<span class="t-prompt">$</span> crontab -l | grep backup
+<span class="t-dim">0 4 * * * /usr/local/bin/backup.sh</span>
+
+<span class="t-prompt">$</span> <span class="cursor">█</span>`,
+      },
+    ],
+  },
+]);
+
+const selectedFolder = ref('pocketshell');
+const gitFolders = computed(() => mockFolders.filter((f) => f.root === 'git'));
+const otherFolders = computed(() => mockFolders.filter((f) => f.root === 'other'));
+const activeFolder = computed(
+  () => mockFolders.find((f) => f.id === selectedFolder.value) ?? mockFolders[0],
+);
+const activeTab = computed(
+  () =>
+    activeFolder.value.tabs.find((t) => t.id === activeFolder.value.activeTab) ??
+    activeFolder.value.tabs[0],
+);
+
+function openFolder(id: string) {
+  selectedFolder.value = id;
+}
+
+function selectTab(id: string) {
+  activeFolder.value.activeTab = id;
 }
 </script>
 
@@ -57,7 +265,7 @@ function ctaTo() {
           <p class="cta-note">Free · access is currently allowlisted · servers run the PocketShell CLI and nothing else</p>
           <ul class="chips" aria-label="Key facts">
             <li class="chip">Zero-knowledge sync</li>
-            <li class="chip">Keys never sync</li>
+            <li class="chip">Keys stay local</li>
             <li class="chip">Sessions live on your machine</li>
           </ul>
         </div>
@@ -69,12 +277,12 @@ function ctaTo() {
             <li class="fact"><strong>iPad · Chromebook · phone</strong>any browser tab works</li>
           </ul>
         </section>
-        <div class="hero-visual" aria-hidden="true">
-          <!-- The PocketShell desktop window, recreated from the app itself:
-               session panel (root -> folder tree, agent badges), the folder
-               workspace's tab bar with agent marks, a live agent session in
-               the terminal, and the prompt composer. Tokens match the app's
-               dark theme (src/pocketshell-electron App.vue). -->
+        <div class="hero-visual" role="group" aria-label="Interactive preview of the PocketShell desktop app — click the folders and tabs">
+          <!-- The PocketShell desktop window, recreated from the app itself
+               and clickable: session panel (root -> folder tree, agent
+               badges), the folder workspace's tab bar with agent marks, the
+               live session in the terminal, and the prompt composer. Tokens
+               match the app's dark theme (pocketshell-electron App.vue). -->
           <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg">
             <defs>
               <symbol id="mi-arrow-left" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></symbol>
@@ -114,71 +322,67 @@ function ctaTo() {
                     <span class="count">5</span>
                     <span class="row-add"><svg><use href="#mi-plus" /></svg></span>
                   </div>
-                  <div class="dir-row current">
-                    <span class="sdot on" />
-                    <span class="dlabel">pocketshell</span>
-                    <span class="count">2</span>
-                    <span class="badge">claude</span>
-                    <span class="badge">codex</span>
-                    <span class="time">6m</span>
-                  </div>
-                  <div class="dir-row">
-                    <span class="sdot" />
-                    <span class="dlabel">dtc-website</span>
-                    <span class="badge">codex</span>
-                    <span class="time">3h</span>
-                  </div>
-                  <div class="dir-row">
-                    <span class="sdot" />
-                    <span class="dlabel">aplexer</span>
-                    <span class="time">3d</span>
-                  </div>
-                  <div class="dir-row">
-                    <span class="sdot" />
-                    <span class="dlabel">dataops</span>
-                    <span class="time">22h</span>
-                  </div>
+                  <button
+                    v-for="f in gitFolders"
+                    :key="f.id"
+                    type="button"
+                    class="dir-row"
+                    :class="{ current: f.id === selectedFolder }"
+                    :aria-current="f.id === selectedFolder ? 'true' : undefined"
+                    @click="openFolder(f.id)"
+                  >
+                    <span class="sdot" :class="{ on: f.attached }" />
+                    <span class="dlabel" :class="{ mono: f.mono }">{{ f.label }}</span>
+                    <span v-if="f.count" class="count">{{ f.count }}</span>
+                    <span v-for="b in f.badges" :key="b" class="badge">{{ b }}</span>
+                    <span class="time">{{ f.time }}</span>
+                  </button>
                   <div class="root-row">
                     <span class="sdot" />
                     <span class="dlabel">other</span>
                     <span class="count">1</span>
                   </div>
-                  <div class="dir-row">
-                    <span class="sdot" />
-                    <span class="dlabel mono">backup-script</span>
-                    <span class="time">5d</span>
-                  </div>
+                  <button
+                    v-for="f in otherFolders"
+                    :key="f.id"
+                    type="button"
+                    class="dir-row"
+                    :class="{ current: f.id === selectedFolder }"
+                    :aria-current="f.id === selectedFolder ? 'true' : undefined"
+                    @click="openFolder(f.id)"
+                  >
+                    <span class="sdot" :class="{ on: f.attached }" />
+                    <span class="dlabel" :class="{ mono: f.mono }">{{ f.label }}</span>
+                    <span class="time">{{ f.time }}</span>
+                  </button>
                 </div>
               </aside>
               <section class="desk-main">
                 <div class="tabbar">
-                  <span class="tab on"><svg><use href="#mi-hexagon" /></svg>review<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
-                  <span class="tab"><svg><use href="#mi-code" /></svg>api-fix<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
-                  <span class="tab">spec<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
-                  <span class="tab">Files<span class="tab-x"><svg><use href="#mi-close" /></svg></span></span>
+                  <button
+                    v-for="t in activeFolder.tabs"
+                    :key="t.id"
+                    type="button"
+                    class="tab"
+                    :class="{ on: t.id === activeFolder.activeTab }"
+                    :aria-current="t.id === activeFolder.activeTab ? 'true' : undefined"
+                    @click="selectTab(t.id)"
+                  >
+                    <svg v-if="t.mark"><use :href="`#mi-${t.mark}`" /></svg>{{ t.label }}<span class="tab-x"><svg><use href="#mi-close" /></svg></span>
+                  </button>
                   <span class="tab-add"><svg><use href="#mi-plus" /></svg></span>
                 </div>
                 <div class="desk-term">
-                  <pre><span class="t-bullet">●</span> Update(src/agent/merge.ts)
-  <span class="t-dim">└  src/agent/merge.ts ·</span> <span class="t-add">+12</span> <span class="t-del">−8</span>
-
-<span class="t-bullet">●</span> Bash(npm test -- merge)
-  <span class="t-dim">└</span>  <span class="t-add">✓ 14 tests passing</span> <span class="t-dim">(2.4s)</span>
-
-<span class="t-bullet">●</span> Merge logic now lives in
-  mergeSessions()&nbsp;— all three
-  callers hand off to it instead
-  of re-implementing the diff.
-  PR notes updated.
-
-<span class="t-run">✻</span> <span class="t-dim">Refactoring… (esc · 2h 6m)</span></pre>
+                  <!-- Authored constants from mockFolders; v-html only ever
+                       renders those markup spans. -->
+                  <pre v-html="activeTab.term" />
                 </div>
                 <div class="desk-composer">
                   <div class="comp-head">
                     <span class="comp-title">Prompt</span>
                     <span class="comp-x"><svg><use href="#mi-close" /></svg></span>
                   </div>
-                  <div class="comp-draft">run the full suite, then update the PR description with what moved</div>
+                  <div class="comp-draft">{{ activeTab.draft }}</div>
                   <div class="comp-controls">
                     <span class="comp-tool"><svg><use href="#mi-attach" /></svg></span>
                     <span class="comp-tool"><svg><use href="#mi-terminal" /></svg></span>
@@ -519,7 +723,7 @@ function ctaTo() {
             <!-- Brand illustration: generated art in the site's dark/green palette. -->
             <img
               class="final-cta-visual"
-              src="/images/landing-agents.png"
+              src="/images/landing-agents.webp"
               alt=""
               width="1536"
               height="1024"
