@@ -531,6 +531,7 @@ function ctaTo() {
         <span class="foot-brand"><span class="brand-mark">&gt;_</span> PocketShell</span>
         <span class="foot-dim">Built by Alexey Grigorev&nbsp;— a developer who wanted his servers from an iPad.</span>
         <nav class="footer-nav">
+          <RouterLink :to="{ name: 'landing', hash: '#features' }">Features</RouterLink>
           <RouterLink :to="{ name: 'landing', hash: '#how' }">How it works</RouterLink>
           <RouterLink :to="{ name: 'landing', hash: '#security' }">Security</RouterLink>
           <RouterLink :to="{ name: 'landing', hash: '#faq' }">FAQ</RouterLink>
