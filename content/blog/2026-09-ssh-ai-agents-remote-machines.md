@@ -136,7 +136,8 @@ phone:
 
 ```bash
 ssh build
-cd ~/workspace && a attach --workspace "$PWD" --tag review   # Ctrl-b d detaches when you need to go
+cd ~/workspace && a attach --workspace "$PWD" --tag review
+# Ctrl-b d detaches when you need to go
 ```
 
 Everything the agent did while you were gone is still there. Long refactors,
