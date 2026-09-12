@@ -1,7 +1,7 @@
 ---
 title: "SSH Agent Forwarding: Setup, Risks, and Safer Paths"
 slug: ssh-agent-forwarding
-cover: /images/blog/ssh-agent-forwarding.png
+cover: /images/blog/ssh-agent-forwarding.webp
 date: 2026-09-11
 published: true
 description: "How SSH agent forwarding works, how to enable it with ForwardAgent and ssh-add -h, the real security risks, and when ProxyJump is the better choice."
@@ -80,7 +80,7 @@ ssh-add -l
 ```
 
 If `ssh-add -l` shows your local fingerprints on the remote host, forwarding
-works: any connection *from* that host to a third machine can now authenticate as
+works: any connection from that host to a third machine can now authenticate as
 you.
 
 ## Forwarding exposes your agent socket
@@ -91,8 +91,8 @@ process running as your user) can ask your agent to sign authentication requests
 They never see the key, but for as long as the forwarded socket exists they can
 impersonate you on every other host your key can reach.
 
-This is the standard caveat, and it deserves emphasis: **only forward your agent
-to machines you trust as much as your own laptop.** A shared build box, a
+This is the standard caveat, and it deserves emphasis: only forward your agent
+to machines you trust as much as your own laptop. A shared build box, a
 university login server, or any multi-tenant bastion is a poor place for
 `ForwardAgent yes`. A compromised intermediary can also keep the hijacked agent
 usable beyond your logout by holding an open connection to the socket.
@@ -124,17 +124,17 @@ now.
 Before you type `-A`, check whether a newer tool removes the need:
 
 - **`ProxyJump` (OpenSSH 7.3+).** For host-to-host hopping, `ssh -J bastion web01`
-  tunnels your TCP connection *through* the bastion. The SSH session runs
+  tunnels your TCP connection through the bastion. The SSH session runs
   end-to-end between your laptop and `web01`, and the bastion only relays
   encrypted bytes. It never sees your key or your agent. This is the default
   answer for "I need to reach an internal server via a jump host".
-- **Deploy keys and machine users.** For `git pull` on a server, a deploy key for a single repository is far better than your personal identity. Git hosting
+- Deploy keys and machine users. For `git pull` on a server, a deploy key for a single repository is far better than your personal identity. Git hosting
   providers all support them, and a leaked deploy key is much easier to contain.
-- **Short-lived certificates.** Organizations running an SSH certificate authority
+- Short-lived certificates. Organizations running an SSH certificate authority
   issue keys that expire in hours. The agent's value drops when every key is
   ephemeral anyway.
 
-Use `ProxyJump` for connectivity, agent forwarding only when a *remote-originated*
+Use `ProxyJump` for connectivity, agent forwarding only when a remote-originated
 connection genuinely must authenticate as you, and destination constraints
 whenever it does.
 
@@ -142,15 +142,15 @@ whenever it does.
 
 These five pitfalls cover most forwarding problems:
 
-- **Forwarding enabled on the wrong hop.** `ForwardAgent yes` must apply to the
-  host you connect *to* (the bastion), not the final target. Enabling it in a
+- Forwarding enabled on the wrong hop. `ForwardAgent yes` must apply to the
+  host you connect to (the bastion), not the final target. Enabling it in a
   `Host *` block forwards your agent everywhere, which is the worst of both
   worlds. See [the `~/.ssh/config` guide](/blog/ssh-config-file) for per-host
   blocks.
 - **`SSH_AUTH_SOCK` is empty on the remote.** Check that `AllowAgentForwarding`
   hasn't been set to `no` in `sshd_config`, and that the remote shell's rc files
   aren't overwriting the variable.
-- **tmux on the remote has stale sockets.** Panes started under an earlier login
+- tmux on the remote has stale sockets. Panes started under an earlier login
   keep that login's `SSH_AUTH_SOCK`, which disappears when the session ends. For
   shells you open afterward, publish the current socket globally right after
   connecting: `tmux set-environment -g SSH_AUTH_SOCK "$SSH_AUTH_SOCK"`. In an
@@ -160,7 +160,7 @@ These five pitfalls cover most forwarding problems:
 - **`sudo git pull` fails.** `sudo` strips the environment, so the agent socket
   is lost. Use `sudo -E` (preserves `SSH_AUTH_SOCK`), or better, check out with
   the deploy key of the user you're sudoing into.
-- **Works interactively, fails in scripts.** Non-interactive SSH sessions may not
+- Works interactively, fails in scripts. Non-interactive SSH sessions may not
   source the profile that sets `SSH_AUTH_SOCK`. Test with
   `ssh -t host 'ssh-add -l'` to reproduce what a login shell sees.
 

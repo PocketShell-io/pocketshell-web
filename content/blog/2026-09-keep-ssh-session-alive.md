@@ -1,7 +1,7 @@
 ---
 title: "How to Keep SSH Sessions Alive: Keepalives, tmux, Mosh"
 slug: keep-ssh-session-alive
-cover: /images/blog/keep-ssh-session-alive.png
+cover: /images/blog/keep-ssh-session-alive.webp
 date: 2026-09-11
 description: "Stop SSH freezing on idle: ServerAliveInterval keepalives, server-side timeouts, tmux for detachable sessions, and when mosh is worth installing."
 keywords: [keep ssh session alive, ssh session timeout, ServerAliveInterval, mosh vs tmux]
@@ -17,7 +17,7 @@ A dropped connection takes your running work with it, and tmux (or mosh) makes t
 
 Your SSH connection is a TCP connection, and every device along the path (home
 router, corporate firewall, cloud NAT, load balancer) holds state for it. That
-state typically expires after a period of *silence*, often 5 to 15 minutes on NAT
+state typically expires after a period of silence, often 5 to 15 minutes on NAT
 gateways and firewalls, and around 350 seconds on some cloud NATs. When you resume
 typing, packets flow into a mapping that no longer exists, nothing comes back, and
 the terminal appears to hang while TCP retransmits.
@@ -67,7 +67,7 @@ ones.
 
 Keepalives only reduce disconnections. They do nothing for `systemctl restart`,
 laptop sleep, wifi handoff, or the office fire drill that unplugs your floor. So
-run your work inside **tmux on the server**, where the session is owned by a
+run your work inside tmux on the server, where the session is owned by a
 daemon rather than by your TCP connection:
 
 ```bash
@@ -117,22 +117,22 @@ conference wifi, nothing else compares.
 
 Match the row to your setup:
 
-- **Sessions freeze when idle, network is stable:** client keepalives, done.
-- **Long tasks must survive anything:** keepalives plus tmux on the server.
-- **Roaming between networks, hostile wifi:** mosh plus tmux.
-- **Shared servers filling up with dead sessions:** `ClientAliveInterval` on the server.
+- Sessions freeze when idle, network is stable: client keepalives, done.
+- Long tasks must survive anything: keepalives plus tmux on the server.
+- Roaming between networks, hostile wifi: mosh plus tmux.
+- Shared servers filling up with dead sessions: `ClientAliveInterval` on the server.
 
 ## Common pitfalls
 
 These cover most of the pain:
 
-- **Both keepalive directions configured with conflicting timeouts** makes failures
+- Both keepalive directions configured with conflicting timeouts makes failures
   hard to reason about. Pick one policy per host and document it.
-- **Assuming keepalives protect work.** They protect the *connection*. Anything you
+- Assuming keepalives protect work. They protect the connection. Anything you
   care about belongs in tmux, `nohup`, or `systemd-run --scope` before you walk away.
-- **Nested tmux** when both your laptop and a remote host auto-attach: check
+- Nested tmux when both your laptop and a remote host auto-attach: check
   `tmux ls` and `$TMUX` before fighting the status bar.
-- **Mosh behind NAT without port ranges opened** fails confusingly after a
+- Mosh behind NAT without port ranges opened fails confusingly after a
   successful SSH handshake. The SSH part working is exactly what hides the UDP
   problem.
 

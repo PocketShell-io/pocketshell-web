@@ -1,7 +1,7 @@
 ---
 title: "SSH Keys and authorized_keys: Setup and Hardening"
 slug: ssh-authorized-keys-hardening
-cover: /images/blog/ssh-authorized-keys-hardening.png
+cover: /images/blog/ssh-authorized-keys-hardening.webp
 date: 2026-09-11
 description: "Generate ed25519 keys with ssh-keygen, install them with ssh-copy-id, then harden the server: disable passwords and restrict each key's scope."
 keywords: [ssh authorized_keys, ssh-keygen ed25519, ssh-copy-id, disable ssh password authentication]
@@ -16,7 +16,7 @@ each key can do.
 
 ## Step 1: generate a modern key pair
 
-On the machine you connect *from*:
+On the machine you connect from:
 
 ```bash
 ssh-keygen -t ed25519 -a 100 -C "alexey@thinkpad-2026"
@@ -30,7 +30,7 @@ Three flags matter here:
 - `-a 100` raises the number of KDF rounds used to derive the encryption key from
   your passphrase, making an offline brute-force attack on a stolen key file
   expensive.
-- `-C` sets a comment. Use something that tells you *where the key lives*, a
+- `-C` sets a comment. Use something that tells you where the key lives, a
   device name and year. The comment ends up in the server's `authorized_keys`, so
   avoid embedding secrets in it.
 
@@ -38,13 +38,13 @@ Give the key a passphrase. An unencrypted key in `~/.ssh/` is only as safe as
 every process running under your account. `ssh-agent` means you type the
 passphrase once per boot, not per connection.
 
-**On legacy RSA:** the old `ssh-rsa` signature scheme (SHA-1-based) has been
+On legacy RSA: the old `ssh-rsa` signature scheme (SHA-1-based) has been
 disabled by default since OpenSSH 8.8, and modern clients and servers negotiate
 `rsa-sha2-256`/`rsa-sha2-512` automatically. An existing RSA key usually still
 works without changes. If you must generate RSA for an ancient appliance, use at
 least `-b 3072`.
 
-**On key hygiene:** generate one key pair per device rather than copying one
+On key hygiene: generate one key pair per device rather than copying one
 private key everywhere. It costs nothing, and revocation becomes surgical: lose
 the tablet, delete that one line from `authorized_keys`. A compromise of one
 machine no longer inherits access on all of them.
@@ -69,7 +69,7 @@ Permissions aren't cosmetic, because `sshd` (with `StrictModes` on, the default)
 refuses to read `authorized_keys` if someone other than you can write the file or
 any directory above it. That's a classic failure on NFS-mounted home directories
 and restored backups. On RHEL-family systems after manual edits, fix SELinux
-labels with `restorecon -Rv ~/.ssh`. Test from a **second terminal** before
+labels with `restorecon -Rv ~/.ssh`. Test from a second terminal before
 closing your current session.
 
 ## Step 3: disable password authentication
@@ -96,12 +96,12 @@ sshd -t                        # syntax check — never skip this
 systemctl reload sshd          # reload, not restart: keeps existing sessions
 ```
 
-Before you log out, open a **new** terminal and confirm the key login still
+Before you log out, open a new terminal and confirm the key login still
 works. Keep the cloud provider's serial console as a last-resort backstop.
 
-**Pitfall that bites everyone on cloud images:** `sshd_config` uses
+Pitfall that bites everyone on cloud images: `sshd_config` uses
 first-value-wins semantics, and the `Include` directive for `sshd_config.d` sits
-at the *top* of the file. Debian/Ubuntu cloud images ship `50-cloud-init.conf`
+at the top of the file. Debian/Ubuntu cloud images ship `50-cloud-init.conf`
 containing `PasswordAuthentication yes`, which therefore beats your `99-*.conf`.
 Name your drop-in `00-hardening.conf` (or delete the cloud-init file) and verify
 with `sshd -T | grep -i password`.
@@ -139,14 +139,14 @@ These five checks find the cause most of the time:
    Wrong identity file, wrong alias, or an agent issue (check with `ssh -G host`,
    which prints the fully resolved config - see the
    [`~/.ssh/config` guide](/blog/ssh-config-file) for how blocks resolve).
-2. **Read the server log.** `journalctl -u ssh -n 50` (Debian/Ubuntu) or
+2. Read the server log. `journalctl -u ssh -n 50` (Debian/Ubuntu) or
    `journalctl -u sshd` (RHEL) states the exact reason. "Authentication refused:
    bad ownership or modes" is the permissions problem from Step 2.
-3. **Check the user.** Cloud servers often expect `ubuntu`, `admin`, or
+3. Check the user. Cloud servers often expect `ubuntu`, `admin`, or
    `ec2-user`. Connecting as `root` fails before keys are considered.
-4. **Force the right key** with
+4. Force the right key with
    `ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes host` to rule out agent noise.
-5. **SELinux** on RHEL-family after manual file creation:
+5. SELinux on RHEL-family after manual file creation:
    `restorecon -Rv ~/.ssh`.
 
 ## Keys across many devices

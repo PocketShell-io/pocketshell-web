@@ -1,7 +1,7 @@
 ---
 title: "Configuring a remote machine over SSH with AI agents"
 slug: ssh-ai-agents-remote-machines
-cover: /images/blog/ssh-ai-agents-remote-machines.png
+cover: /images/blog/ssh-ai-agents-remote-machines.webp
 date: 2026-09-11
 featured: true
 published: true

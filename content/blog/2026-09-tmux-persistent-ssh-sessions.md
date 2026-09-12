@@ -1,7 +1,7 @@
 ---
 title: "Stop losing work when SSH drops: tmux sessions that survive anything"
 slug: tmux-persistent-ssh-sessions
-cover: /images/blog/tmux-persistent-ssh-sessions.png
+cover: /images/blog/tmux-persistent-ssh-sessions.webp
 date: 2026-09-11
 featured: true
 published: true
@@ -14,8 +14,8 @@ your laptop suspends or the café Wi-Fi hiccups, and everything in the SSH sessi
 is gone. The process died with the connection, because it was a child of your
 login shell.
 
-tmux breaks that dependency: your programs run inside a **session that lives on
-the server**, and the SSH connection is just a window into it. Close the window,
+tmux breaks that dependency: your programs run inside a session that lives on
+the server, and the SSH connection is just a window into it. Close the window,
 on purpose or by accident, and the session keeps going.
 
 ## The five commands you actually need
@@ -37,7 +37,7 @@ Detach before you close the laptop, or don't: a dropped connection counts as a d
 tmux means a disconnect costs you one command instead of your work. Make that
 command zero, too.
 
-This in `~/.bashrc` **on the server** drops every interactive login straight into
+This in `~/.bashrc` on the server drops every interactive login straight into
 a session named `main`, reattaching when it already exists:
 
 ```bash
@@ -49,12 +49,12 @@ fi
 Two details keep this from biting you. Place it below the interactivity guard at
 the top of most default `.bashrc` files (the `case $- in *i*` line), so
 non-interactive sessions like `scp`, `rsync`, and `git` over SSH never trigger
-it. The `$TMUX` check stops shells opened *inside* tmux from nesting sessions. If
+it. The `$TMUX` check stops shells opened inside tmux from nesting sessions. If
 you would rather not touch `.bashrc` at all, `tmux new -A -s main` attaches to
 `main` or creates it.
 
 Automatic reattach only helps if you notice the drop. These settings in
-`~/.ssh/config` **on your laptop** make a dead connection fail fast instead of
+`~/.ssh/config` on your laptop make a dead connection fail fast instead of
 hanging forever.
 
 The full tour of [the `~/.ssh/config` file](/blog/ssh-config-file) covers where
@@ -79,9 +79,9 @@ restart because of a train tunnel.
 
 Two tips for this style of work:
 
-- **Name sessions by task** (`agent`, `migrate`, `logs`), not by date. `tmux ls`
+- Name sessions by task (`agent`, `migrate`, `logs`), not by date. `tmux ls`
   becomes a to-do list of what's still running.
-- **Use panes for supervision.** `Ctrl+b %` splits the window into side-by-side
+- Use panes for supervision. `Ctrl+b %` splits the window into side-by-side
   panes, so the agent runs in one and `tail -f` on its logs in the other. The
   layout is part of the session, so it's still there when you reattach.
 
@@ -94,7 +94,7 @@ and read screen's man page the one time you SSH into a fossil.
 
 ## One more way this pays off
 
-Attaching to a tmux session only needs *a* terminal, not *your* terminal. That's
+Attaching to a tmux session only needs a terminal, not your terminal. That's
 the idea behind [PocketShell](https://pocketshell.io/#faq): your SSH hosts are in
 your account, and a browser tab on any machine is a real terminal to them.
 

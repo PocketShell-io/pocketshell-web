@@ -1,7 +1,7 @@
 ---
 title: "The SSH config file: ~/.ssh/config with examples"
 slug: ssh-config-file
-cover: /images/blog/ssh-config-file.png
+cover: /images/blog/ssh-config-file.webp
 date: 2026-09-11
 published: true
 description: "How to use the ~/.ssh/config file: host aliases, per-host keys, wildcards, ProxyJump, connection reuse and includes, with examples and debugging tips."
@@ -40,7 +40,7 @@ To test a file without touching your real one, use `ssh -F ~/alt-config host`.
 
 ## The one rule that causes most confusion
 
-For every parameter, **the first value obtained wins**. Files and patterns are processed top to bottom. Once `HostName`, `User`, or any other option has a value, later matching blocks can't change it. This is the opposite of what most
+For every parameter, the first value obtained wins. Files and patterns are processed top to bottom. Once `HostName`, `User`, or any other option has a value, later matching blocks can't change it. This is the opposite of what most
 tools do, and it dictates layout: specific `Host` blocks go at the top, catch-all
 defaults at the bottom.
 
@@ -170,19 +170,19 @@ like `Match exec "nc -z -w1 10.0.0.1 53"`.
 
 Start here when a config misbehaves:
 
-- **`ssh -G staging`** prints the fully resolved configuration for that host and
+- **`ssh -G staging` prints the fully resolved configuration for that host and
   exits. When a connection uses a setting you didn't expect, this is the fastest
   answer.
-- **`ssh -v`** shows which config lines and keys were actually used. Use `-vvv`
+- `ssh -v`** shows which config lines and keys were actually used. Use `-vvv`
   if you're truly lost.
 - **`Host *` placed first** silently shadows every per-host setting below it. If
   aliases seem ignored, check the order.
-- **Bad permissions** (a `config` file that's group- or world-writable) can abort
+- Bad permissions (a `config` file that's group- or world-writable) can abort
   connection attempts. OpenSSH refuses some files it considers unsafe.
-- **Comments are full lines only.** A `#` after an option on the same line is
+- Comments are full lines only. A `#` after an option on the same line is
   treated as part of the value or rejected, not stripped the way you might
   expect.
-- **Leading whitespace is fine** (indentation is conventional, not significant),
+- Leading whitespace is fine (indentation is conventional, not significant),
   but misspelled keywords are silently ignored, which is another reason `ssh -G`
   should be your first stop.
 
@@ -193,11 +193,11 @@ follow you by default.
 
 Two practical answers:
 
-- **A dotfiles repo.** Keep `~/.ssh/config` in a private git repository and
+- A dotfiles repo. Keep `~/.ssh/config` in a private git repository and
   symlink it into place on each machine. Commit the config only, never private
   keys. The hostnames and usernames in it are information about your
   infrastructure, so keep the repo private.
-- **Include from a synced folder.** If `~/.ssh` should stay local, keep the
+- Include from a synced folder. If `~/.ssh` should stay local, keep the
   shared part in whatever folder already syncs between your machines.
 
 The real config then pulls that folder in:

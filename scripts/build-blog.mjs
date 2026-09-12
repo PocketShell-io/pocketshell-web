@@ -53,7 +53,9 @@ const fmtDate = (iso) =>
 const OG_IMAGE = `${SITE}/images/og-cover.png`;
 
 function page({ title, description, canonical, type = 'website', published, cover, content }) {
-  const image = cover ? `${SITE}${cover}` : OG_IMAGE;
+  // og:image keeps the PNG master (broadest crawler compatibility, and crawlers
+  // are the only fetchers); pages embed the webp next to it.
+  const image = cover ? `${SITE}${cover.replace(/\.webp$/, '.png')}` : OG_IMAGE;
   const jsonld = {
     '@context': 'https://schema.org',
     ...(type === 'article'
