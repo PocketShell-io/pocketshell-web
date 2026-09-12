@@ -142,6 +142,47 @@ main.page {
   flex: 1;
 }
 
+/* List head above the host rows: empty-state message left, Add host right.
+   Wraps so the message and the button stack instead of cramming on phones. */
+.list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.list-head .spacer {
+  flex: 1;
+}
+
+/* The new/edit-host form: one wrapping row of fields, width by importance. */
+.hostform {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hostform input {
+  min-width: 0;
+}
+
+.hostform .f-name {
+  flex: 1 1 150px;
+}
+
+.hostform .f-host {
+  flex: 2 1 200px;
+}
+
+.hostform .f-user {
+  flex: 1 1 120px;
+}
+
+.hostform .f-port {
+  flex: 0 1 80px;
+}
+
 details.keybox {
   margin-top: 6px;
 }

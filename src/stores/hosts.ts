@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia';
-import { makeSyncService } from '../api/sync';
+import { makeSyncService, SyncConflictError } from '../api/sync';
 import { SYNC_SLOT } from '../shared/syncConfig';
-import { parseSyncPayload } from '../shared/syncMerge';
+import { parseSyncPayload, serializeSyncPayload } from '../shared/syncMerge';
 import { decryptEnvelope, encryptToEnvelope } from '../shared/syncCrypto';
 import type { HostEntry } from '../shared/types';
+import { upsertHost } from '../hostForm';
 import { useAuthStore } from './auth';
 
 const KEYS_STORAGE = 'ps.hostKeys';
@@ -25,7 +26,10 @@ const KEYS_STORAGE = 'ps.hostKeys';
  * `main`, open with syncCrypto (the browser twin of the desktop's
  * SyncCrypto), parse with the DESKTOP's parseSyncPayload — the same
  * degraded-parse rules, so a blob the desktop wrote is read exactly as the
- * desktop would read it.
+ * desktop would read it. saveHost makes the web a writer too: a host
+ * created here rides the same slot, and a desktop picks it up on its next
+ * sync (the pull's auto-tick), which is what makes web-created hosts usable
+ * on the machines that were not present when they were made.
  */
 export const useHostsStore = defineStore('hosts', {
   state: () => ({
@@ -57,6 +61,38 @@ export const useHostsStore = defineStore('hosts', {
       this.pulled = true;
       this.error = '';
       await this.refreshSecretNames();
+    },
+
+    /**
+     * Create or update one host in the account blob — the web acting as a
+     * sync writer, the counterpart of the desktop's syncNow. The write is
+     * MINIMAL: the payload is the current list with the entry upserted, and
+     * on a 409 (a desktop pushed since our pull) the fresh blob is re-pulled
+     * and only the entry re-applied to it — never the browser's stale copy
+     * of the other hosts, which would silently revert the desktop's edits.
+     * A slot deleted between pull and push is an error, not a silent
+     * one-entry resurrection of a wiped account.
+     */
+    async saveHost(entry: HostEntry): Promise<void> {
+      const sync = makeSyncService(useAuthStore());
+      let base = this.hosts;
+      let baseVersion = this.version;
+      for (let attempt = 0; ; attempt++) {
+        const next = upsertHost(base, entry);
+        const envelope = await encryptToEnvelope(serializeSyncPayload(next), this.passphrase);
+        try {
+          const { version } = await sync.push(SYNC_SLOT, envelope, baseVersion);
+          this.hosts = next;
+          this.version = version;
+          return;
+        } catch (err) {
+          if (!(err instanceof SyncConflictError) || attempt >= 2) throw err;
+          const blob = await sync.pull(SYNC_SLOT);
+          if (blob === null) throw new Error('your synced list changed on the server — reload and try again');
+          base = parseSyncPayload(await decryptEnvelope(blob.data, this.passphrase));
+          baseVersion = blob.version;
+        }
+      }
     },
 
     /** Names of hosts that currently have a secret in this browser. */
