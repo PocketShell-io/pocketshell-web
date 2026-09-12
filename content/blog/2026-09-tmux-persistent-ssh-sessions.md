@@ -20,6 +20,10 @@ on purpose or by accident, and the session keeps going.
 
 ## The five commands you actually need
 
+tmux lives in every distro repository, so if it's missing, one command
+installs it: `sudo apt install tmux` on Debian/Ubuntu or
+`sudo dnf install tmux` on Fedora.
+
 Run these five and you have the whole workflow:
 
 ```bash
@@ -98,17 +102,24 @@ Attaching to a tmux session only needs a terminal, not your terminal. That's
 the idea behind [PocketShell](https://pocketshell.io/#faq): your SSH hosts are in
 your account, and a browser tab on any machine is a real terminal to them.
 
-We also stopped leaning on tmux for agent work ourselves. PocketShell's session
-layer is [aplexer](https://github.com/PocketShell-io/aplexer), an agent-first
-multiplexer. Every session has a workspace, a tag, and an engine, and `a list` shows whether Claude Code, Codex, or OpenCode is running inside and whether it's
-working or waiting. For agent work, that beats remembering which pane held which
-job. Tmux still wins for plain shell work, so this page stays your reference
-there.
+## The better alternative when the panes hold agents
+
+For shell work, tmux stays the right answer and everything above applies as
+written.
+
+When your sessions hold AI coding agents, switch to
+[aplexer](/blog/aplexer-agent-multiplexer) instead. It's the better tmux
+alternative for agent work. Every session has a workspace, a tag, and an
+engine. `a list` shows whether Claude Code, Codex, or OpenCode is running
+inside and whether
+it's working or waiting. That beats remembering which pane held which job,
+and it's the session layer PocketShell runs on.
 
 ## To learn more
 
 Keep going with these:
 
+- [aplexer: an agent multiplexer for AI coding agents](/blog/aplexer-agent-multiplexer)
 - [Run AI agents on a remote machine over SSH](/blog/ssh-ai-agents-remote-machines)
 - [Stop idle sessions freezing: keepalives, tmux, mosh](/blog/keep-ssh-session-alive)
 - [Use screen to keep SSH sessions alive (the classic alternative)](https://embedjournal.com/screen-keep-ssh-sessions-alive-between-connections/)

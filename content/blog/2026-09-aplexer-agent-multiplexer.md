@@ -45,9 +45,10 @@ limit gets OOM killed alone while everything else keeps running.
 
 ## Install and start your first session
 
-aplexer is written in Rust.
+aplexer is written in Rust, so you need the Rust toolchain. If you don't
+have it, [rustup](https://rustup.rs) installs it in one command.
 
-Build it from the
+Build aplexer from the
 [repository](https://github.com/PocketShell-io/aplexer) and install both
 binaries:
 
@@ -169,7 +170,11 @@ board: one glance tells you what's running and what's stuck.
 
 ## The PocketShell connection
 
-PocketShell's web and desktop apps are aplexer clients. The sessions you
+PocketShell is a browser-based terminal to your servers. Your host list
+lives in your account, and any device with a tab gets a real terminal to
+them. Its web and desktop apps are aplexer clients.
+
+The sessions you
 start here are what you attach to from a browser tab, and `a list`'s states
 become the host view you pick from. The server keeps aplexer as its session
 layer and nothing else. The [PocketShell](https://pocketshell.io/) homepage

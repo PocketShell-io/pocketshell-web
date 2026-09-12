@@ -39,9 +39,16 @@ laptop.
 
 ## The SSH route, tuned for thumbs
 
+This post assumes the agent already runs on a server. If it's still on your
+laptop, start with [the remote machine setup
+guide](/blog/ssh-ai-agents-remote-machines) and come back once it's running
+there.
+
 Plain SSH from a phone works, and the [iPad and iPhone client
 guide](/blog/ssh-from-ipad-iphone) covers picking a client and setting up
-keys. A couple more habits make it fast enough for one thumb.
+keys. On Android, Termius is the same polished client, and Termux gives you a
+full terminal under the app. A couple more habits make it fast enough for one
+thumb.
 
 Anything you type more than twice becomes an alias or a Makefile target on
 the server, so phone-you only ever types short words:
@@ -64,8 +71,8 @@ messy transcription, so your spoken rambling arrives as a tidy prompt.
 
 I run my agents on a rented server and drive the whole thing from an Android
 phone. Mid-commute and between-gym-sets minutes have become working time.
-Sessions survive disconnects under a multiplexer, and a tiny helper attaches
-by index so `t 1` is the whole command.
+Sessions survive disconnects under aplexer, and attaching takes the session
+number straight off the list, so `a 1` is the whole command.
 
 Three two-letter aliases start Claude, Codex, and OpenCode. A small Android
 app auto-forwards the ports agents spin up, so previews open in the phone
@@ -84,8 +91,8 @@ the phone. There's a shorter path: open a browser tab.
 [PocketShell](https://pocketshell.io/) keeps your host list in your account
 and attaches to the same aplexer sessions from any device. The connection
 rides an authenticated WebSocket, and the check-in happens in the tab with
-nothing installed. The server needs one CLI, and the sessions you
-already run keep running exactly as they were.
+nothing installed. The server needs the PocketShell CLI and nothing else,
+and the sessions you already run keep running exactly as they were.
 
 ## To learn more
 

@@ -40,9 +40,11 @@ A checkout alone doesn't help if your only handle on the work is "the tmux
 pane in window 3". Sessions need names tied to what they're doing, so you
 can attach, message, or kill them without hunting.
 
-With [aplexer](https://github.com/PocketShell-io/aplexer), a session is
-addressed by its workspace and tag, which maps one-to-one onto the worktree
-layout:
+With [aplexer](/blog/aplexer-agent-multiplexer), a session is addressed by
+its workspace and tag, which maps one-to-one onto the worktree layout.
+
+The [introduction post](/blog/aplexer-agent-multiplexer) covers the install
+if you're starting from scratch:
 
 ```bash
 cd ~/worktrees/shop-rate-limits
@@ -103,8 +105,11 @@ acceptance criteria before its worktree merges.
 Parallel agents multiply whatever access you gave them, so a few boundaries
 keep the downside bounded:
 
-- Run unattended agents on a server, not your laptop, and skip permission
-  prompts only on machines with nothing precious on them.
+- Run unattended agents on a server, not your laptop: the run survives your
+  laptop closing, and you skip permission prompts only on machines with
+  nothing precious on them. [The remote setup
+  guide](/blog/ssh-ai-agents-remote-machines) gets an agent onto a server
+  from zero.
 - Sandbox credentials with short-lived sessions and scoped accounts, and let
   real deployments go through CI, where a human can still see the diff.
 - Cap resources per session, because aplexer profiles take memory and

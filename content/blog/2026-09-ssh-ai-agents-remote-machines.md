@@ -116,7 +116,7 @@ the train went through a tunnel" is the session layer. The agent has to run on
 the server, independent of your SSH connection, and you need a way to check on
 it later.
 
-For agent work we use [aplexer](https://github.com/PocketShell-io/aplexer), a
+For agent work we use [aplexer](/blog/aplexer-agent-multiplexer), a
 session layer built for agents. A session is a workspace, a tag, and an engine,
 not a flat pane name.
 
@@ -155,7 +155,8 @@ tmux:
 - Zellij is a modern multiplexer with discoverable keybindings and layout
   files that make it a solid pick for plain shell work.
 - aplexer is the main one for agent work and the session layer PocketShell
-  runs on.
+  runs on, and the [aplexer introduction](/blog/aplexer-agent-multiplexer)
+  covers the install and the daily verbs.
 
 All three keep a process alive through a disconnect. Only the last one tells
 you what's running inside when you come back.

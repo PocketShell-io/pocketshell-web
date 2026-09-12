@@ -7,18 +7,22 @@ description: "Stop SSH freezing on idle: ServerAliveInterval keepalives, server-
 keywords: [keep ssh session alive, ssh session timeout, ServerAliveInterval, mosh vs tmux]
 ---
 
-Every systems administrator knows the ritual of coming back to a frozen terminal,
-waiting for TCP to admit defeat, reconnecting, and reconstructing what you were
-doing. "Keeping SSH alive" is two problems with separate fixes. Idle
-connections die when middleboxes forget them, so keepalives keep those healthy.
-A dropped connection takes your running work with it, and tmux (or mosh) makes that survivable. You want both.
+Every systems administrator knows the ritual of coming back to a frozen
+terminal. You wait for TCP to admit defeat, reconnect, and reconstruct what
+you were doing.
+
+"Keeping SSH alive" is two problems with separate fixes.
+
+Idle connections die when middleboxes forget them, so keepalives keep those
+healthy. A dropped connection takes your running work with it, and tmux (or
+mosh) makes that survivable. You want both.
 
 ## Idle connections get forgotten
 
-Your SSH connection is a TCP connection, and every device along the path (home
+Your SSH connection is a TCP connection. Every device along the path (home
 router, corporate firewall, cloud NAT, load balancer) holds state for it. That
-state typically expires after a period of silence, often 5 to 15 minutes on NAT
-gateways and firewalls, and around 350 seconds on some cloud NATs. When you resume
+state typically expires after a period of silence. Expect 5 to 15 minutes on
+NAT gateways and firewalls, and around 350 seconds on some cloud NATs. When you resume
 typing, packets flow into a mapping that no longer exists, nothing comes back, and
 the terminal appears to hang while TCP retransmits.
 
@@ -27,9 +31,10 @@ casualties.
 
 ## Fix 1: client-side keepalives
 
-Tell your SSH client to send an encrypted liveness probe during idle periods. In
-`~/.ssh/config` (the [config file guide](/blog/ssh-config-file) explains how files
-and blocks are organised):
+Tell your SSH client to send an encrypted liveness probe during idle periods.
+
+Put this in `~/.ssh/config` (the [config file guide](/blog/ssh-config-file)
+explains how files and blocks are organised):
 
 ```text
 Host *
@@ -37,7 +42,7 @@ Host *
     ServerAliveCountMax 3
 ```
 
-Every 60 seconds the client sends a probe through the encrypted channel, and if
+Every 60 seconds the client sends a probe through the encrypted channel. If
 three go unanswered (three minutes), it declares the connection dead and exits
 instead of hanging for minutes. The probes refresh the state tables on every NAT
 and firewall along the path, because traffic is flowing.
@@ -65,9 +70,11 @@ ones.
 
 ## Fix 2: make drops harmless with tmux
 
-Keepalives only reduce disconnections. They do nothing for `systemctl restart`,
-laptop sleep, wifi handoff, or the office fire drill that unplugs your floor. So
-run your work inside tmux on the server, where the session is owned by a
+Keepalives reduce idle disconnects and nothing else. A `systemctl restart`,
+laptop sleep, wifi handoff, or an office fire drill that unplugs your floor
+still kills everything running.
+
+So run your work inside tmux on the server, where the session is owned by a
 daemon rather than by your TCP connection:
 
 ```bash
@@ -77,9 +84,15 @@ tmux new -s work      # start a named session
 tmux attach -t work
 ```
 
-Day to day, `C-b d` detaches manually, `tmux ls` lists sessions,
-`tmux attach -t work` reattaches, and `tmux kill-session -t work` cleans up. Raise
-the scrollback limit with `set-option -g history-limit 100000` in `~/.tmux.conf`.
+Four commands cover the day to day:
+
+- `C-b d` detaches manually
+- `tmux ls` lists sessions
+- `tmux attach -t work` reattaches
+- `tmux kill-session -t work` cleans up
+
+Raise the scrollback limit with `set-option -g history-limit 100000` in
+`~/.tmux.conf`.
 
 To start tmux automatically on SSH login, add this to the server's `~/.bashrc`:
 
@@ -90,8 +103,9 @@ fi
 ```
 
 Here `$TMUX` prevents nesting sessions, and `$SSH_CONNECTION` leaves local logins
-alone. (`new -A` attaches to the session or creates it.) GNU `screen -R` works the
-same way if that's what's installed, but tmux is the modern default. Panes inherit
+alone. The `-A` flag attaches to an existing session or creates a new one. GNU
+`screen -R` works the same way if that's what's installed, but tmux is the
+modern default. Panes inherit
 `SSH_AUTH_SOCK` from when they started, so long-lived tmux sessions on jump hosts
 can hold a stale agent socket. See [the agent forwarding guide](/blog/ssh-agent-forwarding) for the fix.
 
@@ -108,9 +122,9 @@ The trade-offs decide whether mosh fits:
 - the UDP ports must be open in every firewall along the path
 - it doesn't support port forwarding or agent forwarding at all
 
-Native scrollback is limited, which is one reason mosh and tmux are usually
+Native scrollback is limited, which is why mosh and tmux are usually
 installed as a pair. If your problem is a freezing idle session on a stable
-network, mosh is overkill, but if your problem is working from trains and
+network, mosh is overkill. But if your problem is working from trains and
 conference wifi, nothing else compares.
 
 ## A quick decision guide
@@ -126,22 +140,25 @@ Match the row to your setup:
 
 These cover most of the pain:
 
-- Both keepalive directions configured with conflicting timeouts makes failures
-  hard to reason about. Pick one policy per host and document it.
-- Assuming keepalives protect work. They protect the connection. Anything you
-  care about belongs in tmux, `nohup`, or `systemd-run --scope` before you walk away.
+- Keepalive timeouts that conflict between client and server make failures
+  hard to reason about, so pick one policy per host and document it.
+- Assuming keepalives protect your work. They protect only the connection, so
+  anything you care about belongs in tmux, `nohup`, or `systemd-run --scope`
+  before you walk away.
 - Nested tmux when both your laptop and a remote host auto-attach: check
   `tmux ls` and `$TMUX` before fighting the status bar.
-- Mosh behind NAT without port ranges opened fails confusingly after a
-  successful SSH handshake. The SSH part working is exactly what hides the UDP
+- Mosh behind NAT without open UDP port ranges fails confusingly after a
+  successful SSH handshake, because the working handshake hides the UDP
   problem.
 
 ## The payoff
 
-Once your session state lives on the server, the client stops mattering. Reattach
-to the same session from an iPad, a borrowed Chromebook, or a work laptop you
-can't install software on, whether that session is tmux or an aplexer agent
-session. That last case is exactly what a browser-based client like
-[PocketShell](https://pocketshell.io/#faq) is built for. Sign in with Google, pick
-a host (the list syncs end-to-end encrypted from your desktop app), and the full
-terminal opens in the tab, with the server needing nothing beyond plain SSH.
+Once your session state lives on the server, the client stops mattering.
+Reattach to the same session from an iPad, a borrowed Chromebook, or a work
+laptop you can't install software on. It makes no difference whether the
+session is tmux or an [aplexer agent session](/blog/aplexer-agent-multiplexer).
+
+A browser-based client like [PocketShell](https://pocketshell.io/#faq) is
+built for exactly this. Sign in with Google and pick a host. The list syncs
+end-to-end encrypted from your desktop app. The full terminal opens in the
+tab, and the server needs nothing beyond plain SSH.

@@ -10,22 +10,29 @@ keywords: [manage ai agents over ssh, monitor claude code on remote server, ai a
 ---
 
 Getting an agent onto a server is the solved part. You SSH in, start it in a
-session that survives disconnects, and walk away. Day two is when the real
-job starts. You have a handful of runs on a handful of machines, and one of
-them needs a decision while the rest are fine. You can get good at running
-that fleet over SSH, and the first habit is refusing to attach blind.
+session that survives disconnects, and walk away. (If that part isn't done
+yet, [the day-one setup guide](/blog/ssh-ai-agents-remote-machines) covers it
+first.)
+
+Day two is when the real job starts. You have a handful of runs on a handful
+of machines, and one of them needs a decision while the rest are fine. You can
+get good at running that fleet over SSH, and the first habit is refusing to
+attach blind.
 
 ## Inventory first: list before you look
 
 Attaching to a session to find out what it's doing costs you a terminal and
 your train of thought. Listing costs one command.
 
-With [aplexer](https://github.com/PocketShell-io/aplexer) running the
+With [aplexer](/blog/aplexer-agent-multiplexer) running the
 sessions, `a list` shows every workspace and the agent inside each session:
 
 ```bash
 a list
 ```
+
+If you haven't installed aplexer yet, that introduction covers the build and
+your first session.
 
 The states are semantic, and they save you from attaching blind. `working`
 means the agent is making progress, and `waiting` usually means a permission
@@ -54,9 +61,9 @@ attached device goes to the same PTY, and output fans out to all of them.
 You can sit in the same session from a laptop and a phone while the agent
 runs.
 
-One caveat comes from tmux: the most recently active device controls the
-window size. A passive viewer at a different size may see a clipped view
-until it becomes active.
+One caveat when several viewers share a session: the most recently active
+device controls the window size. A passive viewer at a different size may see
+a clipped view until it becomes active.
 
 ## Talk to a session without watching it
 

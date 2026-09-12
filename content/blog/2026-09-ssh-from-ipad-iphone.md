@@ -144,7 +144,8 @@ only tool available. A browser tab is a perfectly good terminal.
 For exactly this case, [PocketShell](https://pocketshell.io/) opens a real
 xterm.js SSH session in a browser tab. You sign in, pick a host, and connect,
 and the server sees your usual key and `authorized_keys` file. Nothing is
-installed there beyond the [aplexer](https://github.com/PocketShell-io/aplexer)
+installed there beyond the
+[aplexer](/blog/aplexer-agent-multiplexer)
 session layer, which keeps your agent sessions alive between visits. On a
 device where you can't generate or store an SSH key at all, that's often the
 only path that works.
