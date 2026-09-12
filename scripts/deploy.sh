@@ -29,7 +29,7 @@ cp public/config.js dist/config.js
 python3 - "$WS_URL" <<'EOF'
 import json, sys, pathlib
 path = pathlib.Path("dist/config.js")
-cfg = {"syncApiUrl": "https://a7sota2qic.execute-api.eu-west-1.amazonaws.com", "googleClientId": "", "wsUrl": sys.argv[1] if len(sys.argv) > 1 else ""}
+cfg = {"syncApiUrl": "https://a7sota2qic.execute-api.eu-west-1.amazonaws.com", "googleClientId": "1035162854462-kkqius5o2ni136ed6l58iig5pdpeh4u6.apps.googleusercontent.com", "wsUrl": sys.argv[1] if len(sys.argv) > 1 else ""}
 existing = path.read_text() if path.exists() else ""
 try:
     merged = json.loads(existing.split("=", 1)[1].strip().rstrip(";")) if existing else {}
