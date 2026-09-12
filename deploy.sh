@@ -26,9 +26,15 @@ DOMAIN_STACK_NAME="pocketshell-web-domain"
 # the raw changeset APIs: create → wait → skip when empty → execute → wait.
 cfn_deploy() {
   local region="$1" stack="$2" template="$3"; shift 3
-  local param_args=() p
+  local param_args=() p v
+  # aws-cli v1 shorthand splits values on commas, so a value like the
+  # comma-delimited GoogleClientIds list must carry embedded quotes.
   for p in "$@"; do
-    param_args+=("ParameterKey=${p%%=*},ParameterValue=${p#*=}")
+    v="${p#*=}"
+    case "$v" in
+      *,*) param_args+=("ParameterKey=${p%%=*},ParameterValue='$v'") ;;
+      *)   param_args+=("ParameterKey=${p%%=*},ParameterValue=$v") ;;
+    esac
   done
   local cs="deploysh-$(date +%s)-$$"
   local type=UPDATE
@@ -36,15 +42,37 @@ cfn_deploy() {
        --query Stacks[0].StackId --output text >/dev/null 2>&1; then
     type=CREATE
   fi
+  # --capabilities is greedy: bare words after it become more capabilities,
+  # so --parameters must come AFTER the param args, never before them.
+  local xtra=(--capabilities CAPABILITY_IAM)
+  if [ ${#param_args[@]} -gt 0 ]; then
+    xtra+=(--parameters "${param_args[@]}")
+  fi
   aws cloudformation create-change-set --region "$region" \
     --stack-name "$stack" --change-set-name "$cs" --change-set-type "$type" \
-    --template-body "file://$template" --capabilities CAPABILITY_IAM \
-    ${param_args[@]+"${param_args[@]}"} >/dev/null
+    --template-body "file://$template" "${xtra[@]}" >/dev/null
+  # A no-op update never reaches CREATE_COMPLETE: CFN fails the change set
+  # with "didn't contain changes", which the waiter reports as terminal.
   aws cloudformation wait change-set-create-complete --region "$region" \
-    --stack-name "$stack" --change-set-name "$cs" >&2
-  if [ "$(aws cloudformation describe-change-set --region "$region" \
-         --stack-name "$stack" --change-set-name "$cs" \
-         --query HasChanges --output text)" = "false" ]; then
+    --stack-name "$stack" --change-set-name "$cs" >&2 || true
+  local cs_status has_changes cs_reason
+  cs_status="$(aws cloudformation describe-change-set --region "$region" \
+    --stack-name "$stack" --change-set-name "$cs" --query Status --output text)"
+  has_changes="$(aws cloudformation describe-change-set --region "$region" \
+    --stack-name "$stack" --change-set-name "$cs" --query HasChanges --output text)"
+  if [ "$cs_status" != "CREATE_COMPLETE" ]; then
+    cs_reason="$(aws cloudformation describe-change-set --region "$region" \
+      --stack-name "$stack" --change-set-name "$cs" --query StatusReason --output text || true)"
+    if [ "$cs_status" = "FAILED" ] && [[ "$cs_reason" == *"didn't contain changes"* ]]; then
+      echo "No changes to deploy. Stack $stack is up to date"
+      aws cloudformation delete-change-set --region "$region" \
+        --stack-name "$stack" --change-set-name "$cs" >/dev/null
+      return 0
+    fi
+    echo "change set for $stack: $cs_status — $cs_reason" >&2
+    return 1
+  fi
+  if [ "$has_changes" = "false" ]; then
     echo "No changes to deploy. Stack $stack is up to date"
     aws cloudformation delete-change-set --region "$region" \
       --stack-name "$stack" --change-set-name "$cs" >/dev/null
