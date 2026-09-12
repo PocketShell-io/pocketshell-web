@@ -27,6 +27,8 @@ Repeatable process for producing brand-consistent images (blog covers, landing a
 - Look: flat-to-soft-3D modern illustration, crisp geometry, generous negative space; terminal-window motifs (three window dots, `$` prompts, cursors), monospace type, rounded dark cards. The 2026-09 set came out as soft-3D renders on the dark background despite "flat" in the prompt and looked right — matching `og-cover.png`'s depth is the goal, not flatness per se.
 - No photos of real people; no real-world logos or trademarks; devices are generic laptop/tablet/phone silhouettes.
 - Text policy: the only allowed text is the wordmark `pocketshell.io` bottom-right, monospace, rendered verbatim. Per-asset exceptions must be spelled out in the brief. Terminal screens show abstract dimmed glyph shapes, not readable code — models garble anything else.
+- Composition recipe (human-confirmed 2026-09-12 — every approved cover follows it): the scene is a close-up of product UI — terminal windows, session-list rows, status dots, solid placeholder bars, prompt lines, tag chips, generic device silhouettes, thin connector lines. At most 3 focal elements, straight-on, calm, generous negative space. Tell the story through state: green = alive/allowed/attached, dim gray = inactive/rejected.
+- Never use metaphor props: keys, keyrings, padlocks, shields, heartbeat/pulse lines, batteries, plugs, sparkles, broken/snapped cables, glowing server racks, confetti dots. Metaphor scenes are what made five covers read as glossy AI stock art.
 - Sizes: blog covers 1200×630 at `public/images/blog/<slug>.png` (og 1.91:1); landing art 1536×1024 in `public/images/`. One series: same palette and style, distinct compositions.
 
 ## Format: WebP in-page, PNG for og:image
@@ -49,7 +51,7 @@ The set-wide tell is **soft airbrushed shading**: the hand-made `og-cover.png` i
 
 Eyes rank offenders; two scripted checks make the pass repeatable:
 
-- **Metrics** — `/usr/bin/python3 scripts/ai-tells-metrics.py` (from the repo root; prints one table row per cover against the `og-cover.png` reference). Reject an image when: flat-pixel share < 35%, unique colors > 10k, top-8 palette share < 90%, or specular-glint clusters appear with no matching text block — glints without text mean a metallic stock-render look.
+- **Metrics** — `/usr/bin/python3 scripts/ai-tells-metrics.py` (from the repo root; prints one table row per cover against the `og-cover.png` reference). Reject an image when: flat-pixel share < 35%, unique colors > 10k, top-8 palette share < 90%, or specular-glint clusters appear with no matching text block — glints without text mean a metallic stock-render look. The 10k unique-color line was confirmed by human review on 2026-09-12: every approved cover sits at ≤8.6k, every rejected one at ≥14.5k.
 - **Airbrush index** — smooth-gradient share far above the reference's 0.3% is the whole-set tell; use it to rank offenders, not to auto-reject (the model renders soft shading by default).
 - **OCR** — `tesseract` at 2× scale, `--psm 11`. Only the approved `pocketshell.io` wordmark (plus `~/.ssh/config` on its cover) may appear, letter-perfect; misspelled or stray words = regenerate. Loose shape-blobs misread as glyphs are expected, not a tell.
 - **Motif check** still needs eyes: traffic lights red/amber/green, no glow halos.
@@ -60,16 +62,18 @@ Accept an image only when it passes metrics, OCR, and the visual checklist above
 
 Regenerate only the offenders — never the whole set:
 
-1. Write a one-asset fix brief to `.tmp/<slug>-brief.md`: the original asset paragraph from the generation brief plus hard bans — **no gradients, no 3D/metallic/glossy, no soft shadows, no blur/bokeh, no glow bloom; solid fills only; traffic lights red/amber/green; match `public/images/og-cover.png` flatness**.
+1. Write a one-asset fix brief to `.tmp/<slug>-brief.md`: **rebuild the composition with the recipe in the style spec** — only scrubbing effects while keeping a metaphor-prop composition risks the same verdict. Keep the hard bans — **no gradients, no 3D/metallic/glossy, no soft shadows, no blur/bokeh, no glow bloom; solid fills only; traffic lights red/amber/green; match `public/images/og-cover.png` flatness**.
 2. Launch codex with the same command as in Process, pointing at the fix brief. One targeted change per retry.
 3. Gate on the metrics + OCR + motif checks above before accepting; then `convert <path>.png -quality 85 <path>.webp` and `npm run build`.
 4. Longer term: true-flat output needs these flatness bans in every brief, or post-processing (posterize toward the og-cover palette).
 
-### 2026-09 verdicts (pixel-metrics + OCR against og-cover.png)
+### 2026-09-12 human verdicts — what reads as AI-generated
 
-- **Replace:** `ssh-authorized-keys-hardening` — extreme outlier on every axis: 36,697 colors (2–5× the set), most smooth shading, 152 specular-glint clusters with no text to justify them, lowest palette concentration — reads as glossy 3D stock art.
-- **Review next:** `ssh-ai-agents-remote-machines` — most airbrushed of the remainder (20,295 colors, 77% smooth).
-- **Keep:** the rest. `ssh-config-file` (6,776 colors, 97.4% top-8 share) and `landing-agents` are cleanest; the landing wordmark OCRs letter-perfect, and all seven covers pass the no-garble OCR check.
+Alexey reviewed every cover. **Approved:** `aplexer-agent-multiplexer`, `check-ai-agents-from-phone`, `ssh-config-file`, `ssh-from-ipad-iphone` — all UI-close-up compositions (session list, phone + terminal, hero text, couch scene). **Rejected:** `tmux-persistent-ssh-sessions`, `ssh-ai-agents-remote-machines`, `ssh-authorized-keys-hardening`, `ssh-agent-forwarding`, `keep-ssh-session-alive` — all metaphor-prop scenes (broken cable + alive pane, glowing server rack, keyring + shield, key on a dotted path, heartbeat line).
+
+The pixel metric that matches this split exactly is **unique colors**: approved covers sit at 6.1k–8.6k, rejected ones at 14.5k–36.7k. UI close-ups have large flat areas; metaphor scenes drag the model into soft 3D shading. flat%, smooth% and entropy do not separate the two groups. Winning brief template: `.tmp/agent-cluster-brief.md` (concrete UI-vocabulary paragraphs). Anti-template: the mood-paragraph style of `.tmp/codex-imagegen-brief.md` ("a key traveling along a dotted path…", "a heartbeat/pulse line…").
+
+**Fix round outcome (2026-09-12, same day):** the four rejected covers were rebuilt with the recipe (brief: `.tmp/codex-imagegen-fix2-brief.md`) and dropped to 5.8k–8.6k unique colors; `authorized_keys` OCRs letter-perfect. The earlier effect-cleanup pass that kept metaphor compositions (`.tmp/codex-imagegen-fix-brief.md`) also produced metric-passing images (7.7k–8.6k) — passing the gate is necessary but not sufficient, so rebuild the composition itself. The fresh `ssh-ai-agents-remote-machines` from that pass fit the recipe (straight-on matte server + panes) and was kept. Pre-rebuild versions: `.tmp/imagegen-backups-20260912/`.
 
 ## Wiring (how images reach the page)
 
