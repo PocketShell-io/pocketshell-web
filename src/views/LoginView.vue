@@ -8,6 +8,10 @@ import { useAuthStore } from '../stores/auth';
 const auth = useAuthStore();
 const router = useRouter();
 const buttonEl = ref<HTMLElement | null>(null);
+// The GIS script arrives late (async defer), so the button slot tracks it:
+// a placeholder holds the slot while loading, and a failure becomes a
+// styled notice with a retry instead of a bare error paragraph.
+const gsi = ref<'loading' | 'ready' | 'failed'>('loading');
 const error = ref('');
 const ready = isConfigured();
 
@@ -22,22 +26,54 @@ onMounted(async () => {
       auth.signIn(idToken);
       router.push({ name: 'hosts' });
     });
+    gsi.value = 'ready';
   } catch (e) {
+    gsi.value = 'failed';
     error.value = e instanceof Error ? e.message : String(e);
   }
 });
+
+function retry() {
+  window.location.reload();
+}
 </script>
 
 <template>
-  <main class="page">
-    <h1>PocketShell</h1>
-    <p class="muted">Your hosts, in a browser tab. Sign in with the same Google account the desktop app syncs with.</p>
-    <div v-if="!ready" class="error">
-      Login is not configured: <code>config.js</code> needs a Google <strong>Web application</strong>
-      OAuth client ID (see the README's first-run checklist).
-    </div>
-    <div v-else ref="buttonEl" />
-    <p v-if="error" class="error">{{ error }}</p>
-    <p class="muted"><RouterLink :to="{ name: 'landing' }">← What is PocketShell?</RouterLink></p>
+  <main class="page auth-page">
+    <section class="auth-card" aria-labelledby="auth-heading">
+      <div class="auth-mark" aria-hidden="true">&gt;_</div>
+      <h1 id="auth-heading">Sign in to PocketShell</h1>
+      <p class="auth-lede">
+        Your hosts, in a browser tab. Sign in with the same Google account the
+        desktop app syncs with.
+      </p>
+      <div v-if="!ready" class="auth-notice" role="note">
+        <p>
+          Login is not configured: <code>config.js</code> needs a Google
+          <strong>Web application</strong> OAuth client ID (see the README's
+          first-run checklist).
+        </p>
+      </div>
+      <template v-else>
+        <div v-if="gsi !== 'failed'" class="auth-slot">
+          <div ref="buttonEl" class="auth-slot-button" />
+          <div
+            v-if="gsi === 'loading'"
+            class="auth-slot-pending"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="auth-spinner" aria-hidden="true" /> Loading sign-in…
+          </div>
+        </div>
+        <div v-if="error" class="auth-notice" role="alert">
+          <p>{{ error }}</p>
+          <button type="button" @click="retry">Try again</button>
+        </div>
+      </template>
+    </section>
+    <nav class="auth-back">
+      <RouterLink :to="{ name: 'landing' }">← What is PocketShell?</RouterLink>
+    </nav>
   </main>
 </template>
