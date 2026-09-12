@@ -31,8 +31,8 @@ sessions, `a list` shows every workspace and the agent inside each session:
 a list
 ```
 
-If you haven't installed aplexer yet, that introduction covers the build and
-your first session.
+If you haven't installed aplexer yet, that introduction covers the install
+and your first session.
 
 The states are semantic, and they save you from attaching blind. `working`
 means the agent is making progress, and `waiting` usually means a permission

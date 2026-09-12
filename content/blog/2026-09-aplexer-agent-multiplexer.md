@@ -45,19 +45,15 @@ limit gets OOM killed alone while everything else keeps running.
 
 ## Install and start your first session
 
-aplexer is written in Rust, so you need the Rust toolchain. If you don't
-have it, [rustup](https://rustup.rs) installs it in one command.
+aplexer doesn't ask you to build anything. Grab the prebuilt `a` and
+`aplexer` binaries for Linux on x86_64 and arm64 from the
+[releases page](https://github.com/PocketShell-io/aplexer/releases), mark
+them executable, and put them in `~/.local/bin/`.
 
-Build aplexer from the
-[repository](https://github.com/PocketShell-io/aplexer) and install both
-binaries:
-
-```bash
-git clone https://github.com/PocketShell-io/aplexer
-cd aplexer
-cargo build --release --bins
-install -m 0755 target/release/a target/release/aplexer ~/.local/bin/
-```
+If you'd rather use a package manager, `pip install aplexer` installs the
+CLI binaries and needs Python 3.11 or newer. With
+[uv](https://docs.astral.sh/uv/) installed, `uvx aplexer` runs the CLI with
+no permanent install at all.
 
 The short `a` is what you type, and `aplexer` is the per-session worker it
 manages.
