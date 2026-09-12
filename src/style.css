@@ -107,8 +107,14 @@ textarea {
   flex: 1;
 }
 
-/* Long account emails must not push the Sign out button off-screen. */
-.topbar .muted {
+/* Long account emails must not push the Sign out button off-screen. Only the
+   email may shrink; the brand and the web badge keep their natural width. */
+.topbar > * {
+  flex-shrink: 0;
+}
+
+.topbar .email {
+  flex-shrink: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -123,10 +129,27 @@ main.page {
 
 .host-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 12px 4px;
   border-bottom: 1px solid #21262d;
+}
+
+/* The user@host:port line is unbreakable; let the text block shrink so the
+   action buttons stay on-screen on phones instead of widening the page. */
+.host-row > div:first-child {
+  min-width: 0;
+}
+
+/* One actions group per row: margin-left:auto right-aligns it beside the text
+   and, when it wraps on a phone, keeps it a single right-aligned block. */
+.host-row .actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .host-row .name {
@@ -136,10 +159,6 @@ main.page {
 .host-row .meta {
   color: #8b949e;
   font-size: 0.9em;
-}
-
-.host-row .spacer {
-  flex: 1;
 }
 
 /* List head above the host rows: empty-state message left, Add host right.
@@ -165,10 +184,12 @@ main.page {
 
 .hostform input {
   min-width: 0;
+  /* Long placeholders clip at the input edge; ellipsis beats a mid-token cut. */
+  text-overflow: ellipsis;
 }
 
 .hostform .f-name {
-  flex: 1 1 150px;
+  flex: 1 1 170px;
 }
 
 .hostform .f-host {
@@ -176,11 +197,19 @@ main.page {
 }
 
 .hostform .f-user {
-  flex: 1 1 120px;
+  flex: 1 1 130px;
 }
 
 .hostform .f-port {
   flex: 0 1 80px;
+}
+
+/* Edit mode locks the name (it keys the synced entry); show it as locked,
+   not as an ordinary field that happens to ignore typing. */
+.hostform input:disabled {
+  color: #8b949e;
+  background: #161b22;
+  cursor: not-allowed;
 }
 
 details.keybox {

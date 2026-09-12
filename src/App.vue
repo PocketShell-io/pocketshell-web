@@ -21,7 +21,7 @@ function signOut() {
     <RouterLink class="brand" :to="{ name: 'hosts' }">PocketShell</RouterLink>
     <span class="muted">web</span>
     <span class="spacer" />
-    <span v-if="auth.signedIn" class="muted">{{ auth.email }}</span>
+    <span v-if="auth.signedIn" class="muted email">{{ auth.email }}</span>
     <button v-if="auth.signedIn" @click="signOut">Sign out</button>
   </div>
   <RouterView />

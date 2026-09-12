@@ -151,11 +151,12 @@ function open(host: HostEntry) {
           <div class="name">{{ host.name }}</div>
           <div class="meta">{{ describe(host) }}<span v-if="host.identityFile" class="muted"> · key {{ host.identityFile }}</span></div>
         </div>
-        <span class="spacer" />
-        <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>
-        <button @click="editHost(host)">Edit</button>
-        <button @click="attachKey(host)">Key…</button>
-        <button class="primary" @click="open(host)">Connect</button>
+        <div class="actions">
+          <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>
+          <button @click="editHost(host)">Edit</button>
+          <button @click="attachKey(host)">Key…</button>
+          <button class="primary" @click="open(host)">Connect</button>
+        </div>
       </div>
       <p v-if="hostSaved" class="muted">Saved {{ hostSaved }} to your account — desktops pick it up on their next sync.</p>
       <p v-if="keySaved" class="muted">Key for {{ keySaved }} stored in this browser.</p>
