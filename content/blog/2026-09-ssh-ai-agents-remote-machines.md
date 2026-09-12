@@ -124,7 +124,7 @@ Instead of remembering which pane held which job, you address sessions by name:
 
 ```bash
 a start --workspace "$PWD" --tag review -- claude   # on the server
-# Ctrl+b, d — detach; walk away
+# runs on the server now — safe to close the laptop
 ```
 
 `a list` shows every session with its engine and whether the agent inside is
@@ -136,7 +136,7 @@ phone:
 
 ```bash
 ssh build
-cd ~/workspace && a attach --workspace "$PWD" --tag review
+cd ~/workspace && a attach --workspace "$PWD" --tag review   # Ctrl-b d detaches when you need to go
 ```
 
 Everything the agent did while you were gone is still there. Long refactors,
