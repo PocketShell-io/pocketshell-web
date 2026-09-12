@@ -608,6 +608,9 @@ details.keybox textarea {
   font-size: 13.5px;
   line-height: 1.7;
   color: #cccccc;
+  /* Transcript lines are authored to fit the desktop panel; pre-wrap lets
+     them reflow at phone width instead of overflowing the panel edge. */
+  white-space: pre-wrap;
 }
 
 /* The agent's turn bullet — Claude Code's terracotta. */
@@ -771,6 +774,8 @@ details.keybox textarea {
   font-family: ui-monospace, monospace;
   font-size: 15px;
   line-height: 1.75;
+  /* Same reflow guarantee as .desk-term pre: wrap, never overflow. */
+  white-space: pre-wrap;
   /* Mocks are decorative: content must scroll on narrow screens, never clip. */
   overflow-x: auto;
 }
