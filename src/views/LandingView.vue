@@ -4,8 +4,12 @@ import { blogPosts } from '../generated/blog-posts';
 import githubGraph from '../assets/github-contributions-dark.png';
 
 const auth = useAuthStore();
-// Tease the four newest posts; the full list lives at /blog.
-const latestPosts = blogPosts.slice(0, 4);
+// Tease the four newest posts; the full list lives at /blog. tmux-centric
+// posts stay off the marketing page — PocketShell's session layer is aplexer,
+// not tmux — so the blog is their only home.
+const latestPosts = blogPosts
+  .filter((p) => !/tmux/i.test(`${p.title} ${p.description}`))
+  .slice(0, 4);
 
 // The only conversion path is the Google sign-in on /login; a signed-in
 // visitor skips straight past it to the app.
