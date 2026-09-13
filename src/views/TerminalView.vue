@@ -51,7 +51,14 @@ onMounted(async () => {
     return;
   }
   const bridgeAuth = (secret?.privateKeyPem ?? '') !== ''
-    ? { kind: 'key' as const, privateKey: secret!.privateKeyPem! }
+    ? {
+        kind: 'key' as const,
+        privateKey: secret!.privateKeyPem!,
+        // An encrypted OpenSSH key needs its passphrase before sshd will
+        // have us; the bridge takes it in the same connect frame and uses
+        // it in memory only.
+        ...(secret!.keyPassphrase ? { passphrase: secret!.keyPassphrase } : {}),
+      }
     : { kind: 'password' as const, password: secret!.password! };
 
   // The bridge deliberately returns one generic message for every SSH
@@ -125,8 +132,8 @@ function back() {
       <span class="muted">{{ status }}</span>
       <span class="spacer" />
     </div>
-    <p v-if="error" class="error" style="padding: 0 20px">{{ error }}</p>
     <div class="terminal-wrap">
+      <p v-if="error" class="error">{{ error }}</p>
       <div ref="termEl" class="term" />
     </div>
   </div>

@@ -146,3 +146,68 @@ describe('hosts store saveHost (the web pushing to the account slot)', () => {
     expect(fake.pushes).toHaveLength(1);
   });
 });
+
+describe('hosts store importHosts (the config import writing the ticked set)', () => {
+  it('lands the whole imported set in ONE push, merged after the existing list', async () => {
+    const store = useHostsStore();
+    fake.pulls.push(await pullBlob(2, [host('a')]));
+    await store.unlock(PASSPHRASE);
+
+    await store.importHosts([host('b'), host('c')]);
+
+    expect(fake.pushes).toHaveLength(1);
+    expect((await payloadOf(fake.pushes[0]!)).map((h) => h.name)).toEqual(['a', 'b', 'c']);
+    expect(store.hosts.map((h) => h.name)).toEqual(['a', 'b', 'c']);
+    expect(store.version).toBe(1);
+  });
+
+  it('upserts over existing names and is a no-op for an empty selection', async () => {
+    const store = useHostsStore();
+    fake.pulls.push(await pullBlob(1, [host('a', 'old.example.com')]));
+    await store.unlock(PASSPHRASE);
+
+    await store.importHosts([host('a', 'fresh.example.com')]);
+    expect((await payloadOf(fake.pushes[0]!)).map((h) => h.hostname)).toEqual(['fresh.example.com']);
+
+    await store.importHosts([]);
+    expect(fake.pushes).toHaveLength(1);
+  });
+
+  it('on a 409 re-applies the whole imported set to the fresh blob', async () => {
+    const store = useHostsStore();
+    fake.pulls.push(await pullBlob(5, [host('b')]));
+    await store.unlock(PASSPHRASE);
+    // The desktop pushed a fresh blob (only 'a') while the import ran.
+    fake.pulls.push(await pullBlob(6, [host('a')]));
+    fake.pushResults.push('conflict', 'ok');
+
+    await store.importHosts([host('c'), host('d')]);
+
+    const names = (await payloadOf(fake.pushes[1]!)).map((h) => h.name);
+    expect(names).toEqual(['a', 'c', 'd']);
+  });
+});
+
+describe('hosts store secrets (key + key passphrase, encrypted before anything leaves)', () => {
+  it('stores the key passphrase with the key and returns it; the local envelope never holds plaintext', async () => {
+    const store = useHostsStore();
+    store.passphrase = PASSPHRASE;
+
+    await store.setHostSecret('a', { privateKeyPem: '-----BEGIN TEST KEY-----', keyPassphrase: 'open-sesame' });
+
+    expect(await store.getHostSecret('a')).toEqual({ privateKeyPem: '-----BEGIN TEST KEY-----', keyPassphrase: 'open-sesame' });
+    expect(store.secretHosts).toEqual(['a']);
+    const raw = localStorage.getItem('ps.hostKeys')!;
+    expect(raw).not.toContain('BEGIN TEST KEY');
+    expect(raw).not.toContain('open-sesame');
+    // Same envelope shape the account uses: opaque without the passphrase.
+    expect(JSON.parse(raw)).toMatchObject({ v: 1, kdf: 'pbkdf2-sha256' });
+  });
+
+  it('a passphrase alone is not a usable credential for the secret-hosts marker', async () => {
+    const store = useHostsStore();
+    store.passphrase = PASSPHRASE;
+    await store.setHostSecret('a', { keyPassphrase: 'orphan' });
+    expect(store.secretHosts).toEqual([]);
+  });
+});

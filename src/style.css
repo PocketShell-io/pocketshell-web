@@ -271,15 +271,129 @@ details.keybox textarea {
   font-size: 0.85em;
 }
 
+/* ---- Import from SSH config (choose → select → credentials) ---- */
+
+.import-hint {
+  margin: 8px 0;
+}
+
+.import-choose {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.import-choose .f-config {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+/* The paste box sits below the file row; keybox already sizes textareas. */
+.import-choose + textarea {
+  margin-top: 8px;
+}
+
+.import-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #21262d;
+}
+
+.import-row input[type='checkbox'] {
+  accent-color: #1f6feb;
+  flex-shrink: 0;
+}
+
+.import-row .import-name {
+  font-weight: 600;
+}
+
+/* user@host:port and the identity path are unbreakable; ellipsize so a long
+   path can never push the row's controls off-screen on phones. */
+.import-row .meta {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8b949e;
+  font-size: 0.9em;
+}
+
+.import-row .tag {
+  flex-shrink: 0;
+  font-size: 0.8em;
+  color: #8b949e;
+  border: 1px solid #30363d;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.import-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ---- Key dialog: file upload row + key-passphrase field ---- */
+
+.keyfile-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.keyfile-row .f-keyfile {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.keypass-row {
+  display: flex;
+  margin-top: 8px;
+}
+
+.keypass-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.keypass-hint {
+  margin: 6px 0 8px;
+}
+
+/* Two stacked 54px topbars on /term (the app shell's + the view's own). The
+   fixed wrap must start below BOTH: when it started at the app bar only, it
+   painted the canvas over the view's topbar and "← Hosts" could not be
+   clicked at all. The error paragraph lives inside the wrap for the same
+   reason — above the canvas, where the user can actually read it. */
 .terminal-wrap {
   position: fixed;
-  inset: 53px 0 0 0;
+  inset: 108px 0 0 0;
   padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.terminal-wrap .error {
+  margin: 0;
 }
 
 .terminal-wrap .term {
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---- Landing (/) ---- */

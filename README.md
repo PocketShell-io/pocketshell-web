@@ -55,6 +55,15 @@ reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
 - The sync blob is zero-knowledge: the browser decrypts it with the sync
   passphrase (PBKDF2 600k + AES-256-GCM, identical to the desktop app), and
   the server never sees plaintext.
+- Importing an SSH config is a browser-local act: the file (or pasted text)
+  is parsed in the tab and the file itself never leaves it. Only the hosts
+  you tick join the account blob — encrypted like everything else in the
+  slot. The parser (`src/sshConfigImport.ts`) is the desktop parser's web
+  twin minus what a tab cannot do: no `Include`, `~` kept verbatim, host
+  patterns (`*`, `?`, `!`) skipped because the bridge dials hosts directly.
+- A key's own passphrase (for encrypted OpenSSH keys) is collected in the
+  same dialog and stored under the same envelope as the key it unlocks; on
+  connect both ride the bridge's `connect` frame (`auth.passphrase`).
 - SSH key material never syncs (`identityFile` in the blob is a path on
   whatever machine pushed it). The browser asks for a key or password per
   host and stores it in `localStorage`, encrypted with the sync passphrase
@@ -84,9 +93,18 @@ reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm run test       # vitest (crypto interop + merge rules)
+npm run test       # vitest (crypto interop + merge rules + parser/store)
 npm run build      # typecheck + vite build → dist/
+tests/e2e/run-e2e.sh   # browser E2E vs the electron repo's docker sshd fixture
 ```
+
+The E2E suite (`tests/e2e/`) drives the built app in Chromium against the
+`pocketshell-test:ssh` fixture from the electron repo: the fake sync API
+only ever accepts opaque envelopes (and the test decrypts them with the
+passphrase), and the fake bridge opens REAL SSH sessions on the container
+with whatever key + passphrase the browser sent — including the
+passphrase-protected key. Needs docker, `/usr/bin/python3` with playwright
+and paramiko.
 
 `public/config.js` is runtime configuration (sync API URL, Google web client
 ID, bridge WSS URL) — not bundled, so values rotate without a rebuild.

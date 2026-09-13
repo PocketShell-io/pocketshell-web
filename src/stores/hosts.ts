@@ -10,6 +10,18 @@ import { useAuthStore } from './auth';
 const KEYS_STORAGE = 'ps.hostKeys';
 
 /**
+ * What this browser stores for one host, encrypted at rest under the sync
+ * passphrase. `passphrase` is the PRIVATE KEY's passphrase (an encrypted
+ * OpenSSH key needs it before the bridge can use the key) — not to be
+ * confused with the sync passphrase, which never leaves this module.
+ */
+export interface HostSecret {
+  privateKeyPem?: string;
+  password?: string;
+  keyPassphrase?: string;
+}
+
+/**
  * Synced hosts and the browser-local credentials that make them usable.
  *
  * The sync blob never carries key material (identityFile is a path on
@@ -74,11 +86,28 @@ export const useHostsStore = defineStore('hosts', {
      * one-entry resurrection of a wiped account.
      */
     async saveHost(entry: HostEntry): Promise<void> {
+      await this.pushUpserted([entry]);
+    },
+
+    /**
+     * The config import's write: every ticked entry lands in ONE envelope
+     * and one push, not one push per host. On a 409 the re-based fresh blob
+     * gets the whole imported set re-applied — the user just decided for all
+     * of them in one act, so the batch, unlike a single stale save, is the
+     * unit the conflict resolution must keep.
+     */
+    async importHosts(entries: HostEntry[]): Promise<void> {
+      if (entries.length === 0) return;
+      await this.pushUpserted(entries);
+    },
+
+    async pushUpserted(entries: HostEntry[]): Promise<void> {
       const sync = makeSyncService(useAuthStore());
       let base = this.hosts;
       let baseVersion = this.version;
       for (let attempt = 0; ; attempt++) {
-        const next = upsertHost(base, entry);
+        let next = base;
+        for (const entry of entries) next = upsertHost(next, entry);
         const envelope = await encryptToEnvelope(serializeSyncPayload(next), this.passphrase);
         try {
           const { version } = await sync.push(SYNC_SLOT, envelope, baseVersion);
@@ -104,9 +133,9 @@ export const useHostsStore = defineStore('hosts', {
       });
     },
 
-    /** Attach (or replace) the key/password the browser will use for a host.
+    /** Attach (or replace) the key/passphrase the browser will use for a host.
      * Passing an empty secret clears the stored one. */
-    async setHostSecret(name: string, secret: { privateKeyPem?: string; password?: string }) {
+    async setHostSecret(name: string, secret: HostSecret) {
       const keys = await this.readKeysDecrypted();
       keys[name] = secret;
       localStorage.setItem(KEYS_STORAGE, await encryptToEnvelope(JSON.stringify(keys), this.passphrase));
@@ -121,11 +150,11 @@ export const useHostsStore = defineStore('hosts', {
       localStorage.setItem(KEYS_STORAGE, await encryptToEnvelope(JSON.stringify(keys), this.passphrase));
       await this.refreshSecretNames();
     },
-    async getHostSecret(name: string): Promise<{ privateKeyPem?: string; password?: string } | undefined> {
+    async getHostSecret(name: string): Promise<HostSecret | undefined> {
       const keys = await this.readKeysDecrypted();
       return keys[name];
     },
-    async readKeysDecrypted(): Promise<Record<string, { privateKeyPem?: string; password?: string }>> {
+    async readKeysDecrypted(): Promise<Record<string, HostSecret>> {
       const raw = localStorage.getItem(KEYS_STORAGE);
       if (raw === null || this.passphrase === '') return {};
       try {

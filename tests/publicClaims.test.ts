@@ -28,6 +28,14 @@ describe('public claims match the credential-transfer model', () => {
     expect(read('src/views/HostsView.vue')).toContain('sent to the bridge only when you connect');
   });
 
+  it('the config import pins its precise locality claim (the FILE stays; ticked hosts sync encrypted)', () => {
+    const view = read('src/views/HostsView.vue');
+    expect(view).toContain('the file itself never leaves it');
+    expect(view).toContain('the config file stays in this browser');
+    // The passphrase rides the same protection as the key it unlocks.
+    expect(view).toContain('stored encrypted alongside it and used only when you connect');
+  });
+
   it('the README security model keeps the verified bridge and logging facts', () => {
     const readme = read('README.md').replace(/\s+/g, ' ');
     expect(readme).toContain('rides the already authenticated WebSocket to the bridge');
