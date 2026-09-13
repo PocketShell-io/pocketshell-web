@@ -7,16 +7,15 @@ export const router = createRouter({
     return { top: 0 };
   },
   routes: [
-    { path: '/', name: 'landing', component: () => import('./views/LandingView.vue') },
+    { path: '/', name: 'login', component: () => import('./views/LoginView.vue') },
     { path: '/app', name: 'hosts', component: () => import('./views/HostsView.vue') },
-    { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
+    { path: '/login', redirect: '/' },
     { path: '/term/:name', name: 'term', component: () => import('./views/TerminalView.vue') },
-    { path: '/:pathMatch(.*)*', redirect: { name: 'landing' } },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 });
 
 const titles: Record<string, string> = {
-  landing: 'PocketShell - SSH client in your browser tab',
   login: 'Sign in — PocketShell',
   hosts: 'Hosts — PocketShell',
   term: 'PocketShell',
@@ -24,9 +23,9 @@ const titles: Record<string, string> = {
 
 router.afterEach((to) => {
   document.title = titles[String(to.name)] ?? 'PocketShell';
-  // Only the landing page should rank; auth and terminal routes are
-  // functional views sharing this document, so keep them out of the index.
+  // The app is functional-only: the indexable marketing surface is the
+  // static site on pocketshell.io, so every app route stays out of the index.
   document
     .querySelector('meta[name="robots"]')
-    ?.setAttribute('content', to.name === 'landing' ? 'index, follow' : 'noindex, nofollow');
+    ?.setAttribute('content', 'noindex, nofollow');
 });

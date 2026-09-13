@@ -1,14 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 
 const auth = useAuthStore();
 const router = useRouter();
-const route = useRoute();
-
-// The landing carries its own header; the app topbar is for the app pages.
-const bare = computed(() => route.name === 'landing');
 
 function signOut() {
   auth.signOut();
@@ -17,7 +12,7 @@ function signOut() {
 </script>
 
 <template>
-  <div v-if="!bare" class="topbar">
+  <div class="topbar">
     <RouterLink class="brand" :to="{ name: 'hosts' }">PocketShell</RouterLink>
     <span class="muted">web</span>
     <span class="spacer" />

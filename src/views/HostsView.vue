@@ -25,8 +25,8 @@ const formError = ref('');
 const hostSaved = ref('');
 
 onMounted(() => {
-  // Unsigned visitors poking /app get the landing page, not a sign-in error.
-  if (!auth.signedIn) router.replace({ name: 'landing' });
+  // Unsigned visitors poking /app get the sign-in screen, not a host error.
+  if (!auth.signedIn) router.replace({ name: 'login' });
 });
 
 async function unlock() {

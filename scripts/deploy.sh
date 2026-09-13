@@ -39,29 +39,8 @@ merged.update({k: v for k, v in cfg.items() if v})
 path.write_text(f"window.POCKETSHELL_WEB = {json.dumps(merged, indent=2)};\n")
 EOF
 
-# Blog posts are built as directory indexes (…/blog/<slug>/index.html) so
-# local static servers render them instead of downloading. Skip uploading
-# those keys themselves; what S3 REST needs are the bytes under the flat
-# blog/<slug> key and the trailing-slash blog/<slug>/ key (it never maps
-# directory URIs to index documents on its own).
-aws s3 sync dist/ "s3://$SITE_BUCKET" --delete --exclude "blog/*/index.html" --region "$REGION"
-
-for d in dist/blog/*/; do
-  [ -f "${d}index.html" ] || continue
-  slug="$(basename "$d")"
-  aws s3 cp "${d}index.html" "s3://$SITE_BUCKET/blog/$slug" --content-type "text/html; charset=utf-8" --region "$REGION"
-  # /blog/<slug>/ (trailing slash) is a distinct S3 request; without this key
-  # it 404s into the SPA fallback and serves the landing page.
-  aws s3api put-object --bucket "$SITE_BUCKET" --key "blog/$slug/" --body "${d}index.html" \
-    --content-type "text/html; charset=utf-8" --region "$REGION" >/dev/null
-done
-if [ -f dist/blog/index.html ]; then
-  aws s3 cp dist/blog/index.html "s3://$SITE_BUCKET/blog" --content-type "text/html; charset=utf-8" --region "$REGION"
-  # /blog/ (trailing slash) is a distinct S3 request; without this key it
-  # 404s into the SPA fallback and serves the landing page.
-  aws s3api put-object --bucket "$SITE_BUCKET" --key "blog/" --body dist/blog/index.html \
-    --content-type "text/html; charset=utf-8" --region "$REGION" >/dev/null
-fi
+# The bucket serves only the app now; --delete clears stale keys.
+aws s3 sync dist/ "s3://$SITE_BUCKET" --delete --region "$REGION"
 
 aws cloudfront create-invalidation --distribution-id "$CF_DISTRIBUTION_ID" --paths "/*" >/dev/null
 echo "Deployed to s3://$SITE_BUCKET (distribution $CF_DISTRIBUTION_ID)"

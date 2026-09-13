@@ -8,9 +8,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/build-blog.mjs --list && vue-tsc -p tsconfig.json --noEmit && vite build && node scripts/build-blog.mjs",
+    "build": "vue-tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
-    "sync:github-history": "python3 scripts/sync-gh-history.py",
     "typecheck": "vue-tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -24,7 +23,6 @@
   "devDependencies": {
     "@types/node": "22.10.5",
     "@vitejs/plugin-vue": "5.2.1",
-    "marked": "18.0.12",
     "typescript": "5.7.2",
     "vite": "6.0.7",
     "vitest": "^2.1.9",

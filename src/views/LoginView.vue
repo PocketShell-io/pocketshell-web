@@ -73,7 +73,7 @@ function retry() {
       </template>
     </section>
     <nav class="auth-back">
-      <RouterLink :to="{ name: 'landing' }">← What is PocketShell?</RouterLink>
+      <a href="https://pocketshell.io/">← What is PocketShell?</a>
     </nav>
   </main>
 </template>
