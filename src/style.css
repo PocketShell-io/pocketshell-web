@@ -161,6 +161,20 @@ main.page {
   font-size: 0.9em;
 }
 
+/* Empty hosts view (nothing synced, form closed): center the message and the
+   Add host button in the space below the heading, like the auth card, so the
+   page reads as intentionally empty. 100dvh minus the 40px topbar and the
+   page's own 24px top/bottom padding. */
+.page > .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 88px);
+  min-height: calc(100dvh - 88px);
+  text-align: center;
+}
+
 /* List head above the host rows: empty-state message left, Add host right.
    Wraps so the message and the button stack instead of cramming on phones. */
 .list-head {

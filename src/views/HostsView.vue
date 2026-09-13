@@ -122,7 +122,7 @@ function open(host: HostEntry) {
       <p v-if="hosts.error" class="error">{{ hosts.error }}</p>
     </div>
 
-    <div v-else>
+    <div v-else :class="{ empty: hosts.hosts.length === 0 && !formOpen }">
       <div class="list-head">
         <span v-if="hosts.hosts.length === 0" class="muted">
           No hosts synced yet — add one here, or tick hosts in the desktop app and let it push.
