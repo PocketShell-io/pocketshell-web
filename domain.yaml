@@ -1,19 +1,19 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  pocketshell.io custom domain for the pocketshell-web site: a CloudFront
-  distribution carrying the apex/www aliases and the us-east-1 viewer
-  certificate, plus Route53 alias records in the delegated zone. Deployed by
-  deploy.sh after the certificate has issued — kept out of the main stack
-  because CloudFormation early validation existence-checks certificate ARNs
-  even behind false conditions, and because the wait for issuance must not
-  block the plain site deploy.
+  pocketshell.io DNS for the site/app split: a CloudFront distribution
+  carrying the app.pocketshell.io alias and its us-east-1 viewer
+  certificate, plus the Route53 alias records pointing app. at it. The
+  apex and www records (GitHub Pages, repo alexeygrigorev/pocketshell-site)
+  are applied by hand; see route53-site-records.json. Deployed by deploy.sh after the certificate has issued —
+  kept out of the main stack because CloudFormation early validation
+  existence-checks certificate ARNs even behind false conditions.
 
 Parameters:
   ZoneId:
     Type: String
   CertificateArn:
     Type: String
-    Description: Issued us-east-1 ACM certificate for pocketshell.io (+ www).
+    Description: Issued us-east-1 ACM certificate for app.pocketshell.io.
   OriginDistributionDomain:
     Type: String
     Description: Domain name of the main stack's site distribution (origin).
@@ -22,40 +22,16 @@ Parameters:
     Description: ID of the main stack's site distribution (comment/trace only).
 
 Resources:
-  WwwRedirectFunction:
-    Type: AWS::CloudFront::Function
-    Properties:
-      Name: pocketshell-web-www-redirect-domain
-      AutoPublish: true
-      FunctionConfig:
-        Comment: 308 www.pocketshell.io to the apex (custom domain distribution)
-        Runtime: cloudfront-js-2.0
-      FunctionCode: |
-        function handler(event) {
-          var request = event.request;
-          var host = request.headers.host ? request.headers.host.value : '';
-          if (host === 'www.pocketshell.io') {
-            return {
-              statusCode: 308,
-              statusDescription: 'Moved Permanently',
-              headers: {
-                location: {value: 'https://pocketshell.io' + request.uri},
-              },
-            };
-          }
-          return request;
-        }
-
   DomainDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
-        Comment: pocketshell.io web client (aliases + custom cert; origin is the main site distribution)
+        Comment: app.pocketshell.io web client (origin is the main site distribution)
         Enabled: true
         DefaultRootObject: index.html
         HttpVersion: http2
         IPV6Enabled: true
-        Aliases: [pocketshell.io, www.pocketshell.io]
+        Aliases: [app.pocketshell.io]
         ViewerCertificate:
           AcmCertificateArn: !Ref CertificateArn
           SslSupportMethod: sni-only
@@ -82,15 +58,12 @@ Resources:
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # Managed-CachingOptimized
           # Forward every viewer header except Host: CloudFront custom origins
-          # otherwise pass the viewer's Host (pocketshell.io) to the inner
+          # otherwise pass the viewer's Host (app.pocketshell.io) to the inner
           # distribution, which rejects the unknown alias and 301s to its own
           # *.cloudfront.net domain. With this policy the origin sees its own
           # hostname and serves the alias request normally.
           OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # Managed-AllViewerExceptHostHeader
           Compress: true
-          FunctionAssociations:
-            - EventType: viewer-request
-              FunctionARN: !Ref WwwRedirectFunction
         CustomErrorResponses:
           - ErrorCode: 403
             ResponseCode: 200
@@ -102,31 +75,38 @@ Resources:
             ErrorCachingMinTTL: 60
         Restrictions:
           GeoRestriction: {RestrictionType: none}
+        # Note: AWS::CloudFront::Distribution does not accept Tags — early
+        # validation rejects the stack outright if present.
 
+  # Apex and www go to GitHub Pages' anycast IPs (repo CNAME file +
+  # Pages settings carry pocketshell.io; Pages itself 301s www to the
+  # apex). Plain records with a short TTL so a rollback to the old
+  # CloudFront hosting is one change batch. The app subdomain is an
+  # alias to the distribution above.
+  # The CFN Route53 record-set handler rejects a group that MIXES alias
+  # records with plain ResourceRecords records ("Value of property
+  # ResourceRecords must be of type List of String", hit repeatedly on
+  # 2026-09-13) — so the stack carries only the app aliases, and the
+  # apex/www records for GitHub Pages are applied by hand via the
+  # Route53 API; see route53-site-records.json next to this template.
+  # The CFN Route53 record-set handler rejects a group that MIXES alias
+  # records with plain ResourceRecords records ("Value of property
+  # ResourceRecords must be of type List of String", hit repeatedly on
+  # 2026-09-13) — so the stack carries only the app aliases, and the
+  # apex/www records for GitHub Pages are applied by hand via the
+  # Route53 API; see route53-site-records.json next to this template.
   AliasRecords:
     Type: AWS::Route53::RecordSetGroup
     Properties:
       HostedZoneId: !Ref ZoneId
       RecordSets:
-        - Name: pocketshell.io.
+        - Name: app.pocketshell.io.
           Type: A
           AliasTarget:
             HostedZoneId: Z2FDTNDATAQYW2  # CloudFront edge, fixed value
             DNSName: !GetAtt DomainDistribution.DomainName
             EvaluateTargetHealth: false
-        - Name: pocketshell.io.
-          Type: AAAA
-          AliasTarget:
-            HostedZoneId: Z2FDTNDATAQYW2
-            DNSName: !GetAtt DomainDistribution.DomainName
-            EvaluateTargetHealth: false
-        - Name: www.pocketshell.io.
-          Type: A
-          AliasTarget:
-            HostedZoneId: Z2FDTNDATAQYW2
-            DNSName: !GetAtt DomainDistribution.DomainName
-            EvaluateTargetHealth: false
-        - Name: www.pocketshell.io.
+        - Name: app.pocketshell.io.
           Type: AAAA
           AliasTarget:
             HostedZoneId: Z2FDTNDATAQYW2

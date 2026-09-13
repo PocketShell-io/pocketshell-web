@@ -134,21 +134,22 @@ ZONE_ID="$(output_of "$STACK_NAME" ZoneId)"
 # mirror the validation CNAMEs into the zone ourselves, wait for ISSUED.
 find_cert_arn() {
   aws acm list-certificates --region "$CERT_REGION" \
-    --query "CertificateSummaryList[?DomainName=='pocketshell.io'].CertificateArn" \
+    --query "CertificateSummaryList[?DomainName=='app.pocketshell.io'].CertificateArn" \
     --output text | head -n1
 }
 
-CERT_ARN="$(find_cert_arn)"
+# CERT_ARN can be pinned from the environment (e.g. a re-issue); the default
+# lookup finds the app-subdomain certificate this script manages.
+CERT_ARN="${CERT_ARN:-$(find_cert_arn)}"
 if [ -z "$CERT_ARN" ]; then
-  echo "Requesting ACM certificate for pocketshell.io"
+  echo "Requesting ACM certificate for app.pocketshell.io"
   # request-certificate returns CertificateArn at the TOP level (unlike
   # describe-certificate's Certificate.* nesting) — a nested query silently
   # yields the literal "None" and poisons everything downstream.
   CERT_ARN="$(aws acm request-certificate --region "$CERT_REGION" \
-    --domain-name pocketshell.io \
-    --subject-alternative-names www.pocketshell.io \
+    --domain-name app.pocketshell.io \
     --validation-method DNS \
-    --idempotency-token pocketshellweb \
+    --idempotency-token pocketshellapp \
     --query CertificateArn --output text)"
 fi
 case "$CERT_ARN" in
