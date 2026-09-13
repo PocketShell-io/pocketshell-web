@@ -53,6 +53,13 @@ export async function renderLoginButton(
     client_id: config.googleClientId,
     callback: (r) => onIdToken(r.credential),
   });
-  gsi.renderButton(el, { theme: 'filled_black', size: 'large', text: 'signin_with' });
+  // GIS draws the personalized button ("Continue as <name> <email>") at its
+  // natural content width — up to 400px — when renderButton gets no width,
+  // which overflows the auth card's slot. Pass the slot container's measured
+  // width, clamped to the GIS-documented 200–400 bounds (400 when layout is
+  // not measurable yet).
+  const measured = (el.parentElement ?? el).clientWidth || el.clientWidth || 400;
+  const width = Math.min(400, Math.max(200, measured));
+  gsi.renderButton(el, { theme: 'filled_black', size: 'large', text: 'signin_with', width });
   return true;
 }
