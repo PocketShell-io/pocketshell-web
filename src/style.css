@@ -125,6 +125,12 @@ main.page {
   max-width: 760px;
   margin: 0 auto;
   padding: 24px 20px;
+  /* End at the viewport bottom (100dvh minus the in-flow 54px topbar) so the
+     empty hosts view centers in the real space below the heading. */
+  min-height: calc(100vh - 54px);
+  min-height: calc(100dvh - 54px);
+  display: flex;
+  flex-direction: column;
 }
 
 .host-row {
@@ -163,16 +169,28 @@ main.page {
 
 /* Empty hosts view (nothing synced, form closed): center the message and the
    Add host button in the space below the heading, like the auth card, so the
-   page reads as intentionally empty. 100dvh minus the 40px topbar and the
-   page's own 24px top/bottom padding. */
+   page reads as intentionally empty. flex:1 fills the page column under the
+   heading, so the centering stays true wherever the heading ends. */
 .page > .empty {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - 88px);
-  min-height: calc(100dvh - 88px);
   text-align: center;
+}
+
+/* Inside the centered empty state the long message always wraps the Add host
+   button onto its own flex line, and whether the zero-width spacer rides the
+   first line decides which side the button lands on (left on desktop, right
+   on phones). Drop the spacer here and center both lines so the stacked
+   empty state stays symmetric at every width. */
+.page > .empty .list-head {
+  justify-content: center;
+}
+
+.page > .empty .list-head .spacer {
+  display: none;
 }
 
 /* List head above the host rows: empty-state message left, Add host right.
