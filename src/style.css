@@ -144,6 +144,21 @@ label.filepick input[type='file']:focus {
   color: #e6edf3;
 }
 
+/* Below 350px the caption cannot share the row with the button without being
+   cut mid-word ("No file ch…"); stack them so the placeholder stays whole.
+   Chosen filenames keep end-ellipsis against the full row width. */
+@media (max-width: 349px) {
+  .filepick {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .filepick-name {
+    max-width: 100%;
+  }
+}
+
 .error {
   color: #f85149;
 }
