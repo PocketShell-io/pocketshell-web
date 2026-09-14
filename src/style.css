@@ -103,7 +103,11 @@ textarea {
   outline-offset: 2px;
 }
 
-.filepick input[type='file'] {
+/* label.filepick (not bare .filepick) on purpose: the extra type selector
+   out-specifies .cardbox-body input:not([type="checkbox"])'s width:100% —
+   at equal specificity that later rule would re-stretch the hidden input
+   viewport-wide and drag the page scrollable area with it. */
+label.filepick input[type='file'] {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -115,7 +119,7 @@ textarea {
   white-space: nowrap;
 }
 
-.filepick input[type='file']:focus {
+label.filepick input[type='file']:focus {
   outline: none;
 }
 
