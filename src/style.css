@@ -81,6 +81,40 @@ textarea {
   padding: 6px 10px;
 }
 
+/* File inputs: the native picker button is the one UA widget that still paints
+   light gray inside the dark cards — give it the button pair, and declare
+   color-scheme so the caption and picker render dark-native. Two rules because
+   an unknown pseudo-element invalidates the whole selector list. */
+input[type='file'] {
+  color-scheme: dark;
+}
+
+input[type='file']::-webkit-file-upload-button {
+  font: inherit;
+  background: #21262d;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 4px 12px;
+  margin: 0 10px 0 0;
+  cursor: pointer;
+}
+
+input[type='file']::file-selector-button {
+  font: inherit;
+  background: #21262d;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 4px 12px;
+  margin: 0 10px 0 0;
+  cursor: pointer;
+}
+
+input[type='file']::file-selector-button:hover {
+  background: #30363d;
+}
+
 .error {
   color: #f85149;
 }
@@ -508,6 +542,11 @@ details.keybox textarea {
 .keyfile-row .field {
   flex: 1 1 220px;
   min-width: 0;
+}
+
+/* Same rhythm as .import-choose + .field: the PEM box sits below the file row. */
+.keyfile-row + .field {
+  margin-top: 12px;
 }
 
 .keypass-row {
