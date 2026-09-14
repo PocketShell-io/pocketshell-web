@@ -243,13 +243,13 @@ main.page ::placeholder {
   text-align: center;
 }
 
-/* Inside the centered empty state the long message always wraps the Add host
-   button onto its own flex line, and whether the zero-width spacer rides the
-   first line decides which side the button lands on (left on desktop, right
-   on phones). Drop the spacer here and center both lines so the stacked
-   empty state stays symmetric at every width. */
+/* Inside the centered empty state the head stacks: the 46ch message alone on
+   its centered line, the Import config / Add host row centered beneath it —
+   at every width, so wide viewports can't fit the buttons beside the message
+   and shove Add host off the message's axis. */
 .page > .empty .list-head {
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
 }
 
 .page > .empty .list-head .spacer {
@@ -267,6 +267,14 @@ main.page ::placeholder {
 
 .list-head .spacer {
   flex: 1;
+}
+
+/* Import config / Add host ride together as one group in the list head. */
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
 }
 
 /* The centered empty-state message wraps to a tidy measure, not the column. */

@@ -280,8 +280,10 @@ function open(host: HostEntry) {
             No hosts synced yet — import your SSH config, add one here, or tick hosts in the desktop app and let it push.
           </span>
           <span class="spacer" />
-          <button @click="startImport">Import config</button>
-          <button class="primary" @click="newHost">Add host</button>
+          <div class="head-actions">
+            <button @click="startImport">Import config</button>
+            <button class="primary" @click="newHost">Add host</button>
+          </div>
         </div>
 
         <!-- One quiet confirmation idiom; spacing, not boxes, separates them. -->
