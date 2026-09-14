@@ -592,6 +592,20 @@ details.keybox textarea {
   main.page textarea {
     min-height: 44px;
   }
+
+  /* The shell Sign out button sits outside main.page. A 45px target in the
+     54px bar forces the bar padding down to 4px (4+45+4+1 = 54): the page
+     min-height math and /term's 108px two-bar offset are pinned to that
+     exact height, so the bar may not grow. The terminal view's own topbar
+     and the landing bar are separate blocks and keep their own geometry. */
+  .topbar.app-topbar {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .topbar.app-topbar button {
+    min-height: 45px;
+  }
 }
 
 /* Two stacked 54px topbars on /term (the app shell's + the view's own). The

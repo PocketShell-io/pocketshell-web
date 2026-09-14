@@ -12,7 +12,7 @@ function signOut() {
 </script>
 
 <template>
-  <div class="topbar">
+  <div class="topbar app-topbar">
     <RouterLink class="brand" :to="{ name: 'hosts' }">PocketShell</RouterLink>
     <span class="muted">web</span>
     <span class="spacer" />
