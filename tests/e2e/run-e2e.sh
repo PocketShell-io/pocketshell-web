@@ -91,7 +91,10 @@ EOF
 # both. Type-checking still runs (vue-tsc via the build script).
 npx vite build --outDir "$WORK/dist" --emptyOutDir >/dev/null
 BASE_PORT="$(free_port)"
-npx vite preview --outDir "$WORK/dist" --port "$BASE_PORT" --strictPort >"$WORK/preview.log" 2>&1 &
+# The preview runs via node_modules/.bin/vite, not npx: the trap kills
+# PREVIEW_PID, and killing the npx wrapper orphaned the vite child, leaking
+# a ~100 MB server per run.
+node_modules/.bin/vite preview --outDir "$WORK/dist" --port "$BASE_PORT" --strictPort >"$WORK/preview.log" 2>&1 &
 PREVIEW_PID=$!
 trap 'kill "$PREVIEW_PID" 2>/dev/null || true; docker rm -f "$CNAME" >/dev/null 2>&1 || true' EXIT
 for _ in $(seq 1 50); do
