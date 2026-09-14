@@ -12,6 +12,8 @@ const hosts = useHostsStore();
 const router = useRouter();
 
 const passphrase = ref('');
+/** Re-focused when an unlock attempt fails: the error announces, focus returns. */
+const passphraseField = ref<HTMLInputElement | null>(null);
 const unlocking = ref(false);
 const keyDraft = ref('');
 const keyHost = ref<HostEntry | null>(null);
@@ -52,6 +54,7 @@ async function unlock() {
     await hosts.unlock(passphrase.value);
   } catch (e) {
     hosts.error = e instanceof Error ? e.message : String(e);
+    passphraseField.value?.focus();
   } finally {
     unlocking.value = false;
   }
@@ -241,142 +244,213 @@ function open(host: HostEntry) {
 
 <template>
   <main class="page">
-    <h1>Hosts</h1>
-
-    <div v-if="!hosts.unlocked">
-      <p class="muted">Enter the sync passphrase to decrypt your saved hosts (they never leave this browser unencrypted).</p>
-      <form @submit.prevent="unlock">
-        <input v-model="passphrase" type="password" placeholder="Sync passphrase" autofocus />
-        <button class="primary" type="submit" :disabled="unlocking || passphrase === ''">
-          {{ unlocking ? 'Decrypting…' : 'Unlock' }}
-        </button>
-      </form>
-      <p v-if="hosts.error" class="error">{{ hosts.error }}</p>
-    </div>
-
-    <div v-else :class="{ empty: hosts.hosts.length === 0 && !formOpen && !importOpen }">
-      <div class="list-head">
-        <span v-if="hosts.hosts.length === 0" class="muted">
-          No hosts synced yet — import your SSH config, add one here, or tick hosts in the desktop app and let it push.
-        </span>
-        <span class="spacer" />
-        <button @click="startImport">Import config</button>
-        <button class="primary" @click="newHost">Add host</button>
-      </div>
-
-      <details v-if="formOpen" class="keybox" open>
-        <summary>{{ draftIsEdit ? `Edit ${draft.name}` : 'New host — stored encrypted in your account; desktops pick it up on their next sync' }}</summary>
-        <form class="hostform" @submit.prevent="saveHost">
-          <input v-model="draft.name" class="f-name" placeholder="Name (e.g. prod-box)" :disabled="draftIsEdit" autofocus />
-          <input v-model="draft.hostname" class="f-host" placeholder="Hostname" />
-          <input v-model="draft.user" class="f-user" placeholder="User (optional)" />
-          <input v-model="draft.port" class="f-port" placeholder="Port" inputmode="numeric" />
-          <button class="primary" type="submit" :disabled="saving || draft.hostname.trim() === ''">
-            {{ saving ? 'Saving…' : 'Save' }}
+    <!-- Locked: the passphrase card IS the screen, in the accepted auth-card
+         idiom, and its title is the page's only heading. -->
+    <section v-if="!hosts.unlocked" class="unlock-card" aria-labelledby="unlock-title">
+      <div class="unlock-mark" aria-hidden="true">&gt;_</div>
+      <h1 id="unlock-title">Unlock your hosts</h1>
+      <p class="unlock-lede">
+        Enter the sync passphrase to decrypt your saved hosts (they never leave this browser unencrypted).
+      </p>
+      <form class="unlock-form" @submit.prevent="unlock">
+        <label class="flabel" for="sync-passphrase">Sync passphrase</label>
+        <div class="unlock-row">
+          <input
+            id="sync-passphrase"
+            ref="passphraseField"
+            v-model="passphrase"
+            type="password"
+            autocomplete="current-password"
+            autofocus
+          />
+          <button class="primary" type="submit" :disabled="unlocking || passphrase === ''">
+            {{ unlocking ? 'Decrypting…' : 'Unlock' }}
           </button>
-          <button type="button" @click="formOpen = false">Cancel</button>
-        </form>
-        <p v-if="formError" class="error">{{ formError }}</p>
-      </details>
+        </div>
+        <p v-if="hosts.error" class="error" role="alert">{{ hosts.error }}</p>
+      </form>
+    </section>
 
-      <details v-if="importOpen" class="keybox" open>
-        <summary>Import from SSH config — parsed in this browser; the file itself never leaves it</summary>
+    <template v-else>
+      <h1>Hosts</h1>
 
-        <div v-if="importStep === 'choose'">
-          <p class="muted import-hint">
-            Load your <code>~/.ssh/config</code> (or paste it), then pick the hosts to sync.
-            Ticked hosts join your account encrypted, like the rest of the list.
-          </p>
-          <div class="import-choose">
-            <input type="file" class="f-config" aria-label="SSH config file" @change="onConfigFile" />
-            <button type="button" :disabled="importText.trim() === ''" @click="parseImport">Parse hosts</button>
-          </div>
-          <textarea v-model="importText" placeholder="…or paste the config text here" aria-label="SSH config text" />
+      <div :class="{ empty: hosts.hosts.length === 0 && !formOpen && !importOpen }">
+        <div class="list-head">
+          <span v-if="hosts.hosts.length === 0" class="muted">
+            No hosts synced yet — import your SSH config, add one here, or tick hosts in the desktop app and let it push.
+          </span>
+          <span class="spacer" />
+          <button @click="startImport">Import config</button>
+          <button class="primary" @click="newHost">Add host</button>
         </div>
 
-        <div v-else-if="importStep === 'select'">
-          <p class="muted import-hint">
-            Parsed {{ parsed!.hosts.length }} {{ parsed!.hosts.length === 1 ? 'host' : 'hosts' }} from
-            <strong>{{ importFileName || 'pasted config' }}</strong
-            ><span v-if="parsed!.skippedPatterns > 0"> — {{ parsed!.skippedPatterns }} host {{ parsed!.skippedPatterns === 1 ? 'pattern' : 'patterns' }} skipped (wildcards can't be dialed directly)</span>.
-          </p>
-          <div class="import-list">
-            <label v-for="p in parsed!.hosts" :key="p.entry.name" class="import-row">
-              <input v-model="selectedNames" type="checkbox" :value="p.entry.name" />
-              <span class="import-name">{{ p.entry.name }}</span>
-              <span class="meta">{{ describe(p.entry) }}<template v-if="p.entry.identityFile"> · key {{ p.entry.identityFile }}</template></span>
-              <span v-if="isSynced(p.entry.name)" class="tag">already synced</span>
-            </label>
-          </div>
-          <div class="import-foot">
-            <button class="primary" :disabled="importing || importSelection.length === 0" @click="doImport">
-              {{ importing ? 'Importing…' : `Import ${importSelection.length} ${importSelection.length === 1 ? 'host' : 'hosts'}` }}
-            </button>
-            <button type="button" @click="cancelImport">Cancel</button>
-            <span class="muted">Selection syncs encrypted — the config file stays in this browser.</span>
-          </div>
-        </div>
+        <!-- One quiet confirmation idiom; spacing, not boxes, separates them. -->
+        <p v-if="hostSaved" class="notice" role="status">Saved {{ hostSaved }} to your account — desktops pick it up on their next sync.</p>
+        <p v-if="importDone" class="notice" role="status">{{ importDone }}</p>
+        <p v-if="keySaved" class="notice" role="status">Key for {{ keySaved }} stored in this browser.</p>
+        <p v-if="keyRemoved" class="notice" role="status">Key for {{ keyRemoved }} removed from this browser.</p>
 
-        <div v-else>
-          <p class="muted import-hint">
-            {{ missingCredentials.length }} imported {{ missingCredentials.length === 1 ? 'host has' : 'hosts have' }}
-            no key in this browser yet — without one they can't connect from here. Keys are stored encrypted and only
-            sent to the bridge when you connect.
-          </p>
-          <div class="import-list">
-            <div v-for="name in missingCredentials" :key="name" class="import-row">
-              <span class="import-name">{{ name }}</span>
-              <span class="meta">{{ describe(hosts.hosts.find((h) => h.name === name)!) }}</span>
-              <button type="button" @click="addKeyForImported(hosts.hosts.find((h) => h.name === name)!)">Add key…</button>
+        <!-- The list, in the landing's own hosts-mock: one bordered card with
+             a mono caption bar and hairline-separated mono rows. -->
+        <section v-if="hosts.hosts.length > 0" class="hosts-card" aria-label="Synced hosts">
+          <div class="hosts-bar">Hosts <span class="pill">synced · encrypted</span></div>
+          <div v-for="host in hosts.hosts" :key="host.name" class="host-row">
+            <div class="host-text">
+              <div class="name">{{ host.name }}</div>
+              <div class="meta">
+                {{ describe(host) }}<template v-if="host.identityFile"> · key {{ host.identityFile }}</template
+                ><template v-if="!hosts.secretHosts.includes(host.name)"> · key needed</template>
+              </div>
+            </div>
+            <div class="actions">
+              <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>
+              <button @click="editHost(host)">Edit</button>
+              <button @click="attachKey(host)">Key…</button>
+              <button class="primary" @click="open(host)">Connect</button>
             </div>
           </div>
-          <div class="import-foot">
-            <button class="primary" type="button" @click="finishImport">Done for now</button>
-          </div>
-        </div>
-        <p v-if="importError" class="error">{{ importError }}</p>
-      </details>
+        </section>
 
-      <div v-for="host in hosts.hosts" :key="host.name" class="host-row">
-        <div>
-          <div class="name">{{ host.name }}</div>
-          <div class="meta">
-            {{ describe(host) }}<template v-if="host.identityFile"> · key {{ host.identityFile }}</template
-            ><template v-if="!hosts.secretHosts.includes(host.name)"> · key needed</template>
+        <!-- New/edit host: a landing-FAQ card — short title, the storage
+             sentence kept as the muted lede, labeled fields. -->
+        <details v-if="formOpen" class="keybox" open>
+          <summary>{{ draftIsEdit ? `Edit ${draft.name}` : 'New host' }}</summary>
+          <div class="cardbox-body">
+            <p class="card-lede">Stored encrypted in your account; desktops pick it up on their next sync.</p>
+            <form class="hostform" @submit.prevent="saveHost">
+              <div class="field f-name">
+                <label class="flabel" for="hf-name">Name</label>
+                <input id="hf-name" v-model="draft.name" placeholder="Name (e.g. prod-box)" :disabled="draftIsEdit" autocomplete="off" autofocus />
+              </div>
+              <div class="field f-host">
+                <label class="flabel" for="hf-host">Hostname</label>
+                <input id="hf-host" v-model="draft.hostname" placeholder="Hostname" autocomplete="off" />
+              </div>
+              <div class="field f-user">
+                <label class="flabel" for="hf-user">User</label>
+                <input id="hf-user" v-model="draft.user" placeholder="User (optional)" autocomplete="off" />
+              </div>
+              <div class="field f-port">
+                <label class="flabel" for="hf-port">Port</label>
+                <input id="hf-port" v-model="draft.port" placeholder="Port" inputmode="numeric" />
+              </div>
+              <div class="form-actions">
+                <button class="primary" type="submit" :disabled="saving || draft.hostname.trim() === ''">
+                  {{ saving ? 'Saving…' : 'Save' }}
+                </button>
+                <button type="button" @click="formOpen = false">Cancel</button>
+              </div>
+            </form>
+            <p v-if="formError" class="error" role="alert">{{ formError }}</p>
           </div>
-        </div>
-        <div class="actions">
-          <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>
-          <button @click="editHost(host)">Edit</button>
-          <button @click="attachKey(host)">Key…</button>
-          <button class="primary" @click="open(host)">Connect</button>
-        </div>
+        </details>
+
+        <!-- Config import: same card, one step visible at a time. -->
+        <details v-if="importOpen" class="keybox" open>
+          <summary>Import from SSH config</summary>
+          <div class="cardbox-body">
+            <p class="card-lede">Parsed in this browser; the file itself never leaves it.</p>
+
+            <div v-if="importStep === 'choose'">
+              <p class="muted import-hint">
+                Load your <code>~/.ssh/config</code> (or paste it), then pick the hosts to sync.
+                Ticked hosts join your account encrypted, like the rest of the list.
+              </p>
+              <div class="import-choose">
+                <div class="field f-config">
+                  <label class="flabel" for="cfg-file">Config file</label>
+                  <input id="cfg-file" type="file" aria-label="SSH config file" @change="onConfigFile" />
+                </div>
+                <button type="button" :disabled="importText.trim() === ''" @click="parseImport">Parse hosts</button>
+              </div>
+              <div class="field">
+                <label class="flabel" for="cfg-text">Or paste the config text</label>
+                <textarea id="cfg-text" v-model="importText" placeholder="…or paste the config text here" aria-label="SSH config text"></textarea>
+              </div>
+            </div>
+
+            <div v-else-if="importStep === 'select'">
+              <p class="muted import-hint">
+                Parsed {{ parsed!.hosts.length }} {{ parsed!.hosts.length === 1 ? 'host' : 'hosts' }} from
+                <strong>{{ importFileName || 'pasted config' }}</strong
+                ><span v-if="parsed!.skippedPatterns > 0"> — {{ parsed!.skippedPatterns }} host {{ parsed!.skippedPatterns === 1 ? 'pattern' : 'patterns' }} skipped (wildcards can't be dialed directly)</span>.
+              </p>
+              <div class="import-list">
+                <label v-for="p in parsed!.hosts" :key="p.entry.name" class="import-row">
+                  <input v-model="selectedNames" type="checkbox" :value="p.entry.name" />
+                  <span class="import-name">{{ p.entry.name }}</span>
+                  <span class="meta">{{ describe(p.entry) }}<template v-if="p.entry.identityFile"> · key {{ p.entry.identityFile }}</template></span>
+                  <span v-if="isSynced(p.entry.name)" class="tag">already synced</span>
+                </label>
+              </div>
+              <div class="import-foot">
+                <button class="primary" :disabled="importing || importSelection.length === 0" @click="doImport">
+                  {{ importing ? 'Importing…' : `Import ${importSelection.length} ${importSelection.length === 1 ? 'host' : 'hosts'}` }}
+                </button>
+                <button type="button" @click="cancelImport">Cancel</button>
+                <span class="muted">Selection syncs encrypted — the config file stays in this browser.</span>
+              </div>
+            </div>
+
+            <div v-else>
+              <p class="muted import-hint">
+                {{ missingCredentials.length }} imported {{ missingCredentials.length === 1 ? 'host has' : 'hosts have' }}
+                no key in this browser yet — without one they can't connect from here. Keys are stored encrypted and only
+                sent to the bridge when you connect.
+              </p>
+              <div class="import-list">
+                <div v-for="name in missingCredentials" :key="name" class="import-row">
+                  <span class="import-name">{{ name }}</span>
+                  <span class="meta">{{ describe(hosts.hosts.find((h) => h.name === name)!) }}</span>
+                  <button type="button" @click="addKeyForImported(hosts.hosts.find((h) => h.name === name)!)">Add key…</button>
+                </div>
+              </div>
+              <div class="import-foot">
+                <button class="primary" type="button" @click="finishImport">Done for now</button>
+              </div>
+            </div>
+            <p v-if="importError" class="error" role="alert">{{ importError }}</p>
+          </div>
+        </details>
+
+        <!-- Private key: same card; the empty-save-removes semantics live in
+             the store and are unchanged. -->
+        <details v-if="keyHost" class="keybox" open>
+          <summary>Private key for {{ keyHost.name }}</summary>
+          <div class="cardbox-body">
+            <p class="card-lede">Stored encrypted in this browser; sent to the bridge only when you connect.</p>
+            <div class="keyfile-row">
+              <div class="field">
+                <label class="flabel" for="kf-file">Key file</label>
+                <input id="kf-file" type="file" aria-label="Private key file" @change="onKeyFile" />
+              </div>
+              <span v-if="keyFileName" class="muted">loaded {{ keyFileName }}</span>
+            </div>
+            <div class="field">
+              <label class="flabel" for="kf-pem">Private key (PEM)</label>
+              <textarea id="kf-pem" v-model="keyDraft" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+            </div>
+            <div class="keypass-row">
+              <div class="field">
+                <label class="flabel" for="kf-pass">Key passphrase</label>
+                <input
+                  id="kf-pass"
+                  v-model="keyPassphrase"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="Key passphrase"
+                  aria-label="Key passphrase"
+                />
+              </div>
+            </div>
+            <p class="muted keypass-hint">If the key is encrypted, its passphrase is stored encrypted alongside it and used only when you connect.</p>
+            <div class="form-actions">
+              <button class="primary" @click="saveKey">Save</button>
+              <button @click="keyHost = null">Cancel</button>
+            </div>
+          </div>
+        </details>
       </div>
-      <p v-if="hostSaved" class="muted">Saved {{ hostSaved }} to your account — desktops pick it up on their next sync.</p>
-      <p v-if="importDone" class="muted">{{ importDone }}</p>
-      <p v-if="keySaved" class="muted">Key for {{ keySaved }} stored in this browser.</p>
-      <p v-if="keyRemoved" class="muted">Key for {{ keyRemoved }} removed from this browser.</p>
-
-      <details v-if="keyHost" class="keybox" open>
-        <summary>Private key for {{ keyHost.name }} (stored encrypted in this browser; sent to the bridge only when you connect)</summary>
-        <div class="keyfile-row">
-          <input type="file" class="f-keyfile" aria-label="Private key file" @change="onKeyFile" />
-          <span v-if="keyFileName" class="muted">loaded {{ keyFileName }}</span>
-        </div>
-        <textarea v-model="keyDraft" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
-        <div class="keypass-row">
-          <input
-            v-model="keyPassphrase"
-            type="password"
-            autocomplete="new-password"
-            placeholder="Key passphrase (empty if the key isn't encrypted)"
-            aria-label="Key passphrase"
-          />
-        </div>
-        <p class="muted keypass-hint">If the key is encrypted, its passphrase is stored encrypted alongside it and used only when you connect.</p>
-        <button class="primary" @click="saveKey">Save</button>
-        <button @click="keyHost = null">Cancel</button>
-      </details>
-    </div>
+    </template>
   </main>
 </template>
