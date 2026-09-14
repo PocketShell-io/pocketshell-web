@@ -361,7 +361,11 @@ function open(host: HostEntry) {
               <div class="import-choose">
                 <div class="field f-config">
                   <label class="flabel" for="cfg-file">Config file</label>
-                  <input id="cfg-file" type="file" aria-label="SSH config file" @change="onConfigFile" />
+                  <label class="filepick" for="cfg-file">
+                    <span class="filepick-btn" aria-hidden="true">Choose file</span>
+                    <span class="filepick-name" aria-hidden="true">{{ importFileName || 'No file chosen' }}</span>
+                    <input id="cfg-file" type="file" aria-label="SSH config file" @change="onConfigFile" />
+                  </label>
                 </div>
                 <button type="button" :disabled="importText.trim() === ''" @click="parseImport">Parse hosts</button>
               </div>
@@ -424,9 +428,12 @@ function open(host: HostEntry) {
             <div class="keyfile-row">
               <div class="field">
                 <label class="flabel" for="kf-file">Key file</label>
-                <input id="kf-file" type="file" aria-label="Private key file" @change="onKeyFile" />
+                <label class="filepick" for="kf-file">
+                  <span class="filepick-btn" aria-hidden="true">Choose file</span>
+                  <span class="filepick-name" aria-hidden="true">{{ keyFileName || 'No file chosen' }}</span>
+                  <input id="kf-file" type="file" aria-label="Private key file" @change="onKeyFile" />
+                </label>
               </div>
-              <span v-if="keyFileName" class="muted">loaded {{ keyFileName }}</span>
             </div>
             <div class="field">
               <label class="flabel" for="kf-pem">Private key (PEM)</label>

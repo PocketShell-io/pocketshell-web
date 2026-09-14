@@ -81,38 +81,63 @@ textarea {
   padding: 6px 10px;
 }
 
-/* File inputs: the native picker button is the one UA widget that still paints
-   light gray inside the dark cards — give it the button pair, and declare
-   color-scheme so the caption and picker render dark-native. Two rules because
-   an unknown pseudo-element invalidates the whole selector list. */
-input[type='file'] {
-  color-scheme: dark;
+/* File pickers: the native "No file chosen" caption can neither be styled nor
+   kept from mid-word eliding at narrow widths, so the cards render a
+   label-wrapped control instead — visually hidden input, the button pair, and
+   the filename as styled text whose ellipsis truncates the end, never the
+   middle. */
+.filepick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
 }
 
-input[type='file']::-webkit-file-upload-button {
-  font: inherit;
+.filepick:focus-within {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
+}
+
+.filepick input[type='file'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  border: 0;
+  padding: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.filepick input[type='file']:focus {
+  outline: none;
+}
+
+.filepick-btn {
+  flex-shrink: 0;
   background: #21262d;
   color: #e6edf3;
   border: 1px solid #30363d;
   border-radius: 6px;
   padding: 4px 12px;
-  margin: 0 10px 0 0;
-  cursor: pointer;
 }
 
-input[type='file']::file-selector-button {
-  font: inherit;
-  background: #21262d;
-  color: #e6edf3;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 4px 12px;
-  margin: 0 10px 0 0;
-  cursor: pointer;
-}
-
-input[type='file']::file-selector-button:hover {
+.filepick:hover .filepick-btn {
   background: #30363d;
+}
+
+.filepick-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e6edf3;
 }
 
 .error {
