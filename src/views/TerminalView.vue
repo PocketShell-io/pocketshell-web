@@ -3,7 +3,9 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { BridgeSession } from '../terminal/bridge';
+import { decodeOsc52SetClipboard } from '../shared/osc52';
 import { config } from '../config';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
@@ -43,6 +45,24 @@ onMounted(async () => {
   term.open(termEl.value!);
   await nextTick();
   fit.fit();
+
+  // http(s) links become clickable (new tab, no opener access). The desktop
+  // pane detects paths as well, but its path links land in its Files tab,
+  // which the web does not have — URLs are the shareable half.
+  term.loadAddon(new WebLinksAddon((_event, url) => window.open(url, '_blank', 'noopener')));
+
+  // OSC 52 → clipboard: the receiving half of a yank inside the shell (a tmux
+  // `prefix+[` … `y`, or any remote program that sets the clipboard). The
+  // desktop answers the same sequence with the decoder vendored from
+  // shared/osc52.ts — what it refuses never touches the clipboard. A write
+  // can still be denied by the browser when the yank carries no recent user
+  // activation; that failure is silent, like a yank into a pane with no
+  // clipboard of its own.
+  term.parser.registerOscHandler(52, (data) => {
+    const text = decodeOsc52SetClipboard(data);
+    if (text !== null) void navigator.clipboard.writeText(text).catch(() => {});
+    return true;
+  });
 
   const secret = await hosts.getHostSecret(host.name);
   if ((secret?.privateKeyPem ?? '') === '' && (secret?.password ?? '') === '') {

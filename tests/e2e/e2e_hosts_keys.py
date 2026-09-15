@@ -18,6 +18,9 @@ real (see run-e2e.sh):
                       with paramiko. If the browser sent the wrong key or a
                       wrong passphrase, this ssh handshake fails and the test
                       fails — nothing about the final hop is stubbed.
+                      The session's PTY output also carries an OSC 52 yank,
+                      so the clipboard assertions prove the terminal answers
+                      the remote's copy sequence in-browser.
 
 Usage: /usr/bin/python3 tests/e2e/e2e_hosts_keys.py <base-url> <workdir> <fixture-port>
 """
@@ -44,6 +47,12 @@ FIXTURE_PORT = int(sys.argv[3])
 SYNC_PASSPHRASE = 'e2e-sync-pass-entence'
 KEY_PASSPHRASE = 'e2e-key-passphrase'
 CANARY = 'e2e-canary-7f3k4m'
+OSC52_CANARY = 'e2e-osc52-yank-qk9w2m'
+
+
+def osc52_yank(text: str) -> bytes:
+    """What a remote tmux yank paints on the PTY: ESC ] 52 ; Pc ; Pt BEL."""
+    return f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07".encode()
 
 CONFIG_STUB = (
     "window.POCKETSHELL_WEB = { syncApiUrl: 'https://sync.e2e.test', "
@@ -128,6 +137,7 @@ class FakeBridge:
         self.ws_data_frames = 0
         self.ssh_outputs: dict[str, str] = {}
         self.ssh_errors: dict[str, str] = {}
+        self.last_ws = None
 
     async def handle(self, ws):
         async def run_ssh(frame: dict, tag: str):
@@ -166,7 +176,10 @@ class FakeBridge:
                 ws.send(json.dumps({'type': 'error', 'message': 'ssh connect failed'}))
                 return
             self.ssh_outputs[tag] = text
-            ws.send(json.dumps({'type': 'data', 'data': base64.b64encode(text.encode()).decode()}))
+            # The PTY stream carries an OSC 52 yank, exactly like a tmux
+            # copy on the real box would; the terminal must answer it.
+            payload = text.encode() + osc52_yank(OSC52_CANARY)
+            ws.send(json.dumps({'type': 'data', 'data': base64.b64encode(payload).decode()}))
 
         def on_frame(payload) -> None:
             if not isinstance(payload, str):
@@ -176,6 +189,7 @@ class FakeBridge:
                 tag = f"conn{len(self.connect_frames)}"
                 frame['_tag'] = tag
                 self.connect_frames.append(frame)
+                self.last_ws = ws
                 ws.send(json.dumps({'type': 'connected'}))
                 asyncio.ensure_future(run_ssh(frame, tag))
             elif frame['type'] == 'ping':
@@ -184,6 +198,10 @@ class FakeBridge:
                 self.ws_data_frames += 1
 
         ws.on_message(on_frame)
+
+    def send_pty(self, raw: bytes) -> None:
+        """Push raw bytes at the browser as if the remote PTY printed them."""
+        self.last_ws.send(json.dumps({'type': 'data', 'data': base64.b64encode(raw).decode()}))
 
 
 async def wait_for(predicate, timeout: float, what: str):
@@ -202,7 +220,13 @@ async def main() -> int:
 
     async with async_playwright() as p:
         browser = await p.chromium.launch()
-        page = await browser.new_page(viewport={'width': 1280, 'height': 800})
+        # Clipboard grants let the test both write (OSC 52 handler) and read
+        # back what a yank landed in — navigator.clipboard, real Chromium.
+        context = await browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            permissions=['clipboard-read', 'clipboard-write'],
+        )
+        page = await context.new_page()
         page.on(
             'console',
             # Resource 404s from the fake API are the protocol working
@@ -300,6 +324,22 @@ async def main() -> int:
         )
         await page.wait_for_function("document.querySelectorAll('.topbar')[1]?.querySelector('span.muted')?.textContent === 'connected'")
 
+        # --- OSC 52: the yank the PTY output carried is in the clipboard ----
+        deadline = time.monotonic() + 10
+        clip = ''
+        while time.monotonic() < deadline:
+            clip = await page.evaluate('navigator.clipboard.readText()')
+            if clip == OSC52_CANARY:
+                break
+            await asyncio.sleep(0.2)
+        assert clip == OSC52_CANARY, f'OSC 52 yank never reached the clipboard: {clip!r}'
+        # A remote must not be able to BLANK the clipboard: the empty-payload
+        # "clear" sequence is refused, so the yank survives it.
+        bridge.send_pty(b'\x1b]52;c;\x07')
+        await asyncio.sleep(0.5)
+        clip = await page.evaluate('navigator.clipboard.readText()')
+        assert clip == OSC52_CANARY, f'remote cleared the clipboard: {clip!r}'
+
         # --- reload: everything comes back (account envelope + local one) ---
         await page.reload()
         # The reload lands on /term with a fresh store; the term topbar is
@@ -310,6 +350,7 @@ async def main() -> int:
         await page.wait_for_selector('.host-row')
         names = await page.locator('.host-row .name').all_inner_texts()
         assert sorted(names) == ['dockertest', 'keylesstest', 'manualbox'], names
+        await context.close()
         await browser.close()
 
     # --- wire-level assertions ----------------------------------------------
@@ -342,8 +383,8 @@ async def main() -> int:
     assert bridge.ssh_errors == {}, bridge.ssh_errors
     assert len(console_errors) == 0, console_errors
 
-    print('E2E PASS: import + key + passphrase verified against the real sshd fixture')
-    print(f"  sync PUTs: {len(sync.put_bodies)} envelopes; ssh sessions: {len(bridge.ssh_outputs)}")
+    print('E2E PASS: import + key + passphrase + OSC 52 verified against the real sshd fixture')
+    print(f"  sync PUTs: {len(sync.put_bodies)} envelopes; ssh sessions: {len(bridge.ssh_outputs)}; clipboard: OSC 52 yank ok")
     return 0
 
 

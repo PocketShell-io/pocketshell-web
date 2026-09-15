@@ -5,7 +5,9 @@
 # SSH sessions with paramiko, so a pass proves the whole chain —
 #   config parsed in-browser → selected hosts → sync envelope (asserted
 #   encrypted, decryptable with the passphrase) → key + passphrase attached →
-#   connect frame → SSH session on the docker container.
+#   connect frame → SSH session on the docker container; the PTY stream also
+#   carries an OSC 52 yank, which must land in the browser clipboard (and a
+#   refused remote "clear" must not wipe it).
 #
 # Usage: tests/e2e/run-e2e.sh [--keep-server]
 # Requires: docker, /usr/bin/python3 with playwright + paramiko.

@@ -2,10 +2,10 @@
 # Re-copy the vendored sync-contract modules from the desktop repo.
 #
 # These files are VERBATIM copies of PocketShell-io/pocketshell-desktop's
-# src/shared/{net,sshConfigCore,types,syncMerge,sync,syncConfig}.ts — the web
-# app reads the account blob and folds SSH configs with the desktop's exact
-# rules. Edit them THERE, commit, then run this script here and commit the
-# refresh.
+# src/shared/{net,sshConfigCore,types,syncMerge,sync,syncConfig,osc52}.ts — the
+# web app reads the account blob, folds SSH configs, and answers the terminal's
+# OSC 52 clipboard sequence with the desktop's exact code. Edit them THERE,
+# commit, then run this script here and commit the refresh.
 #
 #   DESKTOP_REPO=/path/to/checkout scripts/sync-shared.sh
 set -euo pipefail
@@ -19,7 +19,7 @@ if [ -z "${DESKTOP_REPO:-}" ]; then
   fi
 fi
 
-FILES="src/shared/types.ts src/shared/net.ts src/shared/sshConfigCore.ts src/shared/syncMerge.ts src/shared/sync.ts src/shared/syncConfig.ts"
+FILES="src/shared/types.ts src/shared/net.ts src/shared/sshConfigCore.ts src/shared/syncMerge.ts src/shared/sync.ts src/shared/syncConfig.ts src/shared/osc52.ts"
 
 for f in $FILES; do
   git -C "$DESKTOP_REPO" show "HEAD:$f" > "$f"

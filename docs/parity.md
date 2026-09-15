@@ -16,6 +16,9 @@ library) rather than re-implementing it.
 - `net.ts`, `sshConfigCore.ts` — shared constants + the pure OpenSSH-config
   directive core (used by the desktop's `SshConfigParser` and this repo's
   `sshConfigImport.ts` wrapper; added 2026-09-15)
+- `osc52.ts` — the OSC 52 clipboard decoder the terminal pane answers remote
+  yanks with (moved to the desktop's `src/shared/` so both panes run the same
+  refusals; added 2026-09-15)
 
 Rules: edit in the desktop repo, commit there, run the script here, commit the
 refresh. Wrappers stay per-platform: the desktop wrapper owns the filesystem
@@ -32,7 +35,8 @@ constraints (no `Include`, `~` kept verbatim, host patterns skipped).
 | Key + key-passphrase auth to bridge | done | — |
 | Write synced hosts BACK to `~/.ssh/config` | missing; pure core exists (`SshConfigWriter`) — web could offer "download generated config" | web-only |
 | Terminal (PTY, resize, reconnect) | done (bridge protocol has `session_lost` + one retry) | — |
-| OSC52 copy, link hints, mouse selection, path highlights | missing | web-only (xterm addons) |
+| OSC52 copy, URL links | done (OSC52: vendored `shared/osc52.ts` decoder in the pane's OSC handler; URLs: web-links addon, new tab) | — |
+| Path links, path highlights, mouse-selection overrides | not portable as-is: they land in the desktop's Files tab / tmux pane, which the web does not have | waits on Files parity (sftp frames) |
 | Known-hosts verification (TOFU pinning) | missing — the SSH handshake happens inside the bridge, so the client never sees the host key | needs bridge frame (fingerprint in `connected`) |
 | Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | missing | needs bridge frames (sftp) |
 | Port forwarding panel + traffic counters | `HostEntry` already carries parsed `localForwards`/`remoteForwards`/`proxyJump` (displayed as text only) | needs bridge frames (forward open/close) |
@@ -51,7 +55,9 @@ its client feature.
 1. **Shared-library hygiene** (this file's "How code is shared" list) — done for
    the parser; next candidate is the `SshConfigWriter` core so export-to-config
    is vendor-not-reimplement.
-2. **Web-only terminal polish**: OSC52, link hints — no protocol work.
+2. **Web-only terminal polish**: OSC52, URL links — done 2026-09-15 (the
+   decoder moved to the desktop's `src/shared/osc52.ts` and is vendored; the
+   pane handler writes `navigator.clipboard`, URLs open in a new tab).
 3. **Host-key pinning**: small bridge addition (server sends host-key
    fingerprint in the `connected` frame; web pins it per host in the local
    envelope and warns on change).
