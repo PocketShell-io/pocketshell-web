@@ -5,12 +5,9 @@
  * API URL is the `ApiUrl` output of the pocketshell-sync CloudFormation
  * stack in the aws-infra repo (sandbox/pocketshell-sync).
  *
- * The client SECRET is deliberately NOT here. Google's token endpoint
- * requires it even for installed apps, but it is a deployment fact of this
- * machine's owner, not source: GitHub push protection refuses any push
- * containing one, and rightly. It is read at login time from
- * ~/.config/pocketshell/google-client-secret (see GoogleAuth) — one line,
- * never committed.
+ * The desktop app uses PKCE and sends the one-time code to the sync backend's
+ * token broker. The backend holds Google's client secret; the downloaded app
+ * contains only this public client ID.
  */
 
 export const GOOGLE_CLIENT_ID =
