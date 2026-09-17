@@ -316,7 +316,7 @@ function open(host: HostEntry) {
         <!-- New/edit host: a landing-FAQ card — short title, the storage
              sentence kept as the muted lede, labeled fields. -->
         <details v-if="formOpen" class="keybox" open>
-          <summary>{{ draftIsEdit ? `Edit ${draft.name}` : 'New host' }}</summary>
+          <summary><span class="sumtitle">{{ draftIsEdit ? `Edit ${draft.name}` : 'New host' }}</span></summary>
           <div class="cardbox-body">
             <p class="card-lede">Stored encrypted in your account; desktops pick it up on their next sync.</p>
             <form class="hostform" @submit.prevent="saveHost">
@@ -422,7 +422,7 @@ function open(host: HostEntry) {
         <!-- Private key: same card; the empty-save-removes semantics live in
              the store and are unchanged. -->
         <details v-if="keyHost" class="keybox" open>
-          <summary>Private key for {{ keyHost.name }}</summary>
+          <summary><span class="sumtitle">Private key for {{ keyHost.name }}</span></summary>
           <div class="cardbox-body">
             <p class="card-lede">Stored encrypted in this browser; sent to the bridge only when you connect.</p>
             <div class="keyfile-row">

@@ -289,6 +289,13 @@ main.page ::placeholder {
 .host-row .name {
   color: #e6edf3;
   font-weight: 600;
+  /* Host names are arbitrary user input: an unbreakable 40-char token must
+     end-ellipsis inside the row (the sanctioned .email/.meta pattern), never
+     hard-clip mid-glyph at the card's inner edge. .host-text's min-width: 0
+     supplies the shrink; this supplies the truncation idiom. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .host-row .meta {
@@ -361,11 +368,14 @@ main.page ::placeholder {
 }
 
 /* Confirmations (saved / imported / key stored / key removed) share one quiet
-   idiom: muted fine print set off by spacing, never a new surface. */
+   idiom: muted fine print set off by spacing, never a new surface. Prose may
+   interpolate an arbitrary host name, so unbreakable tokens wrap here —
+   ellipsis would hide sentence content. */
 .notice {
   margin: 12px 0 0;
   font-size: var(--text-small);
   color: #8b949e;
+  overflow-wrap: anywhere;
 }
 
 /* The new/edit-host form: one wrapping row of labeled fields, width by
@@ -457,6 +467,12 @@ details.keybox > summary::-webkit-details-marker {
   display: none;
 }
 
+/* Pointer feedback over the clickable card title, the landing's own
+   .faq summary:hover idiom (the +/− marker keeps its muted color, as there). */
+details.keybox > summary:hover {
+  color: #58a6ff;
+}
+
 details.keybox > summary::after {
   content: '+';
   font-family: ui-monospace, monospace;
@@ -466,6 +482,17 @@ details.keybox > summary::after {
 
 details.keybox[open] > summary::after {
   content: '\2212';
+}
+
+/* The card title is one flex item: an interpolated host name (Edit {name},
+   Private key for {name}) end-ellipsizes inside the title — the sanctioned
+   .email/.meta pattern — instead of painting past the card or shoving the
+   +/− marker (same unbreakable-token class as the long host row). */
+details.keybox > summary .sumtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cardbox-body {
@@ -623,6 +650,18 @@ details.keybox textarea {
   border: 1px solid #30363d;
   border-radius: 6px;
   text-align: center;
+}
+
+/* Pointer widths (round-3 D3): content-size the card like its sibling
+   .auth-card and float it optically centered in the space below the 54px
+   topbar (auto margins split the page column's free space). The base rule's
+   full-column stretch stays the accepted touch-width composition below 641px,
+   so the 390/320 renders are untouched. */
+@media (min-width: 641px) {
+  .unlock-card {
+    flex: 0 0 auto;
+    margin: auto;
+  }
 }
 
 .unlock-mark {
@@ -1743,7 +1782,12 @@ button.dir-row {
   color: #8b949e;
 }
 
-.hosts-bar .pill {
+/* Scoped to the landing on purpose: at top-level this rule's hardcoded 12px
+   sat LATER in the file than the app block's `.hosts-bar .pill
+   { font-size: var(--text-fine) }` and, at equal specificity, out-cascaded it
+   on /app — the app's token rule was dead code (round-3 D2). Under `.landing`
+   the landing's render is unchanged while app screens read their own scale. */
+.landing .hosts-bar .pill {
   color: #3fb950;
   border: 1px solid #30363d;
   border-radius: 999px;
