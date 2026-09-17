@@ -532,6 +532,10 @@ details.keybox textarea {
 
 .import-hint {
   margin: 8px 0;
+  /* Interpolated config file names are arbitrary user input: an unbreakable
+     token must wrap inside the hint (the sanctioned .notice pattern) instead
+     of painting past the card. */
+  overflow-wrap: anywhere;
 }
 
 .import-choose {
