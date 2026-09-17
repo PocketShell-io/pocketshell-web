@@ -799,10 +799,58 @@ details.keybox textarea {
   .topbar.app-topbar {
     padding-top: 4px;
     padding-bottom: 4px;
+    /* The 16px pointer gap is the bar's first squeeze casualty: the
+       term-topbar's 8px touch rhythm frees the account email. The touch
+       gutter narrows to 12px for the same reason — at 390px the identity
+       must keep a 12-character readable prefix before it ellipsizes. */
+    gap: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .topbar.app-topbar button {
     min-height: 45px;
+    /* The term-topbar's 6px touch side padding; the label stays one line. */
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  /* Squeeze order in the bar: the decorative "web" badge yields before the
+     account identity does (the email is the only signed-in marker once
+     Sign out reads as a button, not a name). The email itself never
+     disappears — min-width keeps a readable prefix + ellipsis where the
+     old rules let it collapse to zero width at 320px. */
+  .topbar.app-topbar .muted:not(.email) {
+    display: none;
+  }
+
+  .topbar.app-topbar .email {
+    min-width: 72px;
+    /* The app's 14px small voice (the term-topbar title/status step): the
+       16px identity needs ~176px of natural width, more than a phone bar
+       can spare after brand + Sign out, so 390px showed only ~11 chars. */
+    font-size: 14px;
+  }
+}
+
+/* Touch widths: the row's actions become a deliberate full-width bar instead
+   of wrapping wherever the flex line happens to break (a keyed row used to
+   strand Connect alone on a second right-aligned line). Two equal columns
+   pair the buttons 2×2; a no-key row's 3-button composition spans Connect
+   across the trailing line via :last-child:nth-child(3), so the primary is
+   never orphaned in a half cell. Labels stay one line (cells stretch, the
+   inline-flex centers), the 8px gap carries over, and nothing here leaks
+   above 640px — pointer widths keep the accepted single-line group. */
+@media (max-width: 640px) {
+  .host-row .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .host-row .actions button.primary:last-child:nth-child(3) {
+    grid-column: 1 / -1;
   }
 }
 
@@ -2653,4 +2701,15 @@ button.dir-row {
 
 .auth-back a:hover {
   text-decoration-color: #58a6ff;
+}
+
+/* Touch widths: the back link is the login card's only secondary control,
+   so its box meets the same 44px floor as every other touch target (the
+   14px voice + 2×14px padding = 44px). Nothing here applies above 640px —
+   pointer widths keep the accepted 40px box. */
+@media (max-width: 640px) {
+  .auth-back a {
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
 }
