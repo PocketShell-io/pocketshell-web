@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -142,19 +142,40 @@ onBeforeUnmount(() => {
 function back() {
   router.push({ name: 'hosts' });
 }
+
+// View-only mapping from the status word to the chrome's visual state: green
+// pill while live, muted pill with a spinner while the bridge is being
+// reached, error-red pill once the session is down or failed. It reads the
+// same string the bridge reports and changes nothing about the session.
+const BUSY_STATUSES = new Set(['connecting…', 'reconnecting…']);
+const busy = computed(() => BUSY_STATUSES.has(status.value));
+const statusState = computed(() => {
+  if (status.value === 'connected') return 'is-connected';
+  if (BUSY_STATUSES.has(status.value)) return 'is-busy';
+  return 'is-down';
+});
 </script>
 
 <template>
-  <div>
-    <div class="topbar">
-      <button @click="back">← Hosts</button>
-      <strong>{{ route.params.name }}</strong>
-      <span class="muted">{{ status }}</span>
-      <span class="spacer" />
-    </div>
-    <div class="terminal-wrap">
-      <p v-if="error" class="error">{{ error }}</p>
-      <div ref="termEl" class="term" />
-    </div>
+  <div class="term-screen">
+    <section class="term-card">
+      <header class="topbar term-topbar">
+        <button @click="back">← Hosts</button>
+        <span class="term-mark" aria-hidden="true">&gt;_</span>
+        <h1 class="term-title">{{ route.params.name }}</h1>
+        <span class="spacer" />
+        <span class="term-status muted" :class="statusState" role="status">
+          <span v-if="busy" class="auth-spinner" aria-hidden="true" />
+          {{ status }}
+        </span>
+      </header>
+      <div class="terminal-wrap">
+        <div v-if="error" class="term-notice" role="alert">
+          <p class="error">{{ error }}</p>
+          <button @click="back">← Hosts</button>
+        </div>
+        <div ref="termEl" class="term" />
+      </div>
+    </section>
   </div>
 </template>
