@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
@@ -41,6 +41,15 @@ const importing = ref(false);
 const importDone = ref('');
 /** The key dialog was opened from the import's credentials step. */
 const importResume = ref(false);
+
+/** The quiet confirmation is one notice at rest: a new action's feedback
+ * supersedes the previous confirmation instead of stacking with it. */
+function setNotice(slot: Ref<string>, message: string) {
+  for (const notice of [hostSaved, importDone, keySaved, keyRemoved]) {
+    if (notice !== slot) notice.value = '';
+  }
+  slot.value = message;
+}
 
 onMounted(() => {
   // Unsigned visitors poking /app get the sign-in screen, not a host error.
@@ -93,7 +102,7 @@ async function saveHost() {
   formError.value = '';
   try {
     await hosts.saveHost(res.entry);
-    hostSaved.value = res.entry.name;
+    setNotice(hostSaved, res.entry.name);
     formOpen.value = false;
   } catch (e) {
     formError.value = e instanceof Error ? e.message : String(e);
@@ -131,7 +140,7 @@ async function saveKey() {
     ? {}
     : { privateKeyPem: pem, ...(keyPassphrase.value === '' ? {} : { keyPassphrase: keyPassphrase.value }) };
   await hosts.setHostSecret(keyHost.value.name, secret);
-  keySaved.value = keyHost.value.name;
+  setNotice(keySaved, keyHost.value.name);
   keyHost.value = null;
   if (importResume.value) {
     importResume.value = false;
@@ -146,8 +155,7 @@ async function saveKey() {
 
 async function removeKey(host: HostEntry) {
   await hosts.removeHostSecret(host.name);
-  keySaved.value = '';
-  keyRemoved.value = host.name;
+  setNotice(keyRemoved, host.name);
 }
 
 /* --- Import from an SSH config ------------------------------------------- */
@@ -229,7 +237,7 @@ async function doImport() {
 }
 
 function finishImport() {
-  importDone.value = `Imported ${importedNames.value.length} ${importedNames.value.length === 1 ? 'host' : 'hosts'} — desktops pick them up on their next sync.`;
+  setNotice(importDone, `Imported ${importedNames.value.length} ${importedNames.value.length === 1 ? 'host' : 'hosts'} — desktops pick them up on their next sync.`);
   importOpen.value = false;
 }
 
