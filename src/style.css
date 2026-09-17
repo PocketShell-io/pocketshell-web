@@ -393,6 +393,13 @@ main.page ::placeholder {
   text-overflow: ellipsis;
 }
 
+/* R5-B2: the port alert sits across the action row from its field, so the
+   invalid port paints its own 1px border in the .error hue — the field and
+   the message read as one. Absent aria-invalid computes exactly as before. */
+#hf-port[aria-invalid='true'] {
+  border-color: #f85149;
+}
+
 /* Bases are sized so field contents fit untruncated: the "Name (e.g.
    prod-box)" placeholder needs ~172px, "User (optional)" ~119px, and a
    typed hostname like staging.example.com ~165px of content box; Port
@@ -538,6 +545,13 @@ details.keybox textarea {
   overflow-wrap: anywhere;
 }
 
+/* One quiet voice: the foot assurance is the same explanatory fine print as
+   the .card-lede/.notice voice, so it renders at --text-small too. The step
+   lead (.import-hint) and alerts stay at the 16px body voice. */
+.import-foot .muted {
+  font-size: var(--text-small);
+}
+
 .import-choose {
   display: flex;
   flex-wrap: wrap;
@@ -642,8 +656,11 @@ details.keybox textarea {
   min-width: 0;
 }
 
+/* Same quiet fine-print voice as the card's .card-lede: this aside explains,
+   it doesn't lead. */
 .keypass-hint {
   margin: 6px 0 8px;
+  font-size: var(--text-small);
 }
 
 /* Passphrase unlock: ONE centered card in the accepted auth-card idiom,
@@ -670,6 +687,36 @@ details.keybox textarea {
    full-column stretch stays the accepted touch-width composition below 641px,
    so the 390/320 renders are untouched. */
 @media (min-width: 641px) {
+  .unlock-card {
+    flex: 0 0 auto;
+    margin: auto;
+  }
+
+  /* R5-A1: the whole label.import-row is the live hit target (a row click
+     toggles its checkbox), so at pointer widths it answers like its clickable
+     siblings — pointer cursor, and on hover-capable pointers the accepted
+     row-hover token #1c2129 (the terminal dir-row/tab idiom). The
+     (hover: hover) guard means a touch device never paints or sticks it, and
+     the 390/320 rest renders — cursor included — stay exactly as accepted. */
+  label.import-row {
+    cursor: pointer;
+  }
+
+  @media (hover: hover) {
+    label.import-row:hover {
+      background: #1c2129;
+    }
+  }
+}
+
+/* Tall touch viewports (R5-B1): a 390×844-class phone shows the same D3
+   stretch defect the pointer rule above fixed — the card fills the column
+   (350×742) with its content floating mid-box. D3's own scope note puts that
+   stretch class on ≥~700px-tall viewports only, so the same content-size +
+   center rides a height query: short viewports (320×568, 390×667) keep the
+   accepted stretch composition, and at ≥641px width this duplicates the
+   pointer rule's exact declarations, so 900/1280 are unchanged. */
+@media (min-height: 700px) {
   .unlock-card {
     flex: 0 0 auto;
     margin: auto;
@@ -898,6 +945,114 @@ details.keybox textarea {
   margin-top: 12px;
   padding: 12px 16px;
   font-size: var(--text-small);
+}
+
+/* Crash/OOM warnings surfaced from the host's aplexer (issue #1): one
+   amber-accented card in the .term-notice idiom above the shell, so a crash
+   on the host is impossible to miss and dismissible only on purpose. Rows
+   wrap on phones; the ack stays a touch target like .term-notice's. */
+.warn-banner {
+  flex: none;
+  padding: 12px 14px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-left: 3px solid #d29922;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.warn-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.warn-title {
+  margin: 0;
+  color: #e6edf3;
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.warn-head button {
+  padding: 8px 12px;
+  font-size: var(--text-small);
+}
+
+.warn-stale {
+  margin: 0;
+  color: #8b949e;
+  font-size: var(--text-fine);
+}
+
+.warn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.warn-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 0;
+  border-top: 1px solid #21262d;
+  font-size: var(--text-small);
+}
+
+.warn-kind {
+  flex: none;
+  border: 1px solid #bb8009;
+  border-radius: 999px;
+  padding: 0 8px;
+  color: #d29922;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  text-transform: uppercase;
+}
+
+.warn-kind.is-crash {
+  border-color: #f85149;
+  color: #f85149;
+}
+
+.warn-sel {
+  font-family: ui-monospace, monospace;
+  color: #e6edf3;
+  overflow-wrap: anywhere;
+}
+
+.warn-detail {
+  flex: 1 1 12em;
+  min-width: 0;
+  color: #b6c0ca;
+  overflow-wrap: anywhere;
+}
+
+.warn-age {
+  color: #8b949e;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  white-space: nowrap;
+}
+
+.warn-row button {
+  margin-left: auto;
+  padding: 8px 12px;
+  font-size: var(--text-small);
+}
+
+@media (max-width: 640px) {
+  .warn-head button,
+  .warn-row button {
+    padding: 12px 16px;
+  }
 }
 
 /* Touch widths: the view bar mirrors the app-topbar's touch variant exactly
@@ -2487,8 +2642,15 @@ button.dir-row {
   font-size: var(--text-small);
 }
 
-/* Padded to a 44px+ tap target on touch screens. */
+/* Padded to a 44px+ tap target on touch screens. The underline follows the
+   landing .text-link idiom: muted at rest, voice-blue on hover. */
 .auth-back a {
   display: inline-block;
   padding: 12px 16px;
+  text-decoration-color: #30363d;
+  text-underline-offset: 3px;
+}
+
+.auth-back a:hover {
+  text-decoration-color: #58a6ff;
 }

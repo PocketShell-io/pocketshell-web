@@ -23,10 +23,12 @@ export interface HostDraft {
   user: string;
 }
 
-/** A validated draft → a HostEntry the sync payload can carry, or why not. */
+/** A validated draft → a HostEntry the sync payload can carry, or why not.
+ * The error variant optionally names the offending field so the form can tie
+ * its alert back to the input (the port field's aria-invalid state). */
 export type NormalizedDraft =
   | { ok: true; entry: HostEntry }
-  | { ok: false; error: string };
+  | { ok: false; error: string; field?: 'name' | 'hostname' | 'user' | 'port' };
 
 export function normalizeHostDraft(draft: HostDraft, base?: HostEntry): NormalizedDraft {
   const name = draft.name.trim();
@@ -42,7 +44,7 @@ export function normalizeHostDraft(draft: HostDraft, base?: HostEntry): Normaliz
   if (draft.port.trim() !== '') {
     port = Number(draft.port.trim());
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      return { ok: false, error: 'Port must be a whole number from 1 to 65535.' };
+      return { ok: false, error: 'Port must be a whole number from 1 to 65535.', field: 'port' };
     }
   }
   return {

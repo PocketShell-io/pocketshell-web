@@ -27,6 +27,9 @@ const draft = ref({ name: '', hostname: '', port: '22', user: '' });
 const draftIsEdit = ref(false);
 const saving = ref(false);
 const formError = ref('');
+/** The validation failure named the port field: #hf-port carries
+ * aria-invalid (and the error border) until the form resets or saves. */
+const portInvalid = ref(false);
 const hostSaved = ref('');
 
 const importOpen = ref(false);
@@ -80,6 +83,7 @@ function newHost() {
   keyHost.value = null;
   importOpen.value = false;
   formError.value = '';
+  portInvalid.value = false;
 }
 
 function editHost(host: HostEntry) {
@@ -89,6 +93,7 @@ function editHost(host: HostEntry) {
   keyHost.value = null;
   importOpen.value = false;
   formError.value = '';
+  portInvalid.value = false;
 }
 
 async function saveHost() {
@@ -96,10 +101,12 @@ async function saveHost() {
   const res = normalizeHostDraft(draft.value, base);
   if (!res.ok) {
     formError.value = res.error;
+    portInvalid.value = res.field === 'port';
     return;
   }
   saving.value = true;
   formError.value = '';
+  portInvalid.value = false;
   try {
     await hosts.saveHost(res.entry);
     setNotice(hostSaved, res.entry.name);
@@ -342,7 +349,7 @@ function open(host: HostEntry) {
               </div>
               <div class="field f-port">
                 <label class="flabel" for="hf-port">Port</label>
-                <input id="hf-port" v-model="draft.port" placeholder="Port" inputmode="numeric" />
+                <input id="hf-port" v-model="draft.port" placeholder="Port" inputmode="numeric" :aria-invalid="portInvalid ? 'true' : undefined" />
               </div>
               <div class="form-actions">
                 <button class="primary" type="submit" :disabled="saving || draft.hostname.trim() === ''">
