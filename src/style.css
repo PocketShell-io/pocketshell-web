@@ -735,6 +735,15 @@ details.keybox textarea {
     min-height: 44px;
   }
 
+  /* The import row's label is the live target (a row click toggles its
+     checkbox), so the row itself must reach the same 44px touch bar.
+     align-items:center keeps the single-line composition; the hairline,
+     checkbox glyph, and type scale are unchanged. The 36px pointer idiom
+     stays above 640px. */
+  main.page .import-row {
+    min-height: 44px;
+  }
+
   /* The shell Sign out button sits outside main.page. A 45px target in the
      54px bar forces the bar padding down to 4px (4+45+4+1 = 54): the page
      min-height math and /term's 108px two-bar offset are pinned to that
