@@ -569,6 +569,14 @@ details.keybox textarea {
 
 .import-row .import-name {
   font-weight: 600;
+  /* Parsed host names are arbitrary user input: one unbreakable token must
+     end-ellipsis inside the row (the sanctioned .email/.meta pattern) instead
+     of painting past the card. min-width: 0 lets the flex item shrink; this
+     supplies the truncation idiom. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* user@host:port and the identity path are unbreakable; ellipsize so a long
