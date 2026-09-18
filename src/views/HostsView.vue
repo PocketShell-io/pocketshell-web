@@ -3,18 +3,29 @@ import { computed, onMounted, ref, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
+import { useWarningsStore } from '../stores/warnings';
+import { formatAge, type AplexerWarning } from '../aplexer/warnings';
 import { normalizeHostDraft } from '../hostForm';
 import { parseSshConfigText } from '../sshConfigImport';
+import { claimsOf } from '../auth/google';
+import { forgetPassphrase, recallPassphrase, rememberPassphrase } from '../shared/passphraseVault';
 import type { HostEntry } from '../shared/types';
 
 const auth = useAuthStore();
 const hosts = useHostsStore();
+const warnings = useWarningsStore();
 const router = useRouter();
 
 const passphrase = ref('');
 /** Re-focused when an unlock attempt fails: the error announces, focus returns. */
 const passphraseField = ref<HTMLInputElement | null>(null);
 const unlocking = ref(false);
+/** "Remember on this computer" — stores the passphrase in the passphraseVault
+ * (key in IndexedDB, ciphertext in localStorage, this account only). */
+const remember = ref(false);
+/** True while mount checks for a saved passphrase: the card waits (no
+ * password-field flash, no autofocus steal) for a possible auto-unlock. */
+const checkingVault = ref(true);
 const keyDraft = ref('');
 const keyHost = ref<HostEntry | null>(null);
 const keySaved = ref('');
@@ -54,9 +65,40 @@ function setNotice(slot: Ref<string>, message: string) {
   slot.value = message;
 }
 
-onMounted(() => {
-  // Unsigned visitors poking /app get the sign-in screen, not a host error.
-  if (!auth.signedIn) router.replace({ name: 'login' });
+onMounted(async () => {
+  try {
+    // Unsigned visitors poking /app get the sign-in screen, not a host error.
+    if (!auth.signedIn) {
+      router.replace({ name: 'login' });
+      return;
+    }
+    // Already unlocked (in-session navigation back to this view): refresh
+    // the aplexer warnings sweep here; the fresh-unlock paths sweep below.
+    // The store no-ops concurrent sweeps, so double-firing is safe.
+    if (hosts.unlocked) void warnings.sweep().catch(() => {});
+    // A saved passphrase for this account unlocks silently. Anything that
+    // fails falls through to the card: recall already dropped a stale blob,
+    // and a passphrase the server no longer accepts (changed on another
+    // device) gets forgotten here explicitly.
+    const saved = await recallPassphrase(claimsOf(auth.idToken).sub);
+    if (saved !== null && saved !== '') {
+      hosts.passphraseRemembered = true;
+      try {
+        await hosts.unlock(saved);
+        void warnings.sweep().catch(() => {});
+        return;
+      } catch {
+        hosts.passphraseRemembered = false;
+        void forgetPassphrase(claimsOf(auth.idToken).sub);
+        hosts.error = 'The saved passphrase no longer works — it was probably changed on another device.';
+      }
+    }
+  } catch {
+    // No readable vault (or no decodable token to namespace it by): the
+    // unlock card is the answer, same as it ever was.
+  } finally {
+    checkingVault.value = false;
+  }
 });
 
 async function unlock() {
@@ -64,12 +106,34 @@ async function unlock() {
   hosts.error = '';
   try {
     await hosts.unlock(passphrase.value);
+    // Credentials are in place: check every keyed host for unacknowledged
+    // aplexer warnings (issue #1). The catch keeps a freak store error from
+    // surfacing — the sweep's own contract is to degrade quietly.
+    void warnings.sweep().catch(() => {});
+    const sub = claimsOf(auth.idToken).sub;
+    if (remember.value) {
+      await rememberPassphrase(sub, passphrase.value);
+      hosts.passphraseRemembered = true;
+    } else if (hosts.passphraseRemembered) {
+      // A stale vault (the passphrase just changed somewhere else) must not
+      // survive an unticked unlock: what is saved would fail next time.
+      await forgetPassphrase(sub);
+      hosts.passphraseRemembered = false;
+    }
+    passphrase.value = '';
   } catch (e) {
     hosts.error = e instanceof Error ? e.message : String(e);
     passphraseField.value?.focus();
   } finally {
     unlocking.value = false;
   }
+}
+
+/** The vault's explicit exit, next to where the save is announced. The
+ * unlocked session is untouched — only this browser's saved copy goes. */
+async function forgetSaved() {
+  await forgetPassphrase(claimsOf(auth.idToken).sub);
+  hosts.passphraseRemembered = false;
 }
 
 function describe(host: HostEntry): string {
@@ -80,6 +144,17 @@ function describe(host: HostEntry): string {
 // only means "this key file", so show the bare name.
 function keyFile(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
+}
+
+// The hosts-list half of issue #1: a host's unacknowledged aplexer warnings
+// and whether an ack for it is in flight, both read off the sweep store.
+// Helpers (not raw indexing) because absent entries are the normal case.
+function hostWarns(name: string): AplexerWarning[] {
+  return warnings.byHost[name] ?? [];
+}
+
+function hostBusy(name: string): boolean {
+  return warnings.busy[name] ?? false;
 }
 
 function newHost() {
@@ -266,8 +341,9 @@ function open(host: HostEntry) {
 <template>
   <main class="page">
     <!-- Locked: the passphrase card IS the screen, in the accepted auth-card
-         idiom, and its title is the page's only heading. -->
-    <section v-if="!hosts.unlocked" class="unlock-card" aria-labelledby="unlock-title">
+         idiom, and its title is the page's only heading. While the saved
+         passphrase is being tried, the card waits invisible — no flash. -->
+    <section v-if="!hosts.unlocked && !checkingVault" class="unlock-card" aria-labelledby="unlock-title">
       <div class="unlock-mark" aria-hidden="true">&gt;_</div>
       <h1 id="unlock-title">Unlock your hosts</h1>
       <p class="unlock-lede">
@@ -288,6 +364,13 @@ function open(host: HostEntry) {
             {{ unlocking ? 'Decrypting…' : 'Unlock' }}
           </button>
         </div>
+        <label class="unlock-remember">
+          <input v-model="remember" type="checkbox" />
+          <span>Remember the passphrase on this computer</span>
+        </label>
+        <p class="unlock-remember-hint">
+          Stored encrypted with a key only this browser holds — the server never sees it.
+        </p>
         <p v-if="hosts.error" class="error" role="alert">{{ hosts.error }}</p>
       </form>
     </section>
@@ -313,6 +396,14 @@ function open(host: HostEntry) {
         <p v-if="keySaved" class="notice" role="status">Key for {{ keySaved }} stored encrypted and synced to your account.</p>
         <p v-if="keyRemoved" class="notice" role="status">Key for {{ keyRemoved }} removed from this browser.</p>
 
+        <!-- The vault's persistent presence: appears the moment a passphrase
+             is saved (the tick's feedback) and stays for later sessions, so
+             Forget is discoverable whenever the save is in force. -->
+        <div v-if="hosts.passphraseRemembered" class="remember-row" role="status">
+          <span class="muted">Passphrase saved on this computer — this browser unlocks without it.</span>
+          <button type="button" @click="forgetSaved">Forget</button>
+        </div>
+
         <!-- The list, in the landing's own hosts-mock: one bordered card with
              a mono caption bar and hairline-separated mono rows. -->
         <section v-if="hosts.hosts.length > 0" class="hosts-card" aria-label="Synced hosts">
@@ -324,6 +415,29 @@ function open(host: HostEntry) {
                 {{ describe(host) }}<span v-if="host.identityFile" class="key-name"> · key {{ keyFile(host.identityFile) }}</span
                 ><template v-if="!hosts.secretHosts.includes(host.name)"> · key needed</template>
               </div>
+              <!-- Crash/OOM warnings from the host's aplexer (issue #1): the
+                   terminal banner's rows again, surfaced in the list so a
+                   crash is visible — and dismissible only on purpose —
+                   without opening a session. -->
+              <section v-if="hostWarns(host.name).length > 0" class="host-warns" aria-label="Crash warnings on this host">
+                <div class="warn-head">
+                  <p class="warn-title">
+                    {{ hostWarns(host.name).length }} crash warning{{ hostWarns(host.name).length === 1 ? '' : 's' }} on this host
+                  </p>
+                  <button :disabled="hostBusy(host.name)" @click="warnings.ackAll(host.name)">Clear all</button>
+                </div>
+                <ul class="warn-list">
+                  <li v-for="w in hostWarns(host.name)" :key="w.session" class="warn-row">
+                    <span class="warn-kind" :class="w.kind === 'oom' ? 'is-oom' : 'is-crash'">
+                      {{ w.kind === 'oom' ? 'OOM' : 'crash' }}
+                    </span>
+                    <span class="warn-sel">{{ w.workspace }}:{{ w.tag }}</span>
+                    <span class="warn-detail">{{ w.detail }}</span>
+                    <span class="warn-age">{{ formatAge(Date.now(), w.created_at_ms) }}</span>
+                    <button :disabled="hostBusy(host.name)" @click="warnings.ack(host.name, w.session)">Acknowledge</button>
+                  </li>
+                </ul>
+              </section>
             </div>
             <div class="actions">
               <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>

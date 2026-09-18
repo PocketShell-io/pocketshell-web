@@ -380,6 +380,21 @@ main.page ::placeholder {
   overflow-wrap: anywhere;
 }
 
+/* The saved passphrase's persistent line: the .notice voice with the row's
+   own small action, so Forget is discoverable exactly as long as the save
+   is in force — it appears with the tick's unlock and every session after. */
+.remember-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 12px 0 0;
+}
+
+.remember-row .muted {
+  font-size: var(--text-small);
+}
+
 /* The new/edit-host form: one wrapping row of labeled fields, width by
    importance; the label rides its field, so the base sizes label + input. */
 .hostform {
@@ -769,6 +784,32 @@ details.keybox textarea {
   min-width: 0;
 }
 
+/* Remember-me: the card's one checkbox, with the .import-row anatomy
+   (checkbox + text, accent #1f6feb); the hint below is the .keypass-hint
+   fine-print voice. min-height keeps the label a 44px touch target;
+   flex-start lets the text wrap under itself on phones. */
+.unlock-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  margin-top: 4px;
+  padding: 10px 0;
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+.unlock-remember input[type='checkbox'] {
+  accent-color: #1f6feb;
+  flex-shrink: 0;
+}
+
+.unlock-remember-hint {
+  margin: 0;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
 .unlock-form .error {
   margin: 8px 0 0;
   font-size: var(--text-small);
@@ -1111,6 +1152,19 @@ details.keybox textarea {
   .warn-row button {
     padding: 12px 16px;
   }
+}
+
+/* The hosts-list half of issue #1: the banner's own row and head classes
+   nested in the host row's text column, so a crash is visible without
+   opening a session. Only the container is new — a quiet amber rail, no
+   second card. */
+.host-warns {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid #d29922;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 /* Touch widths: the view bar mirrors the app-topbar's touch variant exactly
