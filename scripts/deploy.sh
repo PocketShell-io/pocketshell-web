@@ -22,9 +22,13 @@ WS_URL="${WS_URL:-$(stack_output WsUrl)}"
 # from its stack output once that stack exists; DIRECT_WS_URL=... overrides,
 # DIRECT_WS_URL='' forces empty (bridge only).
 if [ ! "${DIRECT_WS_URL+x}" = x ]; then
+  # `|| true` matters as much as the 2>/dev/null: with set -e, an assignment
+  # from a failing substitution (absent stack → aws exits 255) kills the
+  # script silently. That, not the guard below, is why every deploy since
+  # this block landed died before the build — locally and in CI.
   DIRECT_WS_URL="$(aws cloudformation describe-stacks --region "$REGION" \
     --stack-name pocketshell-relay \
-    --query "Stacks[0].Outputs[?OutputKey=='WsUrl'].OutputValue" --output text 2>/dev/null)"
+    --query "Stacks[0].Outputs[?OutputKey=='WsUrl'].OutputValue" --output text 2>/dev/null || true)"
   # Bare `[ ... ] && ...` would kill the script under set -e whenever the
   # stack is absent — the reason every deploy silently no-opped since this
   # line landed. An empty relay output keeps the Lambda bridge.
