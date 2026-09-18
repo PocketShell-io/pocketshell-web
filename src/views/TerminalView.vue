@@ -4,9 +4,16 @@ import { useRoute, useRouter } from 'vue-router';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { createSession } from '../terminal/session';
-import type { TerminalSession } from '../terminal/session';
+import { createSession, type TerminalSession } from '../terminal/session';
 import { decodeOsc52SetClipboard } from '../shared/osc52';
+import {
+  ackAllWarnings,
+  ackWarning,
+  fetchWarnings,
+  formatAge,
+  type AplexerWarning,
+  type HostLink,
+} from '../aplexer/warnings';
 import { config } from '../config';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
@@ -19,6 +26,16 @@ const hosts = useHostsStore();
 const termEl = ref<HTMLElement | null>(null);
 const status = ref('connecting…');
 const error = ref('');
+
+// Crash/OOM warnings from the host's aplexer (issue #1). null = nothing to
+// show — either the host has no `a` or it could not be reached, and per the
+// usage-panel principle a host without the helper is never nagged. The list
+// refreshes on connect, on tab refocus, and after every ack; the ack itself
+// is confirmed by the refetch, which is the source of truth.
+const warnings = ref<AplexerWarning[] | null>(null);
+const warnBusy = ref(false);
+const warnError = ref('');
+let warnLink: HostLink | null = null;
 
 let session: TerminalSession | null = null;
 let term: Terminal | null = null;
@@ -131,7 +148,61 @@ onMounted(async () => {
   }
   status.value = 'connected';
   term.focus();
+  warnLink = {
+    wsUrl: config.wsUrl,
+    idToken: auth.idToken,
+    host: host.hostname,
+    port: host.port,
+    user: host.user,
+    auth: bridgeAuth,
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  void refreshWarnings();
 });
+
+function onVisibility() {
+  if (!document.hidden) void refreshWarnings();
+}
+
+async function refreshWarnings() {
+  if (warnLink === null || warnBusy.value) return;
+  warnBusy.value = true;
+  try {
+    const next = await fetchWarnings(warnLink);
+    if (next === null) {
+      // Reachable before, silent now: keep the last known list rather than
+      // letting a transport blip erase a crash the user has not acked.
+      if (warnings.value !== null) warnError.value = 'Could not refresh warnings — the list may be stale.';
+    } else {
+      warnings.value = next;
+      warnError.value = '';
+    }
+  } finally {
+    warnBusy.value = false;
+  }
+}
+
+async function ack(sessionId: string) {
+  if (warnLink === null) return;
+  warnBusy.value = true;
+  try {
+    await ackWarning(warnLink, sessionId);
+  } finally {
+    warnBusy.value = false;
+  }
+  await refreshWarnings();
+}
+
+async function ackAll() {
+  if (warnLink === null) return;
+  warnBusy.value = true;
+  try {
+    await ackAllWarnings(warnLink);
+  } finally {
+    warnBusy.value = false;
+  }
+  await refreshWarnings();
+}
 
 function refit() {
   fit?.fit();
@@ -140,6 +211,7 @@ function refit() {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', refit);
+  document.removeEventListener('visibilitychange', onVisibility);
   session?.close();
   term?.dispose();
 });
@@ -153,7 +225,9 @@ function back() {
 // reached, error-red pill once the session is down or failed. It reads the
 // same string the bridge reports and changes nothing about the session.
 const BUSY_STATUSES = new Set(['connecting…', 'reconnecting…']);
-const busy = computed(() => BUSY_STATUSES.has(status.value));
+const busy = computed(
+  () => BUSY_STATUSES.has(status.value) || status.value.startsWith('host key'),
+);
 const statusState = computed(() => {
   if (status.value === 'connected') return 'is-connected';
   if (BUSY_STATUSES.has(status.value)) return 'is-busy';
@@ -175,6 +249,26 @@ const statusState = computed(() => {
         </span>
       </header>
       <div class="terminal-wrap">
+        <section v-if="warnings !== null && warnings.length > 0" class="warn-banner" role="alert">
+          <div class="warn-head">
+            <p class="warn-title">
+              {{ warnings.length }} crash warning{{ warnings.length === 1 ? '' : 's' }} on this host
+            </p>
+            <button :disabled="warnBusy" @click="ackAll">Clear all</button>
+          </div>
+          <p v-if="warnError" class="warn-stale">{{ warnError }}</p>
+          <ul class="warn-list">
+            <li v-for="w in warnings" :key="w.session" class="warn-row">
+              <span class="warn-kind" :class="w.kind === 'oom' ? 'is-oom' : 'is-crash'">
+                {{ w.kind === 'oom' ? 'OOM' : 'crash' }}
+              </span>
+              <span class="warn-sel">{{ w.workspace }}:{{ w.tag }}</span>
+              <span class="warn-detail">{{ w.detail }}</span>
+              <span class="warn-age">{{ formatAge(Date.now(), w.created_at_ms) }}</span>
+              <button :disabled="warnBusy" @click="ack(w.session)">Acknowledge</button>
+            </li>
+          </ul>
+        </section>
         <div v-if="error" class="term-notice" role="alert">
           <p class="error">{{ error }}</p>
           <button @click="back">← Hosts</button>
