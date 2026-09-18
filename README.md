@@ -71,7 +71,8 @@ reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
   has never seen it). On unlock a device merges the account's records with
   its local cache, so a key attached once is usable on every device; the
   server holds one more opaque blob it cannot open. On connect the secret
-  rides the already authenticated transport and is used once, in memory.
+  rides the already authenticated WebSocket to the bridge and is used once,
+  in memory.
   (`identityFile` in the host blob is still just a path on whatever machine
   pushed it.)
 - That bridge handling is verified in source, not asserted:
