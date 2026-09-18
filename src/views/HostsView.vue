@@ -76,6 +76,12 @@ function describe(host: HostEntry): string {
   return `${host.user ? `${host.user}@` : ''}${host.hostname}:${host.port}`;
 }
 
+// identityFile is the importing machine's path (often a Windows one) — the row
+// only means "this key file", so show the bare name.
+function keyFile(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
 function newHost() {
   draft.value = { name: '', hostname: '', port: '22', user: '' };
   draftIsEdit.value = false;
@@ -315,7 +321,7 @@ function open(host: HostEntry) {
             <div class="host-text">
               <div class="name">{{ host.name }}</div>
               <div class="meta">
-                {{ describe(host) }}<template v-if="host.identityFile"> · key {{ host.identityFile }}</template
+                {{ describe(host) }}<template v-if="host.identityFile"> · key {{ keyFile(host.identityFile) }}</template
                 ><template v-if="!hosts.secretHosts.includes(host.name)"> · key needed</template>
               </div>
             </div>
@@ -400,7 +406,7 @@ function open(host: HostEntry) {
                 <label v-for="p in parsed!.hosts" :key="p.entry.name" class="import-row">
                   <input v-model="selectedNames" type="checkbox" :value="p.entry.name" />
                   <span class="import-name">{{ p.entry.name }}</span>
-                  <span class="meta">{{ describe(p.entry) }}<template v-if="p.entry.identityFile"> · key {{ p.entry.identityFile }}</template></span>
+                  <span class="meta">{{ describe(p.entry) }}<template v-if="p.entry.identityFile"> · key {{ keyFile(p.entry.identityFile) }}</template></span>
                   <span v-if="isSynced(p.entry.name)" class="tag">already synced</span>
                 </label>
               </div>
