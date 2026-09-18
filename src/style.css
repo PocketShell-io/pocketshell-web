@@ -854,6 +854,14 @@ details.keybox textarea {
   .host-row .actions button.primary:last-child:nth-child(3) {
     grid-column: 1 / -1;
   }
+
+  /* Phone rows put state over provenance: the key's origin file is the first
+     thing the end-ellipsis eats on an IP-length user@host:port, so drop the
+     name and let "key needed" survive. Wider screens keep the full line. */
+  .host-row .key-name,
+  .import-row .key-name {
+    display: none;
+  }
 }
 
 /* ---- /term: the terminal screen (per-screen block, round-2) ----

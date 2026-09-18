@@ -321,7 +321,7 @@ function open(host: HostEntry) {
             <div class="host-text">
               <div class="name">{{ host.name }}</div>
               <div class="meta">
-                {{ describe(host) }}<template v-if="host.identityFile"> · key {{ keyFile(host.identityFile) }}</template
+                {{ describe(host) }}<span v-if="host.identityFile" class="key-name"> · key {{ keyFile(host.identityFile) }}</span
                 ><template v-if="!hosts.secretHosts.includes(host.name)"> · key needed</template>
               </div>
             </div>
@@ -406,7 +406,7 @@ function open(host: HostEntry) {
                 <label v-for="p in parsed!.hosts" :key="p.entry.name" class="import-row">
                   <input v-model="selectedNames" type="checkbox" :value="p.entry.name" />
                   <span class="import-name">{{ p.entry.name }}</span>
-                  <span class="meta">{{ describe(p.entry) }}<template v-if="p.entry.identityFile"> · key {{ keyFile(p.entry.identityFile) }}</template></span>
+                  <span class="meta">{{ describe(p.entry) }}<span v-if="p.entry.identityFile" class="key-name"> · key {{ keyFile(p.entry.identityFile) }}</span></span>
                   <span v-if="isSynced(p.entry.name)" class="tag">already synced</span>
                 </label>
               </div>
