@@ -23,6 +23,7 @@ wss.on('connection', (ws, req) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const host = url.searchParams.get('host');
   const target = Number(url.searchParams.get('port') ?? 22);
+  console.log(`relay: connection for ${host}:${target}`);
   if (host === null || host === '' || !Number.isInteger(target) || target < 1 || target > 65535) {
     ws.close(1008, 'bad target');
     return;
@@ -52,10 +53,14 @@ wss.on('connection', (ws, req) => {
     }
   };
   ws.on('close', bye);
-  ws.on('error', bye);
-  upstream.on('error', () => {
+  ws.on('error', (err) => {
+    console.log(`relay: ws error ${err.message}`);
+    bye();
+  });
+  upstream.on('error', (err) => {
     // The SSH client sees a closed transport, which it reports as a
     // handshake failure — no upstream details leak through.
+    console.log(`relay: upstream error ${err.message}`);
     ws.close(1011, 'upstream failed');
     bye();
   });

@@ -1,7 +1,7 @@
 {
   "name": "pocketshell-web",
   "version": "0.1.0",
-  "description": "Web port of PocketShell \u2014 Google login, synced hosts, browser terminal over a Lambda SSH bridge.",
+  "description": "Web port of PocketShell — Google login, synced hosts, browser terminal over a Lambda SSH bridge.",
   "license": "MIT",
   "author": "Alexey Grigorev <alexey.s.grigoriev@gmail.com>",
   "private": true,
@@ -20,6 +20,7 @@
     "@xterm/xterm": "6.0.0",
     "pinia": "2.3.0",
     "ssh2": "^1.17.0",
+    "tweetnacl": "^1.0.3",
     "vue": "3.5.13",
     "vue-router": "4.5.0"
   },
@@ -28,11 +29,15 @@
     "@types/ssh2": "^1.15.6",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "5.2.1",
+    "buffer": "^6.0.3",
     "typescript": "5.7.2",
     "vite": "6.0.7",
     "vite-plugin-node-polyfills": "^0.28.0",
     "vitest": "^2.1.9",
     "vue-tsc": "2.2.0",
     "ws": "^8.21.3"
+  },
+  "overrides": {
+    "buffer": "$buffer"
   }
 }
