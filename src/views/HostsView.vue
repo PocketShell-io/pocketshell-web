@@ -366,7 +366,9 @@ function open(host: HostEntry) {
         </div>
         <label class="unlock-remember">
           <input v-model="remember" type="checkbox" />
-          <span>Remember the passphrase on this computer</span>
+          <!-- The nbsp binds "this computer" so the 390px wrap point leaves
+               two words on line 2, not a lone-word orphan. -->
+          <span>Remember the passphrase on this&nbsp;computer</span>
         </label>
         <p class="unlock-remember-hint">
           Stored encrypted with a key only this browser holds — the server never sees it.
