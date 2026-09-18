@@ -64,11 +64,16 @@ reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
 - A key's own passphrase (for encrypted OpenSSH keys) is collected in the
   same dialog and stored under the same envelope as the key it unlocks; on
   connect both ride the bridge's `connect` frame (`auth.passphrase`).
-- SSH key material never syncs (`identityFile` in the blob is a path on
-  whatever machine pushed it). The browser asks for a key or password per
+- Key material syncs, encrypted: the browser asks for a key or password per
   host and stores it in `localStorage`, encrypted with the sync passphrase
-  using the same envelope scheme. On connect it rides the already
-  authenticated WebSocket to the bridge and is used once, in memory.
+  using the same envelope scheme — and pushes that envelope to the second
+  settings slot (`keys`), which only web clients read (the desktop's parser
+  has never seen it). On unlock a device merges the account's records with
+  its local cache, so a key attached once is usable on every device; the
+  server holds one more opaque blob it cannot open. On connect the secret
+  rides the already authenticated transport and is used once, in memory.
+  (`identityFile` in the host blob is still just a path on whatever machine
+  pushed it.)
 - That bridge handling is verified in source, not asserted:
   `aws-infra/sandbox/pocketshell-web/lambda/index.mjs` feeds the `connect`
   frame's key/password straight into the ssh2 client — never onto the
@@ -80,10 +85,11 @@ reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
   The ID token rides the `?token=` query string; the WebSocket API stage has
   no access logging configured, so the token is not written to logs either.
 - Stored credentials are deletable per host: "Remove key" on the Hosts
-  screen re-encrypts the browser's envelope without that credential.
-  Signing out clears the session token and in-memory state but keeps the
-  encrypted envelope in `localStorage` — it is useless without the sync
-  passphrase, and clearing site data removes it entirely.
+  screen re-encrypts both envelopes — the local cache and the account's
+  `keys` slot — without that credential. Signing out clears the session
+  token and in-memory state but keeps the encrypted local envelope — it is
+  useless without the sync passphrase, and clearing site data removes it
+  entirely.
 - `tests/publicClaims.test.ts` pins the public copy to this model: every
   key-safety surface must disclose the bridge hop, and absolute
   "keys never leave your browser" claims must not reappear.

@@ -310,7 +310,7 @@ function open(host: HostEntry) {
         <!-- One quiet confirmation idiom; spacing, not boxes, separates them. -->
         <p v-if="hostSaved" class="notice" role="status">Saved {{ hostSaved }} to your account — desktops pick it up on their next sync.</p>
         <p v-if="importDone" class="notice" role="status">{{ importDone }}</p>
-        <p v-if="keySaved" class="notice" role="status">Key for {{ keySaved }} stored in this browser.</p>
+        <p v-if="keySaved" class="notice" role="status">Key for {{ keySaved }} stored encrypted and synced to your account.</p>
         <p v-if="keyRemoved" class="notice" role="status">Key for {{ keyRemoved }} removed from this browser.</p>
 
         <!-- The list, in the landing's own hosts-mock: one bordered card with
@@ -422,8 +422,8 @@ function open(host: HostEntry) {
             <div v-else>
               <p class="muted import-hint">
                 {{ missingCredentials.length }} imported {{ missingCredentials.length === 1 ? 'host has' : 'hosts have' }}
-                no key in this browser yet — without one they can't connect from here. Keys are stored encrypted and only
-                sent to the bridge when you connect.
+                no key on this device yet — without one they can't connect from here. Keys are stored encrypted, sync
+                with your account, and are only sent to the bridge when you connect.
               </p>
               <div class="import-list">
                 <div v-for="name in missingCredentials" :key="name" class="import-row">
@@ -445,7 +445,7 @@ function open(host: HostEntry) {
         <details v-if="keyHost" class="keybox" open>
           <summary><span class="sumtitle">Private key for {{ keyHost.name }}</span></summary>
           <div class="cardbox-body">
-            <p class="card-lede">Stored encrypted in this browser; sent to the bridge only when you connect.</p>
+            <p class="card-lede">Stored encrypted, synced to your account; sent to the bridge only when you connect.</p>
             <div class="keyfile-row">
               <div class="field">
                 <label class="flabel" for="kf-file">Key file</label>

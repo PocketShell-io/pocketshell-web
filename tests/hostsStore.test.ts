@@ -28,13 +28,21 @@ vi.hoisted(() => {
 
 const fake = vi.hoisted(() => ({
   pulls: [] as ({ version: number; plaintext: string } | null)[],
+  /** Blobs for the `keys` slot (roaming secrets) — a separate queue because
+   * unlock now pulls both slots. */
+  keyPulls: [] as ({ version: number; plaintext: string } | null)[],
   pushResults: [] as ('ok' | 'conflict')[],
+  keyPushResults: [] as ('ok' | 'conflict')[],
   pushes: [] as { envelope: string; baseVersion: number }[],
+  keyPushes: [] as { envelope: string; baseVersion: number }[],
   nextVersion: 0,
   reset() {
     fake.pulls.length = 0;
+    fake.keyPulls.length = 0;
     fake.pushResults.length = 0;
+    fake.keyPushResults.length = 0;
     fake.pushes.length = 0;
+    fake.keyPushes.length = 0;
     fake.nextVersion = 0;
   },
 }));
@@ -50,10 +58,14 @@ vi.mock('../src/api/sync', () => {
   return {
     SyncConflictError,
     makeSyncService: () => ({
-      pull: () => Promise.resolve(fake.pulls.length === 0 ? null : fake.pulls.shift()),
-      push: (_slot: string, envelope: string, baseVersion: number) => {
-        fake.pushes.push({ envelope, baseVersion });
-        const outcome = fake.pushResults.shift() ?? 'ok';
+      pull: (slot: string) => {
+        if (slot === 'keys') return Promise.resolve(fake.keyPulls.shift() ?? null);
+        return Promise.resolve(fake.pulls.length === 0 ? null : fake.pulls.shift());
+      },
+      push: (slot: string, envelope: string, baseVersion: number) => {
+        const main = slot !== 'keys';
+        (main ? fake.pushes : fake.keyPushes).push({ envelope, baseVersion });
+        const outcome = (main ? fake.pushResults : fake.keyPushResults).shift() ?? 'ok';
         if (outcome === 'conflict') return Promise.reject(new SyncConflictError(++fake.nextVersion));
         return Promise.resolve({ version: ++fake.nextVersion });
       },
