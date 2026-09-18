@@ -61,6 +61,9 @@ export const useHostsStore = defineStore('hosts', {
     /** The merged credential map this session works from. */
     secrets: {} as Record<string, HostSecret>,
     keyVersion: 0,
+    /** This browser holds the sync passphrase in the passphraseVault, so the
+     * topbar can offer to forget it. Storage itself lives in the vault. */
+    passphraseRemembered: false,
   }),
   getters: {
     unlocked: (s) => s.pulled && s.passphrase !== '',
@@ -261,6 +264,10 @@ export const useHostsStore = defineStore('hosts', {
       this.secretHosts = [];
       this.secrets = {};
       this.keyVersion = 0;
+      // The vault itself survives sign-out: the saved passphrase is bound to
+      // this browser AND this Google account, so the next sign-in with the
+      // same account auto-unlocks. The topbar's Forget is the explicit path.
+      this.passphraseRemembered = false;
     },
   },
 });
