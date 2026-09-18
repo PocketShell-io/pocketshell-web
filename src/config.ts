@@ -7,6 +7,8 @@ export interface AppConfig {
   syncApiUrl: string;
   googleClientId: string;
   wsUrl: string;
+  /** Browser-direct relay (wss://...). Empty = use the Lambda bridge. */
+  directWsUrl: string;
 }
 
 declare global {
@@ -15,12 +17,15 @@ declare global {
   }
 }
 
-const raw = window.POCKETSHELL_WEB ?? {};
+// Guarded so node-env unit tests can import modules that reach config
+// transitively (the aplexer runner imports the bridge for its types).
+const raw = (typeof window === 'undefined' ? undefined : window.POCKETSHELL_WEB) ?? {};
 
 export const config: AppConfig = {
   syncApiUrl: raw.syncApiUrl ?? SYNC_API_URL,
   googleClientId: raw.googleClientId ?? '',
   wsUrl: raw.wsUrl ?? '',
+  directWsUrl: raw.directWsUrl ?? '',
 };
 
 export function isConfigured(): boolean {
