@@ -10,4 +10,6 @@ window.POCKETSHELL_WEB = {
   syncApiUrl: 'https://a7sota2qic.execute-api.eu-west-1.amazonaws.com',
   googleClientId: '1035162854462-kkqius5o2ni136ed6l58iig5pdpeh4u6.apps.googleusercontent.com',
   wsUrl: '',
+  // Browser-direct relay (wss://...); empty keeps the Lambda bridge.
+  directWsUrl: '',
 };

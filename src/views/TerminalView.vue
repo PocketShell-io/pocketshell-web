@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { BridgeSession } from '../terminal/bridge';
+import { createSession } from '../terminal/session';
+import type { TerminalSession } from '../terminal/session';
 import { decodeOsc52SetClipboard } from '../shared/osc52';
 import { config } from '../config';
 import { useAuthStore } from '../stores/auth';
@@ -19,7 +20,7 @@ const termEl = ref<HTMLElement | null>(null);
 const status = ref('connecting…');
 const error = ref('');
 
-let session: BridgeSession | null = null;
+let session: TerminalSession | null = null;
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 
@@ -94,7 +95,11 @@ onMounted(async () => {
     return message;
   };
 
-  session = new BridgeSession(config.wsUrl, auth.idToken, {
+  // A configured relay means browser-direct: the SSH client runs here and
+  // the relay is a dumb ciphertext pipe; otherwise the Lambda bridge runs
+  // the SSH client and the key rides the connect frame.
+  const directUrl = config.directWsUrl;
+  session = await createSession(directUrl !== '' ? 'direct' : 'bridge', directUrl !== '' ? directUrl : config.wsUrl, auth.idToken, {
     onData: (bytes) => term?.write(bytes),
     onExit: () => {
       status.value = 'disconnected';
