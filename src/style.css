@@ -44,19 +44,21 @@ button:hover,
   background: #30363d;
 }
 
+/* Primary text is #fff everywhere: inherited #e6edf3 measured 3.92:1 on the
+   fill (AA needs 4.5) while #fff measures 4.63. Hover darkens rather than
+   lightens — #388bfd fell to 2.83:1, and #1663d2 (same hue as the rest
+   fill) holds 5.60:1. */
 button.primary,
 .button.primary {
   background: #1f6feb;
   border-color: #1f6feb;
-}
-
-.button.primary {
   color: #fff;
 }
 
 button.primary:hover,
 .button.primary:hover {
-  background: #388bfd;
+  background: #1663d2;
+  border-color: #1663d2;
 }
 
 button:disabled,
