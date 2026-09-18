@@ -38,3 +38,14 @@ bundle only in direct mode).
 - The worker holds no state between messages; a dropped TCP leg closes the
   WebSocket and the client sees a clean session end.
 - Google JWKS responses are cached at the edge for an hour.
+
+## Production deploy (AWS)
+
+The deployed relay is not this Worker but its protocol twin:
+`aws-infra/sandbox/pocketshell-relay` (`relay.go` — same wire contract and
+token checks, plus a fail-closed email allowlist) on a t4g.nano behind
+`wss://relay.pocketshell.io/`, TLS via in-process ACME, no SSH port,
+administered over SSM. `./deploy.sh` there provisions the stack, ships the
+arm64 binary via S3+SSM, and health-gates on the protocol's 426. This
+Worker remains the portable reference; the app consumes either one the
+same way, via `directWsUrl`.
