@@ -25,7 +25,10 @@ if [ ! "${DIRECT_WS_URL+x}" = x ]; then
   DIRECT_WS_URL="$(aws cloudformation describe-stacks --region "$REGION" \
     --stack-name pocketshell-relay \
     --query "Stacks[0].Outputs[?OutputKey=='WsUrl'].OutputValue" --output text 2>/dev/null)"
-  [ "$DIRECT_WS_URL" = "None" ] && DIRECT_WS_URL=""
+  # Bare `[ ... ] && ...` would kill the script under set -e whenever the
+  # stack is absent — the reason every deploy silently no-opped since this
+  # line landed. An empty relay output keeps the Lambda bridge.
+  if [ "$DIRECT_WS_URL" = "None" ]; then DIRECT_WS_URL=""; fi
 fi
 
 [ -n "$SITE_BUCKET" ] || { echo "SITE_BUCKET not set and stack not deployed" >&2; exit 1; }
