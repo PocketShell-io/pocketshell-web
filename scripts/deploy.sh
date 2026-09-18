@@ -18,6 +18,15 @@ stack_output() {
 SITE_BUCKET="${SITE_BUCKET:-$(stack_output SiteBucketName)}"
 CF_DISTRIBUTION_ID="${CF_DISTRIBUTION_ID:-$(stack_output SiteDistributionId)}"
 WS_URL="${WS_URL:-$(stack_output WsUrl)}"
+# Browser-direct relay (aws-infra sandbox/pocketshell-relay). Auto-detected
+# from its stack output once that stack exists; DIRECT_WS_URL=... overrides,
+# DIRECT_WS_URL='' forces empty (bridge only).
+if [ ! "${DIRECT_WS_URL+x}" = x ]; then
+  DIRECT_WS_URL="$(aws cloudformation describe-stacks --region "$REGION" \
+    --stack-name pocketshell-relay \
+    --query "Stacks[0].Outputs[?OutputKey=='WsUrl'].OutputValue" --output text 2>/dev/null)"
+  [ "$DIRECT_WS_URL" = "None" ] && DIRECT_WS_URL=""
+fi
 
 [ -n "$SITE_BUCKET" ] || { echo "SITE_BUCKET not set and stack not deployed" >&2; exit 1; }
 [ -n "$CF_DISTRIBUTION_ID" ] || { echo "CF_DISTRIBUTION_ID not set" >&2; exit 1; }
@@ -26,10 +35,10 @@ npm run build
 
 # config.js is generated at deploy time so rotations do not need code changes.
 cp public/config.js dist/config.js
-python3 - "$WS_URL" <<'EOF'
+python3 - "$WS_URL" "$DIRECT_WS_URL" <<'EOF'
 import json, sys, pathlib
 path = pathlib.Path("dist/config.js")
-cfg = {"syncApiUrl": "https://a7sota2qic.execute-api.eu-west-1.amazonaws.com", "googleClientId": "1035162854462-kkqius5o2ni136ed6l58iig5pdpeh4u6.apps.googleusercontent.com", "wsUrl": sys.argv[1] if len(sys.argv) > 1 else ""}
+cfg = {"syncApiUrl": "https://a7sota2qic.execute-api.eu-west-1.amazonaws.com", "googleClientId": "1035162854462-kkqius5o2ni136ed6l58iig5pdpeh4u6.apps.googleusercontent.com", "wsUrl": sys.argv[1] if len(sys.argv) > 1 else "", "directWsUrl": sys.argv[2] if len(sys.argv) > 2 else ""}
 existing = path.read_text() if path.exists() else ""
 try:
     merged = json.loads(existing.split("=", 1)[1].strip().rstrip(";")) if existing else {}
