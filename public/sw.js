@@ -36,10 +36,27 @@ self.addEventListener('message', (e) => {
     const settle = msg && Number.isInteger(msg.id) ? pending.get(msg.id) : null;
     if (settle) {
       pending.delete(msg.id);
-      settle(msg);
+      settle(responseFromMsg(msg));
     }
   };
 });
+
+/** The app tab answers with {status, statusText, headers, body}; that is a
+ * plain object, and respondWith needs a real Response. */
+function responseFromMsg(msg) {
+  if (!msg || typeof msg.status !== 'number' || msg.status < 200 || msg.status > 599) {
+    return statusPage(502, 'The app tab returned no usable answer — reload this page.');
+  }
+  const headers = new Headers();
+  for (const pair of msg.headers || []) {
+    try {
+      headers.append(pair[0], pair[1]);
+    } catch {
+      // a header the browser refuses to synthesize; skip it
+    }
+  }
+  return new Response(msg.body ?? null, { status: msg.status, statusText: msg.statusText || '', headers });
+}
 
 async function nudgeClients() {
   const list = await self.clients.matchAll({ type: 'window' });
