@@ -2777,3 +2777,1101 @@ button.dir-row {
     padding-bottom: 14px;
   }
 }
+
+/* -------------------------------------------------------------------------
+   Sessions workspace (web parity with the desktop's host workspace): the
+   sidebar lists the host's live sessions grouped by workspace, the tab
+   strip carries one terminal per joined session, and the status bar reads
+   the active tab's selector, engine, and phase. Same tokens as the rest of
+   the app: #0d1117 ground, #161b22 chrome, #30363d hairlines, mono fine
+   text, 44px touch floors.
+   ------------------------------------------------------------------------- */
+
+.ws-card {
+  /* The workspace needs room for sidebar + terminal; the 860px terminal
+     measure is the plain-shell shape. */
+  max-width: 1240px;
+}
+
+/* Sidebar toggle: a topbar control on touch/narrow widths only. Pointer
+   widths show the sidebar permanently. */
+.ws-sidebar-toggle {
+  padding: 8px 12px;
+  font-size: var(--text-small);
+}
+
+.ws-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  background: #0d1117;
+}
+
+.ws-sidebar {
+  flex: none;
+  width: 280px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 10px 16px;
+  background: #161b22;
+  border-right: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+}
+
+.ws-side-title {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b949e;
+}
+
+.ws-new {
+  padding: 8px 12px;
+  font-size: var(--text-small);
+}
+
+.ws-side-empty {
+  margin: 4px 6px;
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+
+.ws-tree,
+.ws-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The workspace row is a grouping header: its full path in mono, the count
+   beside it, no disclosure mark — clicking a session is the only action. */
+.ws-group-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 6px 2px;
+  min-width: 0;
+}
+
+.ws-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.ws-group-count {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.ws-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: #e6edf3;
+  cursor: pointer;
+}
+
+.ws-row:hover {
+  background: #21262d;
+}
+
+/* The selection rail: the folder row's accent rule, at 2px inside the
+   button's rounded frame. */
+.ws-row.is-active {
+  background: #1c2431;
+  box-shadow: inset 2px 0 0 #58a6ff;
+}
+
+.ws-row-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #30363d;
+}
+
+.ws-row-dot.is-live {
+  background: #3fb950;
+}
+
+.ws-row-dot.is-idle {
+  background: #8b949e;
+}
+
+.ws-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-small);
+}
+
+.ws-row-engine {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #a371f7;
+}
+
+.ws-row-age {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.ws-row-actions {
+  flex: none;
+  display: none;
+  gap: 2px;
+}
+
+.ws-row:hover .ws-row-actions,
+.ws-row.is-active .ws-row-actions,
+.ws-row:focus-within .ws-row-actions {
+  display: inline-flex;
+}
+
+.ws-row-act {
+  flex: none;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: #8b949e;
+  cursor: pointer;
+}
+
+.ws-row-act:hover {
+  color: #e6edf3;
+  background: #30363d;
+}
+
+.ws-row-act.is-danger:hover {
+  color: #f85149;
+}
+
+/* Main column: tab strip, terminals, status bar. */
+.ws-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-tabbar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid #30363d;
+  background: #0d1117;
+  scrollbar-width: none;
+}
+
+.ws-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  font: inherit;
+  color: #8b949e;
+  cursor: pointer;
+}
+
+.ws-tab:hover {
+  background: #161b22;
+  color: #e6edf3;
+}
+
+.ws-tab.is-active {
+  background: #161b22;
+  border-bottom-color: #58a6ff;
+  color: #e6edf3;
+}
+
+.ws-tab.is-dead {
+  color: #6e7681;
+}
+
+.ws-tab-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #30363d;
+}
+
+.ws-tab-dot.is-live {
+  background: #3fb950;
+}
+
+.ws-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-small);
+}
+
+.ws-tab-phase {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #6e7681;
+}
+
+.ws-tab-close {
+  flex: none;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.ws-tab-close:hover {
+  background: #30363d;
+  color: #f85149;
+}
+
+.ws-tabbar-spacer {
+  flex: 1;
+}
+
+.ws-tab-refresh {
+  flex: none;
+  min-width: 40px;
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: #8b949e;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.ws-tab-refresh:hover {
+  color: #e6edf3;
+}
+
+.ws-action-error {
+  flex: none;
+  margin: 0;
+  padding: 8px 14px;
+  background: #2d1215;
+  border-bottom: 1px solid #f85149;
+  color: #f85149;
+  font-size: var(--text-small);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-action-error button {
+  margin-left: auto;
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* The terminal stage: one pane per tab, exactly one visible. The panes are
+   absolutely positioned so xterm's fit measures a stable box whatever the
+   tab strip's width is doing. */
+.ws-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.ws-pane {
+  position: absolute;
+  inset: 0;
+  padding: 6px 8px;
+}
+
+.ws-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+}
+
+.ws-placeholder-title {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.ws-placeholder .muted {
+  margin: 0;
+  font-size: var(--text-small);
+}
+
+.ws-placeholder .button {
+  margin-top: 6px;
+}
+
+/* Status bar: the desktop's bottom strip in this app's fine mono voice. */
+.ws-statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 4px 14px;
+  border-top: 1px solid #30363d;
+  background: #161b22;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ws-status-sel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #e6edf3;
+}
+
+.ws-status-engine {
+  flex: none;
+  color: #a371f7;
+}
+
+.ws-status-phase {
+  flex: none;
+  color: #8b949e;
+}
+
+.ws-status-phase.is-live {
+  color: #3fb950;
+}
+
+.ws-status-count {
+  flex: none;
+  margin-left: auto;
+}
+
+/* Dialogs: one overlay idiom for new/rename/stop. */
+.ws-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(1, 4, 9, 0.72);
+}
+
+.ws-dialog {
+  width: 100%;
+  max-width: 440px;
+  padding: 18px 20px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  box-shadow: 0 24px 64px rgba(1, 4, 9, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ws-dialog h2 {
+  margin: 0 0 4px;
+  font-size: var(--text-lede, 18px);
+}
+
+.ws-dialog input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font: inherit;
+  font-family: ui-monospace, monospace;
+}
+
+.ws-dialog .flabel {
+  margin-top: 6px;
+}
+
+.ws-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Touch and narrow widths: the sidebar becomes a drawer over the terminal,
+   revealed by the topbar toggle; rows and tabs keep their 44px floors. */
+@media (max-width: 900px) {
+  .ws-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: min(320px, 86vw);
+    transform: translateX(-102%);
+    transition: transform 0.18s ease;
+    box-shadow: 0 16px 48px rgba(1, 4, 9, 0.6);
+  }
+
+  .ws-body.is-sidebar-open .ws-sidebar {
+    transform: none;
+  }
+
+  .ws-row-actions {
+    display: inline-flex;
+  }
+}
+
+@media (min-width: 901px) {
+  .ws-sidebar-toggle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-sidebar {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .ws-card {
+    max-width: none;
+  }
+
+  .ws-sidebar-toggle {
+    padding: 10px 12px;
+  }
+
+  .ws-tab {
+    max-width: 160px;
+  }
+
+  .ws-statusbar {
+    font-size: 12px;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Sessions workspace (web parity with the desktop's host workspace): the
+   sidebar lists the host's live sessions grouped by workspace, the tab
+   strip carries one terminal per joined session, and the status bar reads
+   the active tab's selector, engine, and phase. Same tokens as the rest of
+   the app: #0d1117 ground, #161b22 chrome, #30363d hairlines, mono fine
+   text, 44px touch floors.
+   ------------------------------------------------------------------------- */
+
+.ws-card {
+  /* The workspace needs room for sidebar + terminal; the 860px terminal
+     measure is the plain-shell shape. */
+  max-width: 1240px;
+}
+
+/* Sidebar toggle: a topbar control on touch/narrow widths only. Pointer
+   widths show the sidebar permanently. */
+.ws-sidebar-toggle {
+  padding: 8px 12px;
+  font-size: var(--text-small);
+}
+
+.ws-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  background: #0d1117;
+}
+
+.ws-sidebar {
+  flex: none;
+  width: 280px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 10px 16px;
+  background: #161b22;
+  border-right: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ws-side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+}
+
+.ws-side-title {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b949e;
+}
+
+.ws-new {
+  padding: 8px 12px;
+  font-size: var(--text-small);
+}
+
+.ws-side-empty {
+  margin: 4px 6px;
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+
+.ws-tree,
+.ws-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The workspace row is a grouping header: its full path in mono, the count
+   beside it, no disclosure mark — clicking a session is the only action. */
+.ws-group-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 6px 2px;
+  min-width: 0;
+}
+
+.ws-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.ws-group-count {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.ws-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: #e6edf3;
+  cursor: pointer;
+}
+
+.ws-row:hover {
+  background: #21262d;
+}
+
+/* The selection rail: the folder row's accent rule, at 2px inside the
+   button's rounded frame. */
+.ws-row.is-active {
+  background: #1c2431;
+  box-shadow: inset 2px 0 0 #58a6ff;
+}
+
+.ws-row-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #30363d;
+}
+
+.ws-row-dot.is-live {
+  background: #3fb950;
+}
+
+.ws-row-dot.is-idle {
+  background: #8b949e;
+}
+
+.ws-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-small);
+}
+
+.ws-row-engine {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #a371f7;
+}
+
+.ws-row-age {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  color: #8b949e;
+}
+
+.ws-row-actions {
+  flex: none;
+  display: none;
+  gap: 2px;
+}
+
+.ws-row:hover .ws-row-actions,
+.ws-row.is-active .ws-row-actions,
+.ws-row:focus-within .ws-row-actions {
+  display: inline-flex;
+}
+
+.ws-row-act {
+  flex: none;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: #8b949e;
+  cursor: pointer;
+}
+
+.ws-row-act:hover {
+  color: #e6edf3;
+  background: #30363d;
+}
+
+.ws-row-act.is-danger:hover {
+  color: #f85149;
+}
+
+/* Main column: tab strip, terminals, status bar. */
+.ws-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-tabbar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid #30363d;
+  background: #0d1117;
+  scrollbar-width: none;
+}
+
+.ws-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  font: inherit;
+  color: #8b949e;
+  cursor: pointer;
+}
+
+.ws-tab:hover {
+  background: #161b22;
+  color: #e6edf3;
+}
+
+.ws-tab.is-active {
+  background: #161b22;
+  border-bottom-color: #58a6ff;
+  color: #e6edf3;
+}
+
+.ws-tab.is-dead {
+  color: #6e7681;
+}
+
+.ws-tab-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #30363d;
+}
+
+.ws-tab-dot.is-live {
+  background: #3fb950;
+}
+
+.ws-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-small);
+}
+
+.ws-tab-phase {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #6e7681;
+}
+
+.ws-tab-close {
+  flex: none;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.ws-tab-close:hover {
+  background: #30363d;
+  color: #f85149;
+}
+
+.ws-tabbar-spacer {
+  flex: 1;
+}
+
+.ws-tab-refresh {
+  flex: none;
+  min-width: 40px;
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: #8b949e;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.ws-tab-refresh:hover {
+  color: #e6edf3;
+}
+
+.ws-action-error {
+  flex: none;
+  margin: 0;
+  padding: 8px 14px;
+  background: #2d1215;
+  border-bottom: 1px solid #f85149;
+  color: #f85149;
+  font-size: var(--text-small);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-action-error button {
+  margin-left: auto;
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* The terminal stage: one pane per tab, exactly one visible. The panes are
+   absolutely positioned so xterm's fit measures a stable box whatever the
+   tab strip's width is doing. */
+.ws-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.ws-pane {
+  position: absolute;
+  inset: 0;
+  padding: 6px 8px;
+}
+
+.ws-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+}
+
+.ws-placeholder-title {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.ws-placeholder .muted {
+  margin: 0;
+  font-size: var(--text-small);
+}
+
+.ws-placeholder .button {
+  margin-top: 6px;
+}
+
+/* Status bar: the desktop's bottom strip in this app's fine mono voice. */
+.ws-statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 4px 14px;
+  border-top: 1px solid #30363d;
+  background: #161b22;
+  font-family: ui-monospace, monospace;
+  font-size: var(--text-fine);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ws-status-sel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #e6edf3;
+}
+
+.ws-status-engine {
+  flex: none;
+  color: #a371f7;
+}
+
+.ws-status-phase {
+  flex: none;
+  color: #8b949e;
+}
+
+.ws-status-phase.is-live {
+  color: #3fb950;
+}
+
+.ws-status-count {
+  flex: none;
+  margin-left: auto;
+}
+
+/* Dialogs: one overlay idiom for new/rename/stop. */
+.ws-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(1, 4, 9, 0.72);
+}
+
+.ws-dialog {
+  width: 100%;
+  max-width: 440px;
+  padding: 18px 20px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  box-shadow: 0 24px 64px rgba(1, 4, 9, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ws-dialog h2 {
+  margin: 0 0 4px;
+  font-size: var(--text-lede, 18px);
+}
+
+.ws-dialog input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font: inherit;
+  font-family: ui-monospace, monospace;
+}
+
+.ws-dialog .flabel {
+  margin-top: 6px;
+}
+
+.ws-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Touch and narrow widths: the sidebar becomes a drawer over the terminal,
+   revealed by the topbar toggle; rows and tabs keep their 44px floors. */
+@media (max-width: 900px) {
+  .ws-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: min(320px, 86vw);
+    transform: translateX(-102%);
+    transition: transform 0.18s ease;
+    box-shadow: 0 16px 48px rgba(1, 4, 9, 0.6);
+  }
+
+  .ws-body.is-sidebar-open .ws-sidebar {
+    transform: none;
+  }
+
+  .ws-row-actions {
+    display: inline-flex;
+  }
+}
+
+@media (min-width: 901px) {
+  .ws-sidebar-toggle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-sidebar {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .ws-card {
+    max-width: none;
+  }
+
+  .ws-sidebar-toggle {
+    padding: 10px 12px;
+  }
+
+  .ws-tab {
+    max-width: 160px;
+  }
+
+  .ws-statusbar {
+    font-size: 12px;
+  }
+}

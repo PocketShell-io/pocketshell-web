@@ -14,6 +14,7 @@ import net from 'node:net';
 import { WebSocketServer } from 'ws';
 import { Server as SshServer } from 'ssh2';
 import { DirectSshSession } from '../src/terminal/direct';
+import { SshConnection } from '../src/terminal/connection';
 import type { SessionHandlers } from '../src/terminal/session';
 
 const HOME_DIR = mkdtempSync(join(tmpdir(), 'directssh-'));
@@ -39,12 +40,27 @@ beforeAll(async () => {
       client.on('session', (accept) => {
         const session = accept();
         // Real sshd always grants these; ssh2's server rejects what no
-        // listener accepts.
-        session.on('pty', (acceptPty) => acceptPty());
+        // listener accepts. The PTY of an exec-with-pty request arrives
+        // here, before the exec — the exec's own info does not carry it.
+        let ptySeen = false;
+        session.on('pty', (acceptPty) => {
+          ptySeen = true;
+          acceptPty();
+        });
         session.on('window-change', (acceptResize) => acceptResize());
         session.once('shell', (acceptShell) => {
           const stream = acceptShell();
           stream.on('data', (chunk: Buffer) => stream.write(`ECHO:${chunk.toString()}`));
+        });
+        // The workspace's exec channels: answer with the command itself so
+        // the test asserts what travelled, plus whether a PTY preceded it.
+        session.on('exec', (acceptExec, _reject, info) => {
+          const stream = acceptExec();
+          stream.write(`CMD:${info.command}`);
+          if (ptySeen) stream.write(`\nPTY:yes`);
+          stream.stderr?.write(`ERR:${info.command}`);
+          stream.exit(0);
+          stream.close();
         });
       });
     });
@@ -145,4 +161,72 @@ describe('DirectSshSession over a dumb relay', () => {
       host: '127.0.0.1', port: sshPort, user: 'alexey', auth: { kind: 'key' },
     })).rejects.toThrow(/No private key/);
   });
+});
+
+describe('SshConnection: exec and session joins over the relay', () => {
+  it('collects stdout, stderr, and the exit code; never rejects', async () => {
+    const conn = new SshConnection();
+    await conn.connect({
+      url: `ws://127.0.0.1:${relayPort}`,
+      idToken: 'test-token',
+      host: '127.0.0.1',
+      port: sshPort,
+      user: 'alexey',
+      auth: { kind: 'key', privateKey: readFileSync(USER_KEY, 'utf8'), passphrase: PASSPHRASE },
+    });
+    const out = await conn.exec(`a snapshot --json --sort accessed`);
+    expect(out.error).toBeNull();
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('CMD:a snapshot --json --sort accessed');
+    expect(out.stderr).toContain('ERR:a snapshot');
+    conn.close();
+  }, 30_000);
+
+  it('runs a join command directly under a PTY', async () => {
+    const conn = new SshConnection();
+    await conn.connect({
+      url: `ws://127.0.0.1:${relayPort}`,
+      idToken: 'test-token',
+      host: '127.0.0.1',
+      port: sshPort,
+      user: 'alexey',
+      auth: { kind: 'key', privateKey: readFileSync(USER_KEY, 'utf8'), passphrase: PASSPHRASE },
+    });
+    const received: string[] = [];
+    let resolveClosed: () => void = () => {};
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    const channel = await conn.openPty({
+      command: `( PATH="$HOME/.local/bin:$PATH"; a attach 'u1' ) || printf boom; exit`,
+      cols: 120,
+      rows: 40,
+      onData: (bytes) => received.push(new TextDecoder().decode(bytes)),
+      onExit: () => resolveClosed(),
+      onError: () => {},
+    });
+    void channel;
+    await closed;
+    const transcript = received.join('');
+    expect(transcript).toContain('CMD:');
+    expect(transcript).toContain("a attach 'u1'");
+    expect(transcript).toContain('PTY:yes');
+    conn.close();
+  }, 30_000);
+
+  it('surfaces a refused exec as error, not a rejection', async () => {
+    const conn = new SshConnection();
+    await conn.connect({
+      url: `ws://127.0.0.1:${relayPort}`,
+      idToken: 'test-token',
+      host: '127.0.0.1',
+      port: sshPort,
+      user: 'alexey',
+      auth: { kind: 'key', privateKey: readFileSync(USER_KEY, 'utf8'), passphrase: PASSPHRASE },
+    });
+    conn.close();
+    const out = await conn.exec('anything');
+    expect(out.exitCode).toBeNull();
+    expect(out.error).toContain('not open');
+  }, 30_000);
 });

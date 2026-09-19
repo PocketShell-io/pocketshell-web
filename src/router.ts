@@ -10,7 +10,7 @@ export const router = createRouter({
     { path: '/', name: 'login', component: () => import('./views/LoginView.vue') },
     { path: '/app', name: 'hosts', component: () => import('./views/HostsView.vue') },
     { path: '/login', redirect: '/' },
-    { path: '/term/:name', name: 'term', component: () => import('./views/TerminalView.vue') },
+    { path: '/term/:name', name: 'term', component: () => import('./views/TermRoute.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 });

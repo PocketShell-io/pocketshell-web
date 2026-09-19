@@ -1,0 +1,512 @@
+/**
+ * The sessions workspace controller: everything the host workspace view
+ * shows, in one framework-free class the unit tests can drive without a DOM.
+ *
+ * It owns ONE SshConnection per host visit and multiplexes it the way the
+ * desktop's main process does: a login-shell PTY per open session tab
+ * (session joins run `a attach <uuid>` directly under the PTY — the same
+ * command the desktop types, exec'd rather than typed so join latency is
+ * not dominated by profile startup), plus the snapshot/warnings execs the
+ * five-second poll rides.
+ *
+ * The panel's order contract is the desktop's (SESSIONLIST.md §6.0): the
+ * host's `--sort` order is the sidebar's order, and this controller is a
+ * fold of the snapshot, not a sort of it.
+ */
+import { aplexerAttachCommand } from '../shared/aplexer';
+import type { AplexerWarning } from '../aplexer/warningsParse';
+import { AplexerClient } from '../aplexer/client';
+import type { AplexerStartOutcome } from '../aplexer/client';
+import type { SessionSummary } from '../shared/types';
+import { SshConnection, type PtyChannel } from '../terminal/connection';
+import type { BridgeAuth } from '../terminal/bridge';
+
+/** Everything needed to reach one host. Built by the view from the synced
+ * host entry + the decrypted secret; the tests build it by hand. */
+export interface WorkspaceLink {
+  url: string;
+  idToken: string;
+  host: string;
+  port: number;
+  user: string;
+  auth: BridgeAuth;
+}
+
+/** One live session row in the sidebar. */
+export interface SessionRow {
+  id: string;
+  tag: string;
+  workspace: string;
+  engine: string;
+  phase: string;
+  createdMs: number;
+  activityMs: number;
+}
+
+/** The sidebar's folder level: sessions grouped by their workspace path,
+ * in the host's order. */
+export interface WorkspaceGroup {
+  workspace: string;
+  label: string;
+  rows: SessionRow[];
+}
+
+/** One open terminal tab. */
+export interface WorkspaceTab {
+  /** `apx:<uuid>` for a session tab, `shell` for the raw-shell tab. */
+  key: string;
+  label: string;
+  /** The workspace's trailing path component — shown under the label. */
+  subtitle: string;
+  engine: string;
+  phase: string;
+  /** The PTY channel is alive. A dead tab stays until the user closes it. */
+  live: boolean;
+}
+
+export interface ControllerState {
+  phase: 'connecting' | 'probing' | 'ready' | 'failed';
+  /** Connection-level error (handshake, transport). */
+  error: string;
+  /** Short connection word for the chrome pill ("connected", "host key …"). */
+  status: string;
+  /** The host answers `a`. Null until probed. */
+  aplexer: boolean | null;
+  groups: WorkspaceGroup[];
+  /** Flat rows in host order — the tab bar and status bar read this. */
+  rows: SessionRow[];
+  tabs: WorkspaceTab[];
+  activeKey: string | null;
+  warnings: AplexerWarning[] | null;
+  /** The warnings list could not be refreshed this tick; shown as stale. */
+  warnStale: boolean;
+  /** The last failed action (start/kill/rename), for the inline notice. */
+  actionError: string;
+  actionBusy: boolean;
+  /** Snapshot age marker, bumped every poll so the view can tick ages. */
+  tick: number;
+}
+
+export interface WorkspaceDeps {
+  link: WorkspaceLink;
+  /** Override the connection for tests. */
+  makeConnection?: () => SshConnection;
+  pollMs?: number;
+}
+
+const POLL_MS = 5_000;
+
+export class HostWorkspaceController {
+  state: ControllerState = {
+    phase: 'connecting',
+    error: '',
+    status: 'connecting…',
+    aplexer: null,
+    groups: [],
+    rows: [],
+    tabs: [],
+    activeKey: null,
+    warnings: null,
+    warnStale: false,
+    actionError: '',
+    actionBusy: false,
+    tick: 0,
+  };
+
+  private readonly conn: SshConnection;
+  private readonly client: AplexerClient;
+  private readonly pollMs: number;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private paused = false;
+  private disposed = false;
+  private readonly channels = new Map<string, PtyChannel>();
+  private readonly listeners = new Set<(state: ControllerState) => void>();
+  private readonly dataListeners = new Set<(key: string, bytes: Uint8Array) => void>();
+  private readonly exitListeners = new Set<(key: string) => void>();
+
+  constructor(private readonly deps: WorkspaceDeps) {
+    this.conn =
+      deps.makeConnection?.() ??
+      new SshConnection();
+    this.client = new AplexerClient(this.conn);
+    this.pollMs = deps.pollMs ?? POLL_MS;
+  }
+
+  onChange(cb: (state: ControllerState) => void): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  onChannelData(cb: (key: string, bytes: Uint8Array) => void): () => void {
+    this.dataListeners.add(cb);
+    return () => this.dataListeners.delete(cb);
+  }
+
+  onChannelExit(cb: (key: string) => void): () => void {
+    this.exitListeners.add(cb);
+    return () => this.exitListeners.delete(cb);
+  }
+
+  /** Connect, probe, list, and start the poll. Never throws. */
+  async start(): Promise<void> {
+    this.patch({ phase: 'connecting', status: 'connecting…' });
+    try {
+      await this.conn.connect({
+        url: this.deps.link.url,
+        idToken: this.deps.link.idToken,
+        host: this.deps.link.host,
+        port: this.deps.link.port,
+        user: this.deps.link.user,
+        auth: this.deps.link.auth,
+        onStatus: (s) => this.patch({ status: s }),
+        onClosed: () => this.onConnectionClosed(),
+      });
+    } catch (e) {
+      this.patch({
+        phase: 'failed',
+        status: 'failed',
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
+    this.patch({ status: 'connected' });
+    // A host without `a` still gets a working terminal: one raw shell tab,
+    // today's behaviour with a tab bar around it.
+    this.patch({ phase: 'probing' });
+    const hasA = await this.client.isAvailable();
+    this.patch({ aplexer: hasA });
+    if (!hasA) {
+      await this.openShellTab();
+    }
+    await this.refreshWarnings();
+    await this.refreshSessions();
+    this.patch({ phase: 'ready' });
+    this.schedulePoll();
+  }
+
+  /** Show a session's terminal: attach through `a attach` on a fresh PTY. */
+  async openSession(row: SessionRow): Promise<void> {
+    const key = `apx:${row.id}`;
+    const existing = this.state.tabs.find((t) => t.key === key);
+    if (existing) {
+      this.setActive(key);
+      return;
+    }
+    if (this.state.actionBusy) return;
+    this.patch({ actionBusy: true, actionError: '' });
+    try {
+      const channel = await this.conn.openPty({
+        // Exec-with-PTY: the join IS the channel, the way the desktop's
+        // 'exec' command mode works — no login shell before the session.
+        command: aplexerAttachCommand({ id: row.id }),
+        onData: (bytes) => {
+          for (const cb of this.dataListeners) cb(key, bytes);
+        },
+        onExit: () => this.onChannelClosed(key),
+        onError: () => {},
+      });
+      this.channels.set(key, channel);
+      this.patch({
+        tabs: [
+          ...this.state.tabs,
+          {
+            key,
+            label: row.tag,
+            subtitle: leafOf(row.workspace),
+            engine: row.engine,
+            phase: row.phase,
+            live: true,
+          },
+        ],
+        activeKey: key,
+      });
+    } catch (e) {
+      this.patch({
+        actionError: `Could not join "${row.tag}" — ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      });
+    } finally {
+      this.patch({ actionBusy: false });
+    }
+  }
+
+  /** The no-aplexer path's single raw shell tab. */
+  async openShellTab(): Promise<void> {
+    const key = 'shell';
+    if (this.state.tabs.some((t) => t.key === key)) {
+      this.setActive(key);
+      return;
+    }
+    const channel = await this.conn.openPty({
+      onData: (bytes) => {
+        for (const cb of this.dataListeners) cb(key, bytes);
+      },
+      onExit: () => this.onChannelClosed(key),
+      onError: () => {},
+    });
+    this.channels.set(key, channel);
+    this.patch({
+      tabs: [
+        ...this.state.tabs,
+        { key, label: 'shell', subtitle: '', engine: 'shell', phase: 'running', live: true },
+      ],
+      activeKey: key,
+    });
+  }
+
+  setActive(key: string): void {
+    if (this.state.tabs.some((t) => t.key === key)) this.patch({ activeKey: key });
+  }
+
+  closeTab(key: string): void {
+    this.channels.get(key)?.close();
+    this.channels.delete(key);
+    const tabs = this.state.tabs.filter((t) => t.key !== key);
+    const activeKey =
+      this.state.activeKey === key ? (tabs.at(-1)?.key ?? null) : this.state.activeKey;
+    this.patch({ tabs, activeKey });
+  }
+
+  /**
+   * Create a session in [workspace] under [tag], refresh, and open it.
+   * The host has the final say on the tag (it echoes what it used).
+   */
+  async createSession(workspace: string, tag: string): Promise<AplexerStartOutcome> {
+    this.patch({ actionBusy: true, actionError: '' });
+    let outcome: AplexerStartOutcome;
+    try {
+      outcome = await this.client.startSession({ workspace, tag });
+      if (!outcome.ok && !outcome.liveRefusal) {
+        this.patch({ actionError: outcome.error ?? 'could not create the session' });
+        return outcome;
+      }
+      await this.refreshSessions();
+    } finally {
+      this.patch({ actionBusy: false });
+    }
+    const created = this.state.rows.find(
+      (r) =>
+        (outcome.id !== null && r.id === outcome.id) ||
+        (r.workspace === workspace && r.tag === (outcome.tag ?? tag)),
+    );
+    if (created) await this.openSession(created);
+    else if (outcome.liveRefusal) {
+      // The pair was already live before we asked; find and open it.
+      const live = this.state.rows.find((r) => r.workspace === workspace && r.tag === tag);
+      if (live) await this.openSession(live);
+    }
+    return outcome;
+  }
+
+  /** Stop a session: signal the workload and drop the record. */
+  async killSession(row: SessionRow): Promise<void> {
+    this.patch({ actionBusy: true, actionError: '' });
+    try {
+      const outcome = await this.client.killSession(row.id);
+      if (!outcome.ok && !outcome.notFound) {
+        this.patch({ actionError: outcome.error ?? 'could not stop the session' });
+        return;
+      }
+      await this.refreshSessions();
+    } finally {
+      this.patch({ actionBusy: false });
+    }
+  }
+
+  /** Rename a session's tag within its workspace. */
+  async renameSession(row: SessionRow, tag: string): Promise<void> {
+    this.patch({ actionBusy: true, actionError: '' });
+    try {
+      const outcome = await this.client.renameSession(row.id, tag);
+      if (!outcome.ok && !outcome.notFound) {
+        this.patch({ actionError: outcome.error ?? 'could not rename the session' });
+        return;
+      }
+      const key = `apx:${row.id}`;
+      this.patch({
+        tabs: this.state.tabs.map((t) => (t.key === key ? { ...t, label: tag } : t)),
+      });
+      await this.refreshSessions();
+    } finally {
+      this.patch({ actionBusy: false });
+    }
+  }
+
+  async ackWarning(sessionId: string): Promise<void> {
+    this.patch({ actionBusy: true });
+    try {
+      await this.client.ackWarnings(sessionId);
+      await this.refreshWarnings();
+    } finally {
+      this.patch({ actionBusy: false });
+    }
+  }
+
+  async ackAllWarnings(): Promise<void> {
+    this.patch({ actionBusy: true });
+    try {
+      await this.client.ackWarnings();
+      await this.refreshWarnings();
+    } finally {
+      this.patch({ actionBusy: false });
+    }
+  }
+
+  /** One manual poll tick (the refresh button; the timer owns the rest). */
+  async refresh(): Promise<void> {
+    await Promise.all([this.refreshSessions(), this.refreshWarnings()]);
+  }
+
+  /** Pause/resume the poll — the view parks it while the tab is hidden. */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    if (!paused && this.state.phase === 'ready') {
+      void this.refresh().then(() => this.schedulePoll());
+    }
+  }
+
+  /** The open tab's channel resizes with its terminal. */
+  resizeTab(key: string, cols: number, rows: number): void {
+    this.channels.get(key)?.resize(rows, cols);
+  }
+
+  /** Keystrokes for one tab's PTY. */
+  writeToTab(key: string, text: string): void {
+    this.channels.get(key)?.write(text);
+  }
+
+  dismissActionError(): void {
+    this.patch({ actionError: '' });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.pollTimer !== null) clearTimeout(this.pollTimer);
+    for (const channel of this.channels.values()) {
+      try {
+        channel.close();
+      } catch {
+        // closing twice is fine
+      }
+    }
+    this.channels.clear();
+    this.conn.close();
+    this.listeners.clear();
+    this.dataListeners.clear();
+    this.exitListeners.clear();
+  }
+
+  // --- internals -----------------------------------------------------------
+
+  private schedulePoll(): void {
+    if (this.disposed || this.pollTimer !== null) return;
+    this.pollTimer = setTimeout(async () => {
+      this.pollTimer = null;
+      if (this.disposed || this.paused || this.state.phase !== 'ready') return;
+      await this.refresh();
+      this.patch({ tick: this.state.tick + 1 });
+      this.schedulePoll();
+    }, this.pollMs);
+  }
+
+  private async refreshSessions(): Promise<void> {
+    const summaries = await this.client.listSessions();
+    if (summaries === null) {
+      // No aplexer (the probe already said so) or the probe raced a
+      // disconnect — either way the sidebar stays empty, not an error.
+      this.patch({ groups: [], rows: [] });
+      return;
+    }
+    const rows = summaries.map(summaryToRow);
+    this.patch({ rows, groups: groupByWorkspace(rows) });
+    this.syncTabsWithRows(rows);
+  }
+
+  private async refreshWarnings(): Promise<void> {
+    const warnings = await this.client.listWarnings();
+    // An exec that failed and an empty host look the same ([]); the panel
+    // shows what it got and the stale flag stays off — the desktop's
+    // contract for this endpoint is total ([] on any failure), because a
+    // warning list the renderer can be denied is a crash it can be denied.
+    this.patch({ warnings, warnStale: false });
+  }
+
+  /**
+   * Tab chrome follows the snapshot: engine/phase refresh, dead rows mark
+   * their tab `gone`, vanished-but-open tabs stay open (their channel will
+   * exit on its own and close then).
+   */
+  private syncTabsWithRows(rows: SessionRow[]): void {
+    this.patch({
+      tabs: this.state.tabs.map((tab) => {
+        if (!tab.key.startsWith('apx:')) return tab;
+        const row = rows.find((r) => tab.key === `apx:${r.id}`);
+        if (!row) return { ...tab, phase: 'gone' };
+        return { ...tab, label: row.tag, subtitle: leafOf(row.workspace), engine: row.engine, phase: row.phase };
+      }),
+    });
+  }
+
+  private onChannelClosed(key: string): void {
+    this.channels.delete(key);
+    this.patch({
+      tabs: this.state.tabs.map((t) => (t.key === key ? { ...t, live: false } : t)),
+    });
+    for (const cb of this.exitListeners) cb(key);
+  }
+
+  private onConnectionClosed(): void {
+    if (this.disposed) return;
+    this.channels.clear();
+    if (this.pollTimer !== null) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    this.patch({
+      status: 'disconnected',
+      tabs: this.state.tabs.map((t) => ({ ...t, live: false })),
+    });
+  }
+
+  private patch(part: Partial<ControllerState>): void {
+    this.state = { ...this.state, ...part };
+    for (const cb of this.listeners) cb(this.state);
+  }
+}
+
+function summaryToRow(s: SessionSummary): SessionRow {
+  return {
+    id: s.aplexerId ?? '',
+    tag: s.tag ?? s.name,
+    workspace: s.workspace ?? s.path ?? '',
+    engine: s.agentKind ?? 'shell',
+    phase: s.aplexerPhase ?? 'running',
+    createdMs: s.created * 1000,
+    activityMs: s.activity * 1000,
+  };
+}
+
+/** The folder level: sessions grouped by workspace, host order preserved. */
+function groupByWorkspace(rows: SessionRow[]): WorkspaceGroup[] {
+  const groups: WorkspaceGroup[] = [];
+  const byPath = new Map<string, WorkspaceGroup>();
+  for (const row of rows) {
+    const key = row.workspace || '/';
+    let group = byPath.get(key);
+    if (!group) {
+      group = { workspace: key, label: leafOf(key), rows: [] };
+      byPath.set(key, group);
+      groups.push(group);
+    }
+    group.rows.push(row);
+  }
+  return groups;
+}
+
+/** Trailing path component, the folder row's label (`~/git/mixer` → mixer). */
+function leafOf(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  if (trimmed === '') return '/';
+  const slash = trimmed.lastIndexOf('/');
+  const leaf = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  return leaf === '~' || leaf === '' ? trimmed : leaf;
+}

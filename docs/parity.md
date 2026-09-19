@@ -1,6 +1,6 @@
 # Feature parity: web vs desktop
 
-The web app (this repo) and the desktop app (`pocketshell-electron`) serve the
+The web app (this repo) and the desktop app (`pocketshell-desktop`) serve the
 same product. This file is the working gap analysis: what the desktop has,
 what the web has, what gates each gap, and the order we close them. The stated
 preference is to close gaps by REUSING desktop code (a shared, vendored
@@ -19,11 +19,48 @@ library) rather than re-implementing it.
 - `osc52.ts` — the OSC 52 clipboard decoder the terminal pane answers remote
   yanks with (moved to the desktop's `src/shared/` so both panes run the same
   refusals; added 2026-09-15)
+- `aplexer.ts` — the session manager's types, sort key, and join command, so
+  the web workspace speaks the host's `a` CLI with the desktop's exact
+  sentences (added 2026-09-19)
+- `shellQuote.ts`, `userBinPath.ts` — POSIX quoting and the user-bin PATH
+  list both clients' probe/wrap/join commands are built from (added 2026-09-19)
 
 Rules: edit in the desktop repo, commit there, run the script here, commit the
 refresh. Wrappers stay per-platform: the desktop wrapper owns the filesystem
 (`Include` expansion, `~` → absolute paths), the web wrapper owns browser
 constraints (no `Include`, `~` kept verbatim, host patterns skipped).
+
+## The sessions workspace (web twin of the desktop's host workspace)
+
+On a configured relay (`config.directWsUrl`) the browser speaks SSH itself
+(`src/terminal/connection.ts` — one `SshConnection` per host visit, many
+channels), and `/term/:name` renders `HostWorkspaceView` instead of the
+single raw-shell terminal:
+
+- **Sidebar** — the host's live sessions grouped by workspace path, in the
+  order the host's `a snapshot --json --sort accessed` returns (the host's
+  order IS the panel's order, as on desktop). Rows show tag, engine, activity
+  age, and per-row rename/stop.
+- **Tabs** — one terminal per joined session. A join runs the vendored
+  `aplexerAttachCommand` (by UUID) directly under an exec-with-PTY channel —
+  the desktop's `'exec'` command mode, so no login shell delays the join.
+  A host without `a` gets one raw shell tab: the pre-workspace behaviour with
+  a tab bar around it.
+- **Actions** — `a start/kill/rename/ack` through
+  `src/aplexer/client.ts`, the browser twin of the desktop's
+  `helper/AplexerClient.ts`: same commands, PATH-wrapped once, same
+  classifier sentences (`already belongs to`, `no matching session`,
+  `unexpected argument`), same total contracts (never throws for anything
+  the host does).
+- **Status bar** — the active tab's `workspace:tag` selector, engine, phase,
+  plus session/open counts.
+- **Crash warnings** — the issue #1 banner, now fed by the shared connection's
+  exec channel (`warningsParse.ts` is the pure half; the ephemeral-bridge
+  runner in `warnings.ts` remains for the bridge-mode terminal).
+
+The controller (`src/workspace/controller.ts`) is framework-free: the five
+seconds poll, tab lifecycle, and actions are unit-tested without a DOM, and
+the Vue view is chrome + xterm wiring only.
 
 ## Gap matrix
 
@@ -32,38 +69,37 @@ constraints (no `Include`, `~` kept verbatim, host patterns skipped).
 | Google sign-in + account sync of hosts | done (shared contract) | — |
 | Host CRUD, encrypted local secrets | done | — |
 | Import hosts from `~/.ssh/config` | done (shared core) | — |
-| Key + key-passphrase auth to bridge | done | — |
-| Write synced hosts BACK to `~/.ssh/config` | missing; pure core exists (`SshConfigWriter`) — web could offer "download generated config" | web-only |
-| Terminal (PTY, resize, reconnect) | done (bridge protocol has `session_lost` + one retry) | — |
-| OSC52 copy, URL links | done (OSC52: vendored `shared/osc52.ts` decoder in the pane's OSC handler; URLs: web-links addon, new tab) | — |
-| Path links, path highlights, mouse-selection overrides | not portable as-is: they land in the desktop's Files tab / tmux pane, which the web does not have | waits on Files parity (sftp frames) |
-| Known-hosts verification (TOFU pinning) | missing — the SSH handshake happens inside the bridge, so the client never sees the host key | needs bridge frame (fingerprint in `connected`) |
-| Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | missing | needs bridge frames (sftp) |
-| Port forwarding panel + traffic counters | `HostEntry` already carries parsed `localForwards`/`remoteForwards`/`proxyJump` (displayed as text only) | needs bridge frames (forward open/close) |
-| Sessions: tmux tree, grouping, launch dialogs | missing (web terminal is one raw shell per connect) | needs bridge/helper protocol |
-| Agents: composer, slash commands, agent sessions | missing | needs helper + bridge protocol |
+| Key + key-passphrase auth | done (browser-direct; bridge mode kept) | — |
+| Terminal (PTY, resize, reconnect) | done (bridge: `session_lost` + retry; direct: one `SshConnection`, many channels) | — |
+| OSC52 copy, URL links | done (vendored `shared/osc52.ts`; web-links addon) | — |
+| Sessions: tree, grouping, launch/stop/rename dialogs, tabs | done over direct SSH (see above); hosts without `a` keep the plain shell | — |
+| Session composer, agent launch (`pocketshell agent …`), slash commands | missing | web-only work; `shared/agentLaunch.ts` is vendorable |
+| Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | missing | direct path can use ssh2's SFTP; bridge needs sftp frames |
+| Port forwarding panel + traffic counters | `HostEntry` already carries parsed forward specs (displayed as text only) | **cannot listen on a browser** — local forwards need a desktop/CLI companion; remote forwards could ride an exec |
+| Known-hosts verification (TOFU pinning) | partial (direct mode sees the host key; pinning not stored yet) | web-only work |
+| Path links/highlights, Files-tab extras | waits on Files parity | — |
 | Themes, fonts, settings store | partial (config.js endpoints only) | web-only |
 | Update banner | n/a (web deploys continuously) | — |
 
-`needs bridge` items are blocked on the Lambda in `aws-infra`
-(sandbox/pocketshell-web) growing the corresponding frames; the web client and
-the bridge deploy independently, so each protocol addition should ship with
-its client feature.
+Port forwarding is the one capability a browser tab cannot provide outright:
+a tab may not open listening sockets. Remote forwards (`ssh -R`) could be
+attempted over an exec channel, but local forwards need something outside the
+tab (desktop app, CLI, or a WebRTC/relay helper).
 
 ## Roadmap order (cheapest parity first)
 
-1. **Shared-library hygiene** (this file's "How code is shared" list) — done for
-   the parser; next candidate is the `SshConfigWriter` core so export-to-config
-   is vendor-not-reimplement.
-2. **Web-only terminal polish**: OSC52, URL links — done 2026-09-15 (the
-   decoder moved to the desktop's `src/shared/osc52.ts` and is vendored; the
-   pane handler writes `navigator.clipboard`, URLs open in a new tab).
-3. **Host-key pinning**: small bridge addition (server sends host-key
-   fingerprint in the `connected` frame; web pins it per host in the local
-   envelope and warns on change).
-4. **Files over the bridge**: sftp frames (list/read/write/rename/delete), then
-   vendor or mirror the desktop's file-model code where it is pure.
-5. **Port forwards**: forward frames; the parsed `HostEntry` forward specs feed
-   the UI directly.
-6. **Sessions/agents**: largest surface; design the bridge/helper protocol
-   before any client work.
+1. **Shared-library hygiene** — done for the parser core, OSC52, and the
+   aplexer session layer; next candidates are `agentLaunch.ts` +
+   `agentCommands.ts` (composer parity) and the `SshConfigWriter` core
+   (export-to-config).
+2. **Sessions workspace** — done 2026-09-19 (sidebar, tabs, launch/stop/
+   rename, warnings ack, status bar, drawer sidebar on touch widths).
+3. **Composer + agent launch** — vendor the launch-line builder, add the
+   composer panel that types into the session PTY.
+4. **Host-key pinning** — direct mode already verifies the fingerprint
+   reaches the client; store it per host in the local envelope and warn on
+   change.
+5. **Files over SFTP** — ssh2 speaks SFTP on the direct path; the bridge
+   path needs frames.
+6. **Port forwarding** — blocked by the browser sandbox (see matrix); decide
+   the companion story before building UI.
