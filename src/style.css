@@ -3277,6 +3277,10 @@ button.dir-row {
 }
 
 .ws-palette button {
+  /* flex item of .ws-palette: an explicit min-height (touch block) disables
+     the automatic min-content floor, so without flex:none flex-shrink would
+     squeeze rows below their text and the next row paints over the overflow */
+  flex: none;
   display: grid;
   grid-template-columns: max-content 1fr;
   column-gap: 10px;
