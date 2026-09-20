@@ -73,7 +73,7 @@ the Vue view is chrome + xterm wiring only.
 | Terminal (PTY, resize, reconnect) | done (bridge: `session_lost` + retry; direct: one `SshConnection`, many channels) | — |
 | OSC52 copy, URL links | done (vendored `shared/osc52.ts`; web-links addon) | — |
 | Sessions: tree, grouping, launch/stop/rename dialogs, tabs | done over direct SSH (see above); hosts without `a` keep the plain shell | — |
-| Session composer, agent launch (`pocketshell agent …`), slash commands | missing | web-only work; `shared/agentLaunch.ts` is vendorable |
+| Session composer, agent launch (`pocketshell agent …`), slash commands | launch-line builder vendored 2026-09-20 (`shared/agentLaunch.ts` + `agentCommands.ts`, fixture-pinned); composer panel still missing | web-only work |
 | Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | missing | direct path can use ssh2's SFTP; bridge needs sftp frames |
 | Port forwarding panel + traffic counters | `HostEntry` already carries parsed forward specs (displayed as text only) | **cannot listen on a browser** — local forwards need a desktop/CLI companion; remote forwards could ride an exec |
 | Known-hosts verification (TOFU pinning) | partial (direct mode sees the host key; pinning not stored yet) | web-only work |
@@ -88,14 +88,14 @@ tab (desktop app, CLI, or a WebRTC/relay helper).
 
 ## Roadmap order (cheapest parity first)
 
-1. **Shared-library hygiene** — done for the parser core, OSC52, and the
-   aplexer session layer; next candidates are `agentLaunch.ts` +
-   `agentCommands.ts` (composer parity) and the `SshConfigWriter` core
-   (export-to-config).
+1. **Shared-library hygiene** — done for the parser core, OSC52, the
+   aplexer session layer, and the agent launch line (`agentLaunch.ts` +
+   `agentCommands.ts` + `composerSend.ts`, vendored 2026-09-20); next
+   candidate is the `SshConfigWriter` core (export-to-config).
 2. **Sessions workspace** — done 2026-09-19 (sidebar, tabs, launch/stop/
    rename, warnings ack, status bar, drawer sidebar on touch widths).
-3. **Composer + agent launch** — vendor the launch-line builder, add the
-   composer panel that types into the session PTY.
+3. **Composer + agent launch** — launch-line builder vendored 2026-09-20;
+   remaining: the composer panel that types into the session PTY.
 4. **Host-key pinning** — direct mode already verifies the fingerprint
    reaches the client; store it per host in the local envelope and warn on
    change.
