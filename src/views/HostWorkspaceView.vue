@@ -21,6 +21,8 @@ import {
   type SessionRow,
   type WorkspaceLink,
 } from '../workspace/controller';
+import type { HostKeyInfo, KnownHostsHooks, TofuDecision } from '../terminal/connection';
+import { useHostPinsStore } from '../stores/hostPins';
 import { formatAge } from '../aplexer/warningsParse';
 import { acceptedInput, liveAgentKind, paletteFor, sendComposerLine } from '../workspace/composer';
 import type { AgentCommand } from '../shared/agentCommands';
@@ -44,6 +46,7 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const hosts = useHostsStore();
+const pins = useHostPinsStore();
 
 const state = shallowRef<ControllerState | null>(null);
 let controller: HostWorkspaceController | null = null;
@@ -70,6 +73,45 @@ const renameRow = ref<SessionRow | null>(null);
 const renameTag = ref('');
 const killRow = ref<SessionRow | null>(null);
 const sidebarOpen = ref(false);
+
+// --- host-key (TOFU) state -------------------------------------------------
+/** An unknown key awaiting the first-connect decision. */
+const hostKeyPrompt = ref<HostKeyInfo | null>(null);
+/** A key that CHANGED against its pin — the connect was refused. */
+const hostKeyMismatch = ref<HostKeyInfo | null>(null);
+let decideHostKeyResolve: ((d: TofuDecision) => void) | null = null;
+let currentLink: WorkspaceLink | null = null;
+
+function decideHostKey(d: TofuDecision) {
+  const resolve = decideHostKeyResolve;
+  decideHostKeyResolve = null;
+  hostKeyPrompt.value = null;
+  resolve?.(d);
+}
+
+function askHostKey(info: HostKeyInfo): Promise<TofuDecision> {
+  hostKeyPrompt.value = info;
+  return new Promise((resolve) => {
+    decideHostKeyResolve = resolve;
+  });
+}
+
+async function forgetPinAndReconnect() {
+  hostKeyMismatch.value = null;
+  if (currentLink !== null) await pins.forget(currentLink.host, currentLink.port);
+  await controller?.start();
+}
+
+/** The pins store behind the connection's TOFU hooks — the browser's
+ * known_hosts, with the prompt and mismatch surfaces as Vue state. */
+const knownHosts: KnownHostsHooks = {
+  lookup: (host, port) => pins.lookup(host, port),
+  pin: (host, port, pin) => pins.pin(host, port, pin),
+  decide: askHostKey,
+  onMismatch: (info) => {
+    hostKeyMismatch.value = info;
+  },
+};
 
 const hostName = computed(() => String(route.params.name));
 const activeTab = computed(() => state.value?.tabs.find((t) => t.key === state.value?.activeKey) ?? null);
@@ -112,7 +154,8 @@ onMounted(async () => {
     auth: bridgeAuth,
   };
 
-  controller = new HostWorkspaceController({ link });
+  controller = new HostWorkspaceController({ link, knownHosts });
+  currentLink = link;
   controller.onChange((s) => {
     state.value = s;
   });
@@ -652,6 +695,10 @@ function back() {
             </div>
             <div v-if="state?.phase !== 'ready' && !failed" class="ws-placeholder">
               <p class="muted">{{ state?.phase === 'probing' ? 'reading sessions…' : 'connecting…' }}</p>
+              <template v-if="state?.phase === 'failed'">
+                <p class="error" role="alert">{{ state.error }}</p>
+                <button class="button" @click="controller?.start()">Try again</button>
+              </template>
             </div>
           </div>
 
@@ -811,6 +858,47 @@ function back() {
             <button type="submit" class="button primary" :disabled="state?.actionBusy">Stop session</button>
           </div>
         </form>
+      </div>
+
+      <!-- First-connect host key (TOFU). No outside-click dismiss: the
+           decision is explicit, the handshake is paused until it is made. -->
+      <div v-if="hostKeyPrompt !== null" class="ws-overlay">
+        <div class="ws-dialog" role="alertdialog" aria-labelledby="ws-tofu-title">
+          <h2 id="ws-tofu-title">First connect to {{ hostName }}</h2>
+          <p>
+            The server's identity could not be verified against a saved pin — expected
+            on a first connect. Check the fingerprint out of band if you can.
+          </p>
+          <p class="ws-launch-line">{{ hostKeyPrompt.keyType }} · {{ hostKeyPrompt.fingerprint }}</p>
+          <p class="muted">
+            Connect and pin remembers this key; a later connect presenting a different
+            key will be refused.
+          </p>
+          <div class="ws-dialog-actions">
+            <button type="button" @click="decideHostKey('reject')">Cancel</button>
+            <button type="button" @click="decideHostKey('once')">Connect once</button>
+            <button type="button" class="button primary" @click="decideHostKey('always')">Connect and pin</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Host key changed against its pin -->
+      <div v-if="hostKeyMismatch !== null" class="ws-overlay">
+        <div class="ws-dialog" role="alertdialog" aria-labelledby="ws-mismatch-title">
+          <h2 id="ws-mismatch-title">Host key changed</h2>
+          <p>
+            The server's key is not the pinned key from a previous connect, so the
+            connection was refused. This is expected if the server was rebuilt or its
+            key was rotated on purpose; otherwise stop and investigate.
+          </p>
+          <p class="ws-launch-line">{{ hostKeyMismatch.keyType }} · {{ hostKeyMismatch.fingerprint }}</p>
+          <div class="ws-dialog-actions">
+            <button type="button" @click="hostKeyMismatch = null">Dismiss</button>
+            <button type="button" class="button primary" @click="forgetPinAndReconnect">
+              Remove pin &amp; reconnect
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   </div>

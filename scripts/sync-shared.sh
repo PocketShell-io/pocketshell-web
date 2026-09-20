@@ -24,7 +24,7 @@ if [ -z "${DESKTOP_REPO:-}" ]; then
   fi
 fi
 
-FILES="src/shared/types.ts src/shared/net.ts src/shared/sshConfigCore.ts src/shared/syncMerge.ts src/shared/sync.ts src/shared/syncConfig.ts src/shared/osc52.ts src/shared/aplexer.ts src/shared/shellQuote.ts src/shared/userBinPath.ts src/shared/agentLaunch.ts src/shared/agentCommands.ts src/shared/composerSend.ts"
+FILES="src/shared/types.ts src/shared/net.ts src/shared/sshConfigCore.ts src/shared/syncMerge.ts src/shared/sync.ts src/shared/syncConfig.ts src/shared/osc52.ts src/shared/aplexer.ts src/shared/shellQuote.ts src/shared/userBinPath.ts src/shared/agentLaunch.ts src/shared/agentCommands.ts src/shared/composerSend.ts src/shared/knownHostsCore.ts"
 
 for f in $FILES; do
   git -C "$DESKTOP_REPO" show "HEAD:$f" > "$f"

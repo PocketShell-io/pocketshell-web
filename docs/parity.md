@@ -24,6 +24,10 @@ library) rather than re-implementing it.
   sentences (added 2026-09-19)
 - `shellQuote.ts`, `userBinPath.ts` — POSIX quoting and the user-bin PATH
   list both clients' probe/wrap/join commands are built from (added 2026-09-19)
+- `knownHostsCore.ts` — the pure host-key half both clients verify with: the
+  `[host]:port` token, the trusted/mismatch/unknown verdict, and the RFC 4251
+  blob decode, so a browser pin and a known_hosts line classify a key with
+  the same rules (added 2026-09-20)
 
 Rules: edit in the desktop repo, commit there, run the script here, commit the
 refresh. Wrappers stay per-platform: the desktop wrapper owns the filesystem
@@ -73,10 +77,10 @@ the Vue view is chrome + xterm wiring only.
 | Terminal (PTY, resize, reconnect) | done (bridge: `session_lost` + retry; direct: one `SshConnection`, many channels) | — |
 | OSC52 copy, URL links | done (vendored `shared/osc52.ts`; web-links addon) | — |
 | Sessions: tree, grouping, launch/stop/rename dialogs, tabs | done over direct SSH (see above); hosts without `a` keep the plain shell | — |
-| Session composer, agent launch (`pocketshell agent …`), slash commands | launch-line builder + command catalog vendored 2026-09-20 (`shared/agentLaunch.ts` + `agentCommands.ts` + `composerSend.ts`, fixture-pinned); session composer with slash palette rides the shared delivery (`workspace/composer.ts`); agent launch picker in progress | web-only work |
+| Session composer, agent launch (`pocketshell agent …`), slash commands | done 2026-09-20: launch-line builder + command catalog vendored (`shared/agentLaunch.ts` + `agentCommands.ts` + `composerSend.ts`, fixture-pinned); session composer with slash palette (`workspace/composer.ts`); agent launch picker (`workspace/agentProbe.ts`) | web-only work |
 | Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | missing | direct path can use ssh2's SFTP; bridge needs sftp frames |
 | Port forwarding panel + traffic counters | `HostEntry` already carries parsed forward specs (displayed as text only) | **cannot listen on a browser** — local forwards need a desktop/CLI companion; remote forwards could ride an exec |
-| Known-hosts verification (TOFU pinning) | partial (direct mode sees the host key; pinning not stored yet) | web-only work |
+| Known-hosts verification (TOFU pinning) | done 2026-09-20 (direct mode): unknown key → first-connect prompt (once / pin / cancel), pin stored envelope-encrypted per browser (`ps.hostPins`), changed key → hard block + "Host key changed" panel with a remove-pin remedy; classification is the shared `knownHostsCore.ts` | pins are per-browser (the desktop's known_hosts is per-machine too); bridge mode keeps accept-always |
 | Path links/highlights, Files-tab extras | waits on Files parity | — |
 | Themes, fonts, settings store | partial (config.js endpoints only) | web-only |
 | Update banner | n/a (web deploys continuously) | — |
@@ -94,11 +98,12 @@ tab (desktop app, CLI, or a WebRTC/relay helper).
    candidate is the `SshConfigWriter` core (export-to-config).
 2. **Sessions workspace** — done 2026-09-19 (sidebar, tabs, launch/stop/
    rename, warnings ack, status bar, drawer sidebar on touch widths).
-3. **Composer + agent launch** — launch-line builder vendored 2026-09-20;
-   remaining: the composer panel that types into the session PTY.
-4. **Host-key pinning** — direct mode already verifies the fingerprint
-   reaches the client; store it per host in the local envelope and warn on
-   change.
+3. **Composer + agent launch** — done 2026-09-20 (launch-line builder +
+   session composer with the slash palette + agent launch picker).
+4. **Host-key pinning** — done 2026-09-20: the desktop's hostVerifier body
+   extracted to `shared/knownHostsCore.ts`; the web pauses the handshake on an
+   unknown key (ssh2's async hostVerifier), pins on accept, hard-blocks and
+   offers the remove-pin remedy on change.
 5. **Files over SFTP** — ssh2 speaks SFTP on the direct path; the bridge
    path needs frames.
 6. **Port forwarding** — blocked by the browser sandbox (see matrix); decide

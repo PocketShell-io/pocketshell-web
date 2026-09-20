@@ -27,7 +27,7 @@ import {
   type LaunchChoice,
 } from '../shared/agentLaunch';
 import { PocketshellProbe } from './agentProbe';
-import { SshConnection, type PtyChannel } from '../terminal/connection';
+import { SshConnection, type KnownHostsHooks, type PtyChannel } from '../terminal/connection';
 import type { BridgeAuth } from '../terminal/bridge';
 
 /** Everything needed to reach one host. Built by the view from the synced
@@ -106,6 +106,8 @@ export interface WorkspaceDeps {
   link: WorkspaceLink;
   /** Override the connection for tests. */
   makeConnection?: () => SshConnection;
+  /** Host-key pinning (TOFU); built by the view from the pins store. */
+  knownHosts?: KnownHostsHooks;
   pollMs?: number;
   /** How long a launch waits for its session's PTY before giving up. */
   launchTimeoutMs?: number;
@@ -192,6 +194,7 @@ export class HostWorkspaceController {
         port: this.deps.link.port,
         user: this.deps.link.user,
         auth: this.deps.link.auth,
+        knownHosts: this.deps.knownHosts,
         onStatus: (s) => this.patch({ status: s }),
         onClosed: () => this.onConnectionClosed(),
       });
