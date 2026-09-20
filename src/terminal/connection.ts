@@ -10,7 +10,7 @@
  * this class, and DirectSshSession is a one-shell wrapper over it.
  */
 import { Client as SSHClient } from 'ssh2';
-import type { ClientChannel } from 'ssh2';
+import type { ClientChannel, SFTPWrapper } from 'ssh2';
 import { Buffer } from 'node:buffer';
 import { connectWebSocketDuplex } from './wsduplex';
 import { decodePublicKeyBlob, verifyHostKeyPin, type HostKeyPin } from '../shared/knownHostsCore';
@@ -306,6 +306,21 @@ export class SshConnection {
       } else {
         conn.shell(pty, (err, channel) => done(err, channel));
       }
+    });
+  }
+
+  /**
+   * One SFTP channel over the live connection — the Files pane's
+   * transport. The desktop caches one SFTPWrapper per connection
+   * (SftpService); callers here do the same via WorkspaceSftp.
+   */
+  sftp(): Promise<SFTPWrapper> {
+    const conn = this.conn;
+    if (conn === null || this.closedByUs) {
+      return Promise.reject(new Error('connection is not open'));
+    }
+    return new Promise((resolve, reject) => {
+      conn.sftp((err, sftp) => (err ? reject(err) : resolve(sftp)));
     });
   }
 

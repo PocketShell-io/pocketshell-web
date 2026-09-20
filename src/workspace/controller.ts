@@ -269,6 +269,30 @@ export class HostWorkspaceController {
     }
   }
 
+  /** The Files tab — an SFTP browser over the live connection, not a PTY.
+   * One per workspace; the pane itself is the view's (it owns xterm-less
+   * state), the controller only owns the tab and the connection. */
+  openFilesTab(): void {
+    const key = 'files';
+    if (this.state.tabs.some((t) => t.key === key)) {
+      this.setActive(key);
+      return;
+    }
+    this.patch({
+      tabs: [
+        ...this.state.tabs,
+        { key, label: 'Files', subtitle: 'sftp', engine: 'sftp', phase: 'idle', live: false },
+      ],
+      activeKey: key,
+    });
+  }
+
+  /** The live connection, for view-owned transports (the Files pane's
+   * SFTP) that must share the workspace's one dial. */
+  get connection(): SshConnection {
+    return this.conn;
+  }
+
   /** The no-aplexer path's single raw shell tab. */
   async openShellTab(): Promise<void> {
     const key = 'shell';

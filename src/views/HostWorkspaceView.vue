@@ -23,6 +23,8 @@ import {
 } from '../workspace/controller';
 import type { HostKeyInfo, KnownHostsHooks, TofuDecision } from '../terminal/connection';
 import { useHostPinsStore } from '../stores/hostPins';
+import FilesPane from './FilesPane.vue';
+import { WorkspaceSftp } from '../workspace/sftp';
 import { formatAge } from '../aplexer/warningsParse';
 import { acceptedInput, liveAgentKind, paletteFor, sendComposerLine } from '../workspace/composer';
 import type { AgentCommand } from '../shared/agentCommands';
@@ -47,6 +49,8 @@ const router = useRouter();
 const auth = useAuthStore();
 const hosts = useHostsStore();
 const pins = useHostPinsStore();
+/** The Files tab's SFTP transport — one per workspace dial. */
+const filesSftp = shallowRef<WorkspaceSftp | null>(null);
 
 const state = shallowRef<ControllerState | null>(null);
 let controller: HostWorkspaceController | null = null;
@@ -156,6 +160,7 @@ onMounted(async () => {
 
   controller = new HostWorkspaceController({ link, knownHosts });
   currentLink = link;
+  filesSftp.value = new WorkspaceSftp(controller.connection);
   controller.onChange((s) => {
     state.value = s;
   });
@@ -234,6 +239,7 @@ watch(
     // New tabs: their containers exist after this tick's render.
     await nextTick();
     for (const tab of state.value?.tabs ?? []) {
+      if (tab.key === 'files') continue; // no PTY — the FilesPane renders there
       const el = document.querySelector<HTMLElement>(`[data-term-key="${cssEscape(tab.key)}"]`);
       if (el !== null) mountTerm(tab.key, el);
     }
@@ -605,6 +611,7 @@ function back() {
 
           <div class="ws-side-head">
             <span class="ws-side-title">Sessions</span>
+            <button class="ws-new" @click="controller?.openFilesTab()">Files</button>
             <button class="ws-new" :disabled="state?.aplexer === false" @click="askNew">+ New</button>
           </div>
 
@@ -652,7 +659,7 @@ function back() {
               v-for="tab in state?.tabs"
               :key="tab.key"
               class="ws-tab"
-              :class="{ 'is-active': tab.key === state?.activeKey, 'is-dead': !tab.live }"
+              :class="{ 'is-active': tab.key === state?.activeKey, 'is-dead': !tab.live && tab.key !== 'files' }"
               role="tab"
               :aria-selected="tab.key === state?.activeKey"
               :title="tab.subtitle === '' ? tab.label : `${tab.subtitle}:${tab.label}`"
@@ -660,7 +667,7 @@ function back() {
             >
               <span class="ws-tab-dot" :class="{ 'is-live': tab.live && tab.phase === 'running' }" aria-hidden="true" />
               <span class="ws-tab-label">{{ tab.label }}</span>
-              <span class="ws-tab-phase">{{ phaseWord(tab) }}</span>
+              <span v-if="tab.key !== 'files'" class="ws-tab-phase">{{ phaseWord(tab) }}</span>
               <span class="ws-tab-close" aria-hidden="true" @click.stop="controller?.closeTab(tab.key)">✕</span>
             </button>
             <span class="ws-tabbar-spacer" />
@@ -687,7 +694,9 @@ function back() {
               :key="tab.key"
               class="ws-pane"
               :data-term-key="tab.key"
-            />
+            >
+              <FilesPane v-if="tab.key === 'files' && filesSftp !== null" :sftp="filesSftp" />
+            </div>
             <div v-if="state?.phase === 'ready' && state?.tabs.length === 0" class="ws-placeholder">
               <p class="ws-placeholder-title">No open terminals</p>
               <p class="muted">Pick a session from the sidebar, or start a new one.</p>
@@ -702,7 +711,7 @@ function back() {
             </div>
           </div>
 
-          <form v-if="activeTab" class="ws-composer" @submit.prevent="sendLine">
+          <form v-if="activeTab && activeTab.key !== 'files'" class="ws-composer" @submit.prevent="sendLine">
             <div v-if="paletteRows.length > 0" class="ws-palette" role="listbox" aria-label="Agent commands">
               <button
                 v-for="(c, i) in paletteRows"
@@ -744,9 +753,9 @@ function back() {
               <span class="ws-status-sel">
                 {{ rowForActive ? `${rowForActive.workspace}:${rowForActive.tag}` : activeTab.label }}
               </span>
-              <span v-if="activeTab.engine && activeTab.engine !== 'shell'" class="ws-status-engine">{{ activeTab.engine }}</span>
+              <span v-if="activeTab.engine && activeTab.engine !== 'shell' && activeTab.key !== 'files'" class="ws-status-engine">{{ activeTab.engine }}</span>
               <span class="ws-status-phase" :class="{ 'is-live': activeTab.live && activeTab.phase === 'running' }">
-                {{ activeTab.live ? phaseWord(activeTab).toUpperCase() : 'CLOSED' }}
+                {{ activeTab.live ? phaseWord(activeTab).toUpperCase() : activeTab.key === 'files' ? 'SFTP' : 'CLOSED' }}
               </span>
             </template>
             <template v-else-if="state?.phase === 'ready'">

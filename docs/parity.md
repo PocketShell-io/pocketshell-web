@@ -78,7 +78,7 @@ the Vue view is chrome + xterm wiring only.
 | OSC52 copy, URL links | done (vendored `shared/osc52.ts`; web-links addon) | — |
 | Sessions: tree, grouping, launch/stop/rename dialogs, tabs | done over direct SSH (see above); hosts without `a` keep the plain shell | — |
 | Session composer, agent launch (`pocketshell agent …`), slash commands | done 2026-09-20: launch-line builder + command catalog vendored (`shared/agentLaunch.ts` + `agentCommands.ts` + `composerSend.ts`, fixture-pinned); session composer with slash palette (`workspace/composer.ts`); agent launch picker (`workspace/agentProbe.ts`) | web-only work |
-| Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | missing | direct path can use ssh2's SFTP; bridge needs sftp frames |
+| Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | done 2026-09-20 on the direct path: a Files tab in the workspace (browser twin of the desktop's SftpService caching rules in `workspace/sftp.ts`) — directory listing with sizes/ages, text open/edit/save with a 500 KB cap and binary refusal; bridge mode needs frames (still missing there) | editor is a plain textarea for now, not the desktop's CodeEditor |
 | Port forwarding panel + traffic counters | `HostEntry` already carries parsed forward specs (displayed as text only) | **cannot listen on a browser** — local forwards need a desktop/CLI companion; remote forwards could ride an exec |
 | Known-hosts verification (TOFU pinning) | done 2026-09-20 (direct mode): unknown key → first-connect prompt (once / pin / cancel), pin stored envelope-encrypted per browser (`ps.hostPins`), changed key → hard block + "Host key changed" panel with a remove-pin remedy; classification is the shared `knownHostsCore.ts` | pins are per-browser (the desktop's known_hosts is per-machine too); bridge mode keeps accept-always |
 | Path links/highlights, Files-tab extras | waits on Files parity | — |
@@ -104,7 +104,8 @@ tab (desktop app, CLI, or a WebRTC/relay helper).
    extracted to `shared/knownHostsCore.ts`; the web pauses the handshake on an
    unknown key (ssh2's async hostVerifier), pins on accept, hard-blocks and
    offers the remove-pin remedy on change.
-5. **Files over SFTP** — ssh2 speaks SFTP on the direct path; the bridge
-   path needs frames.
+5. **Files over SFTP** — done 2026-09-20 on the direct path (`workspace/sftp.ts`
+   + the Files tab); the bridge path needs frames. A richer editor than the
+   current textarea can ride the desktop's CodeEditor semantics later.
 6. **Port forwarding** — blocked by the browser sandbox (see matrix); decide
    the companion story before building UI.
