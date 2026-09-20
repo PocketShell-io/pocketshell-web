@@ -181,7 +181,7 @@ async def main() -> int:
                 url: location.pathname,
                 status: document.querySelectorAll('.topbar')[1]?.querySelector('span.muted')?.textContent,
                 errors: [...document.querySelectorAll('.error')].map((e) => e.textContent),
-                term: document.querySelector('.term')?.innerText?.slice(0, 300),
+                term: document.querySelector('.xterm-rows')?.innerText?.slice(0, 300),
                 page_errors: pe,
                 ws_frames: n,
                 console_tail: ct,
@@ -192,9 +192,12 @@ async def main() -> int:
 
         # Type on the real PTY; the answer must come back through ssh2 →
         # xterm in the page.
+        # The xterm mounts a tick after the status flips; focus it before typing.
+        await page.wait_for_selector('.xterm', timeout=30_000)
+        await page.locator('.xterm').first.click()
         await page.keyboard.type(f'echo {CANARY}\r')
         await page.wait_for_function(
-            "c => document.querySelector('.term')?.innerText?.includes(c)",
+            "c => document.querySelector('.xterm-rows')?.innerText?.includes(c)",
             arg=CANARY,
             timeout=30_000,
         )
