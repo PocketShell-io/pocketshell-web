@@ -398,7 +398,10 @@ function back() {
                 <span class="warn-kind" :class="w.kind === 'oom' ? 'is-oom' : 'is-crash'">
                   {{ w.kind === 'oom' ? 'OOM' : 'crash' }}
                 </span>
-                <span class="warn-sel">{{ w.workspace }}:{{ w.tag }}</span>
+                <!-- The zero-width space gives narrow drawers a clean wrap
+                     point after the colon instead of orphaning the tag's
+                     last character mid-token. -->
+                <span class="warn-sel">{{ w.workspace }}:&#8203;{{ w.tag }}</span>
                 <span class="warn-age">{{ formatAge(Date.now(), w.created_at_ms) }}</span>
                 <button :disabled="state?.actionBusy" @click="ack(w.session)">Acknowledge</button>
               </li>

@@ -3295,6 +3295,21 @@ button.dir-row {
   .ws-row-actions {
     display: inline-flex;
   }
+
+  /* The tab strip and the drawer's + New meet the same 44px finger floor as
+     the rows; pointer widths keep the accepted 40px tab / 24px close boxes. */
+  .ws-tab {
+    min-height: 44px;
+  }
+
+  .ws-tab-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .ws-new {
+    min-height: 44px;
+  }
 }
 
 @media (min-width: 901px) {
@@ -3843,6 +3858,21 @@ button.dir-row {
 
   .ws-row-actions {
     display: inline-flex;
+  }
+
+  /* The tab strip and the drawer's + New meet the same 44px finger floor as
+     the rows; pointer widths keep the accepted 40px tab / 24px close boxes. */
+  .ws-tab {
+    min-height: 44px;
+  }
+
+  .ws-tab-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .ws-new {
+    min-height: 44px;
   }
 }
 
