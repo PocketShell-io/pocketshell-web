@@ -22,6 +22,20 @@ import {
   type WorkspaceLink,
 } from '../workspace/controller';
 import { formatAge } from '../aplexer/warningsParse';
+import { acceptedInput, liveAgentKind, paletteFor, sendComposerLine } from '../workspace/composer';
+import type { AgentCommand } from '../shared/agentCommands';
+import {
+  buildLaunchCommand,
+  kindUnavailableReason,
+  KIND_LABELS,
+  LAUNCHABLE_KINDS,
+  profileFlagName,
+  profilesFor,
+  supportsProfiles,
+  supportsSkipPermissions,
+  type HostAgentSupport,
+  type LaunchableKind,
+} from '../shared/agentLaunch';
 import { config } from '../config';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
@@ -229,10 +243,58 @@ function openRow(row: SessionRow) {
 function askNew() {
   newError.value = '';
   newTag.value = '';
+  launchAgent.value = false;
   showNew.value = true;
+  // The picker asks the HOST which agents its helper can start — one
+  // `--help` exec per open, never cached, so a helper upgraded mid-connection
+  // is offered without a reconnect (the desktop's contract).
+  void controller?.probeAgent();
 }
 
 const workspaceOptions = computed(() => state.value?.groups.map((g) => g.workspace) ?? []);
+
+// --- agent launch step ------------------------------------------------------
+
+const launchAgent = ref(false);
+const launchKind = ref<LaunchableKind>('claude');
+/** Host default is skip-permissions ON; the only informative answer is no. */
+const launchSkipPerms = ref(true);
+const launchProfile = ref<string | null>(null);
+
+/**
+ * The four launchable engines, each with the host's own reason when it
+ * cannot start here. Until the probe answers, baseline kinds stay offered
+ * and grok says "checking…" — kindUnavailableReason owns every sentence.
+ */
+const agentKindRows = computed(() => {
+  const support: HostAgentSupport =
+    state.value?.agentSupport ?? { subcommands: null, probing: state.value?.agentProbing ?? false };
+  return LAUNCHABLE_KINDS.map((kind) => ({
+    kind,
+    label: KIND_LABELS[kind],
+    reason: kindUnavailableReason(kind, support),
+  }));
+});
+
+const profileOptions = computed(() => profilesFor(launchKind.value, state.value?.agentProfiles ?? []));
+
+watch(launchKind, () => {
+  // The engine's default profile is pre-selected and sent as ABSENT: naming
+  // it adds a flag that can fail in exchange for no change in behaviour.
+  launchProfile.value = profileOptions.value.find((p) => p.default)?.name ?? null;
+});
+
+/** The exact line the host will receive, shown before it is typed. */
+const launchLinePreview = computed(() => {
+  const ws = newWorkspace.value.trim();
+  if (ws === '') return null;
+  return buildLaunchCommand({
+    kind: launchKind.value,
+    dir: ws,
+    skipPermissions: launchSkipPerms.value,
+    profile: profileFlagName(launchProfile.value, profileOptions.value),
+  });
+});
 
 function suggestTag() {
   const ws = newWorkspace.value.trim().replace(/\/+$/, '');
@@ -251,9 +313,26 @@ async function commitNew() {
   const tag = newTag.value.trim();
   if (ws === '' || tag === '' || controller === null) return;
   newError.value = '';
-  const outcome = await controller.createSession(ws, tag);
+  let outcome;
+  if (launchAgent.value) {
+    outcome = await controller.launchAgentSession(
+      {
+        kind: launchKind.value,
+        dir: ws,
+        skipPermissions: launchSkipPerms.value,
+        profile: profileFlagName(launchProfile.value, profileOptions.value),
+      },
+      ws,
+      tag,
+    );
+  } else {
+    outcome = await controller.createSession(ws, tag);
+  }
   if (!outcome.ok && !outcome.liveRefusal) {
     newError.value = outcome.error ?? 'could not create the session';
+    // The controller also strips this into the workspace-level notice; the
+    // dialog is showing the same sentence inline, so the strip stays quiet.
+    controller.dismissActionError();
     return;
   }
   showNew.value = false;
@@ -295,6 +374,79 @@ async function ackAll() {
 
 async function refreshNow() {
   await controller?.refresh();
+}
+
+// --- session composer ------------------------------------------------------
+
+const composerInput = ref('');
+const composerBusy = ref(false);
+const composerIndex = ref(0);
+/** Esc or an acceptance closes the palette until the text changes again. */
+const paletteDismissed = ref(false);
+
+const activeAgent = computed(() => liveAgentKind(activeTab.value?.engine));
+const paletteRows = computed(() => {
+  if (paletteDismissed.value) return [];
+  return paletteFor(composerInput.value, activeAgent.value);
+});
+
+watch(
+  () => state.value?.activeKey,
+  () => {
+    composerInput.value = '';
+    composerIndex.value = 0;
+    paletteDismissed.value = false;
+  },
+);
+
+function onComposerInput() {
+  paletteDismissed.value = false;
+  composerIndex.value = 0;
+}
+
+function acceptCommand(command: AgentCommand) {
+  composerInput.value = acceptedInput(command);
+  paletteDismissed.value = true;
+}
+
+function onComposerKeydown(event: KeyboardEvent) {
+  const rows = paletteRows.value;
+  if (rows.length > 0) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      composerIndex.value = (composerIndex.value + step + rows.length) % rows.length;
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      paletteDismissed.value = true;
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      acceptCommand(rows[composerIndex.value]);
+      return;
+    }
+  }
+  if (event.key === 'Enter' && !event.shiftKey) void sendLine();
+}
+
+async function sendLine() {
+  const key = state.value?.activeKey;
+  const session = controller;
+  const text = composerInput.value;
+  if (key === null || key === undefined || session === null || composerBusy.value) return;
+  composerBusy.value = true;
+  try {
+    const wrote = await sendComposerLine(text, (data) =>
+      Promise.resolve(session.deliverToTab(key, data)),
+    );
+    // A refused body keeps the text: a dead session never eats a prompt.
+    if (wrote) composerInput.value = '';
+  } finally {
+    composerBusy.value = false;
+  }
 }
 
 // --- display helpers ------------------------------------------------------
@@ -503,6 +655,43 @@ function back() {
             </div>
           </div>
 
+          <form v-if="activeTab" class="ws-composer" @submit.prevent="sendLine">
+            <div v-if="paletteRows.length > 0" class="ws-palette" role="listbox" aria-label="Agent commands">
+              <button
+                v-for="(c, i) in paletteRows"
+                :key="c.command"
+                type="button"
+                role="option"
+                :aria-selected="i === composerIndex"
+                :class="{ 'is-picked': i === composerIndex }"
+                @mousemove="composerIndex = i"
+                @click="acceptCommand(c)"
+              >
+                <span class="ws-palette-cmd">{{ c.command }}</span>
+                <span class="ws-palette-label">{{ c.label }}</span>
+                <span class="ws-palette-desc">{{ c.description }}</span>
+              </button>
+            </div>
+            <textarea
+              id="ws-composer-input"
+              v-model="composerInput"
+              class="ws-composer-input"
+              rows="1"
+              :placeholder="activeAgent ? `Message ${activeAgent}…` : 'Type a command…'"
+              :aria-label="activeAgent ? `Message the ${activeAgent} session` : 'Send to the session'"
+              :disabled="!activeTab.live || composerBusy"
+              @keydown="onComposerKeydown"
+              @input="onComposerInput"
+            />
+            <button
+              class="button primary ws-composer-send"
+              type="submit"
+              :disabled="!activeTab.live || composerBusy || composerInput.trim() === ''"
+            >
+              {{ composerBusy ? 'Sending…' : 'Send' }}
+            </button>
+          </form>
+
           <footer class="ws-statusbar">
             <template v-if="activeTab">
               <span class="ws-status-sel">
@@ -542,6 +731,48 @@ function back() {
           </datalist>
           <label class="flabel" for="ws-new-tag">Session name</label>
           <input id="ws-new-tag" v-model="newTag" placeholder="main" autocomplete="off" spellcheck="false" />
+
+          <section class="ws-launch" aria-label="Agent launch">
+            <label class="ws-launch-toggle">
+              <input v-model="launchAgent" type="checkbox" />
+              <span>Launch an agent in this session</span>
+            </label>
+            <template v-if="launchAgent">
+              <div class="ws-launch-kinds" role="radiogroup" aria-label="Agent">
+                <label
+                  v-for="row in agentKindRows"
+                  :key="row.kind"
+                  class="ws-launch-kind"
+                  :class="{ 'is-off': row.reason !== null }"
+                >
+                  <input
+                    v-model="launchKind"
+                    type="radio"
+                    name="ws-agent-kind"
+                    :value="row.kind"
+                    :disabled="row.reason !== null"
+                  />
+                  <span class="ws-launch-kind-label">{{ row.label }}</span>
+                  <span v-if="row.reason !== null" class="ws-launch-kind-reason">{{ row.reason }}</span>
+                </label>
+              </div>
+              <label v-if="supportsSkipPermissions(launchKind)" class="ws-launch-toggle">
+                <input v-model="launchSkipPerms" type="checkbox" />
+                <span>Skip permission prompts</span>
+              </label>
+              <template v-if="supportsProfiles(launchKind) && profileOptions.length > 0">
+                <label class="flabel" for="ws-launch-profile">Profile</label>
+                <select id="ws-launch-profile" v-model="launchProfile">
+                  <option :value="null">Engine default</option>
+                  <option v-for="p in profileOptions" :key="p.name" :value="p.name">
+                    {{ p.name }}{{ p.default ? ' (default)' : '' }}
+                  </option>
+                </select>
+              </template>
+              <p v-if="launchLinePreview !== null" class="ws-launch-line">{{ launchLinePreview }}</p>
+            </template>
+          </section>
+
           <p v-if="newError" class="error">{{ newError }}</p>
           <div class="ws-dialog-actions">
             <button type="button" @click="showNew = false">Cancel</button>

@@ -18,6 +18,15 @@ import type { AplexerWarning } from '../aplexer/warningsParse';
 import { AplexerClient } from '../aplexer/client';
 import type { AplexerStartOutcome } from '../aplexer/client';
 import type { SessionSummary } from '../shared/types';
+import {
+  buildLaunchCommand,
+  KIND_LABELS,
+  launchBlocker,
+  type AgentProfile,
+  type HostAgentSupport,
+  type LaunchChoice,
+} from '../shared/agentLaunch';
+import { PocketshellProbe } from './agentProbe';
 import { SshConnection, type PtyChannel } from '../terminal/connection';
 import type { BridgeAuth } from '../terminal/bridge';
 
@@ -80,9 +89,15 @@ export interface ControllerState {
   warnings: AplexerWarning[] | null;
   /** The warnings list could not be refreshed this tick; shown as stale. */
   warnStale: boolean;
-  /** The last failed action (start/kill/rename), for the inline notice. */
+  /** The last failed action (start/kill/rename/launch), for the inline notice. */
   actionError: string;
   actionBusy: boolean;
+  /** The launch probe is in flight — the picker says "checking…" not "no". */
+  agentProbing: boolean;
+  /** The host's `pocketshell agent` answer, null until first asked. */
+  agentSupport: HostAgentSupport | null;
+  /** The host's agent config-dir profiles for the picker. */
+  agentProfiles: AgentProfile[];
   /** Snapshot age marker, bumped every poll so the view can tick ages. */
   tick: number;
 }
@@ -92,9 +107,19 @@ export interface WorkspaceDeps {
   /** Override the connection for tests. */
   makeConnection?: () => SshConnection;
   pollMs?: number;
+  /** How long a launch waits for its session's PTY before giving up. */
+  launchTimeoutMs?: number;
 }
 
 const POLL_MS = 5_000;
+/**
+ * How long `launchAgentSession` waits for the new session's terminal to show
+ * life before giving up on the launch — the desktop's LAUNCH_TIMEOUT_MS
+ * (useSessionLaunch.ts). Generous on purpose: this is a fresh SSH channel plus
+ * `a attach`, observed at 1.5-2s on a real link, so expiring means something is
+ * actually wrong rather than merely slow.
+ */
+const LAUNCH_TIMEOUT_MS = 12_000;
 
 export class HostWorkspaceController {
   state: ControllerState = {
@@ -110,16 +135,23 @@ export class HostWorkspaceController {
     warnStale: false,
     actionError: '',
     actionBusy: false,
+    agentProbing: false,
+    agentSupport: null,
+    agentProfiles: [],
     tick: 0,
   };
 
   private readonly conn: SshConnection;
   private readonly client: AplexerClient;
+  private readonly probe: PocketshellProbe;
   private readonly pollMs: number;
+  private readonly launchTimeoutMs: number;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private paused = false;
   private disposed = false;
   private readonly channels = new Map<string, PtyChannel>();
+  /** One-shot "this PTY said something" resolvers, armed by the launch. */
+  private readonly firstData = new Map<string, () => void>();
   private readonly listeners = new Set<(state: ControllerState) => void>();
   private readonly dataListeners = new Set<(key: string, bytes: Uint8Array) => void>();
   private readonly exitListeners = new Set<(key: string) => void>();
@@ -129,7 +161,9 @@ export class HostWorkspaceController {
       deps.makeConnection?.() ??
       new SshConnection();
     this.client = new AplexerClient(this.conn);
+    this.probe = new PocketshellProbe(this.conn);
     this.pollMs = deps.pollMs ?? POLL_MS;
+    this.launchTimeoutMs = deps.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS;
   }
 
   onChange(cb: (state: ControllerState) => void): () => void {
@@ -200,6 +234,7 @@ export class HostWorkspaceController {
         // 'exec' command mode works — no login shell before the session.
         command: aplexerAttachCommand({ id: row.id }),
         onData: (bytes) => {
+          this.armFirstData(key);
           for (const cb of this.dataListeners) cb(key, bytes);
         },
         onExit: () => this.onChannelClosed(key),
@@ -240,6 +275,7 @@ export class HostWorkspaceController {
     }
     const channel = await this.conn.openPty({
       onData: (bytes) => {
+        this.armFirstData(key);
         for (const cb of this.dataListeners) cb(key, bytes);
       },
       onExit: () => this.onChannelClosed(key),
@@ -376,6 +412,97 @@ export class HostWorkspaceController {
     this.channels.get(key)?.write(text);
   }
 
+  /**
+   * Composer delivery: like writeToTab but reports whether the write could
+   * land, so a dead session refuses a send instead of silently eating it.
+   */
+  deliverToTab(key: string, text: string): boolean {
+    const channel = this.channels.get(key);
+    if (!channel) return false;
+    channel.write(text);
+    return true;
+  }
+
+  /**
+   * Ask the host which agents its `pocketshell` helper can start, and what
+   * profiles it has. Deliberately NOT cached: the desktop re-probes each time
+   * the picker opens (one `--help` exec that does no work host-side) so a
+   * helper upgraded mid-connection is offered without a reconnect. Re-entrancy
+   * is folded into the in-flight call rather than rejected — two opens racing
+   * is the benign case, and both should settle with the same answer.
+   */
+  async probeAgent(): Promise<void> {
+    if (this.state.agentProbing) return;
+    this.patch({ agentProbing: true });
+    try {
+      const [support, profiles] = await Promise.all([this.probe.agentSupport(), this.probe.listProfiles()]);
+      this.patch({ agentSupport: support, agentProfiles: profiles });
+    } finally {
+      this.patch({ agentProbing: false });
+    }
+  }
+
+  /**
+   * Create a session in [workspace] under [tag] and launch the picked agent
+   * in it — the web twin of the desktop's create-then-type pipeline
+   * (useSessionLaunch.ts), in one place because the workspace owns both ends:
+   * the desktop needs the parked-slot machinery only because its panel and
+   * its terminals live in different components.
+   *
+   * The launch is gated by `launchBlocker` BEFORE the session is created,
+   * which is the whole point: a launch that cannot work should cost nothing,
+   * not leave a shell plus a usage message. The line itself is typed once the
+   * new PTY shows life, through the helper's wrapper (`pocketshell agent …`,
+   * built by shared/agentLaunch.ts against the captured `--help` — never a
+   * bare `claude`/`codex`, which no host records as an agent session).
+   *
+   * A PTY that never comes up gets the desktop's remedy, not a rollback: the
+   * session is real either way, so the user gets the exact line to paste,
+   * never a silent "I asked for Claude and got a shell".
+   */
+  async launchAgentSession(
+    choice: LaunchChoice,
+    workspace: string,
+    tag: string,
+  ): Promise<AplexerStartOutcome> {
+    const blocker = launchBlocker(choice, this.state.agentSupport ?? undefined);
+    if (blocker !== null) {
+      this.patch({ actionError: blocker });
+      return { ok: false, id: null, tag: null, liveRefusal: false, error: blocker };
+    }
+    const outcome = await this.createSession(workspace, tag);
+    if (!outcome.ok) return outcome;
+    const key = this.keyForCreated(outcome, workspace, tag);
+    if (key === null) return outcome;
+    const line = buildLaunchCommand(choice);
+    const cameUp = await this.waitForFirstData(key, this.launchTimeoutMs);
+    if (!cameUp) {
+      this.patch({
+        actionError:
+          `Started "${outcome.tag ?? tag}", but its terminal did not come up in time, so ` +
+          `${KIND_LABELS[choice.kind]} was not launched. The session is a plain shell - run ` +
+          `\`${line}\` in it to start the agent.`,
+      });
+      return outcome;
+    }
+    // One write, line and Enter together — the desktop's launch shape. The
+    // composer's bracketed-paste framing is for agent REPLs mid-conversation;
+    // this line lands in a plain shell where the framing would be noise.
+    const channel = this.channels.get(key);
+    if (!channel) {
+      // The PTY spoke and died between the wait and this write. Same remedy.
+      this.patch({
+        actionError:
+          `Started "${outcome.tag ?? tag}", but its terminal closed before ` +
+          `${KIND_LABELS[choice.kind]} could be launched. The session is a plain shell - run ` +
+          `\`${line}\` in a new tab to start the agent.`,
+      });
+      return outcome;
+    }
+    channel.write(`${line}\r`);
+    return outcome;
+  }
+
   dismissActionError(): void {
     this.patch({ actionError: '' });
   }
@@ -383,6 +510,8 @@ export class HostWorkspaceController {
   dispose(): void {
     this.disposed = true;
     if (this.pollTimer !== null) clearTimeout(this.pollTimer);
+    for (const resolve of this.firstData.values()) resolve();
+    this.firstData.clear();
     for (const channel of this.channels.values()) {
       try {
         channel.close();
@@ -398,6 +527,52 @@ export class HostWorkspaceController {
   }
 
   // --- internals -----------------------------------------------------------
+
+  /** Resolve the one armed launch wait for [key], if any. */
+  private armFirstData(key: string): void {
+    const resolve = this.firstData.get(key);
+    if (resolve) {
+      this.firstData.delete(key);
+      resolve();
+    }
+  }
+
+  /**
+   * Wait for the tab's PTY to show life (its first bytes — the attach
+   * repaint), or null at the deadline. The launch types only into a terminal
+   * that has spoken; typing blind races the attach and shreds the line.
+   */
+  private waitForFirstData(key: string, timeoutMs: number): Promise<boolean> {
+    if (this.channels.has(key) === false) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.firstData.delete(key);
+        resolve(false);
+      }, timeoutMs);
+      this.firstData.set(key, () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
+
+  /** The tab key a created session opened under, or null when none did. */
+  private keyForCreated(
+    outcome: AplexerStartOutcome,
+    workspace: string,
+    tag: string,
+  ): string | null {
+    if (outcome.id !== null && outcome.id !== '') {
+      const key = `apx:${outcome.id}`;
+      if (this.state.tabs.some((t) => t.key === key)) return key;
+    }
+    const wantedTag = outcome.tag ?? tag;
+    const row = this.state.rows.find((r) => r.workspace === workspace && r.tag === wantedTag);
+    if (row && row.id !== '' && this.state.tabs.some((t) => t.key === `apx:${row.id}`)) {
+      return `apx:${row.id}`;
+    }
+    return null;
+  }
 
   private schedulePoll(): void {
     if (this.disposed || this.pollTimer !== null) return;

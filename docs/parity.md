@@ -73,7 +73,7 @@ the Vue view is chrome + xterm wiring only.
 | Terminal (PTY, resize, reconnect) | done (bridge: `session_lost` + retry; direct: one `SshConnection`, many channels) | — |
 | OSC52 copy, URL links | done (vendored `shared/osc52.ts`; web-links addon) | — |
 | Sessions: tree, grouping, launch/stop/rename dialogs, tabs | done over direct SSH (see above); hosts without `a` keep the plain shell | — |
-| Session composer, agent launch (`pocketshell agent …`), slash commands | launch-line builder vendored 2026-09-20 (`shared/agentLaunch.ts` + `agentCommands.ts`, fixture-pinned); composer panel still missing | web-only work |
+| Session composer, agent launch (`pocketshell agent …`), slash commands | launch-line builder + command catalog vendored 2026-09-20 (`shared/agentLaunch.ts` + `agentCommands.ts` + `composerSend.ts`, fixture-pinned); session composer with slash palette rides the shared delivery (`workspace/composer.ts`); agent launch picker in progress | web-only work |
 | Files: SFTP browse/edit (`FileTree`, `CodeEditor`) | missing | direct path can use ssh2's SFTP; bridge needs sftp frames |
 | Port forwarding panel + traffic counters | `HostEntry` already carries parsed forward specs (displayed as text only) | **cannot listen on a browser** — local forwards need a desktop/CLI companion; remote forwards could ride an exec |
 | Known-hosts verification (TOFU pinning) | partial (direct mode sees the host key; pinning not stored yet) | web-only work |

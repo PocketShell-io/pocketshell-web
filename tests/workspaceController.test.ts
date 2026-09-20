@@ -97,6 +97,22 @@ class FakeConnection {
       );
       return { exitCode: 0, stdout: '', stderr: '', error: null };
     }
+    if (inner.includes('pocketshell agent --help')) {
+      return {
+        exitCode: 0,
+        stdout:
+          'Usage: pocketshell agent [OPTIONS] COMMAND\n\nCommands:\n' +
+          '  claude    Launch `claude`.\n  codex     Launch `codex`.\n',
+        stderr: '',
+        error: null,
+      };
+    }
+    if (inner.includes('pocketshell --version')) {
+      return { exitCode: 0, stdout: 'pocketshell, version 0.4.44\n', stderr: '', error: null };
+    }
+    if (inner.includes('pocketshell profiles list')) {
+      return { exitCode: 0, stdout: '{"profiles": []}', stderr: '', error: null };
+    }
     return { exitCode: 0, stdout: '', stderr: '', error: null };
   }
 
@@ -212,6 +228,15 @@ describe('session tabs', () => {
     expect(conn.ptys[0]!.closed).toBe(true);
   });
 
+  it('deliverToTab reports refusal for a missing channel, success for a live one', async () => {
+    const { conn, controller } = await started();
+    // No tab yet: the composer's send must be a refused send, not a swallow.
+    expect(controller.deliverToTab('apx:none', 'x')).toBe(false);
+    await controller.openSession(controller.state.rows[0]!);
+    expect(controller.deliverToTab('apx:u1', 'echo hi\r')).toBe(true);
+    expect(conn.ptys[0]!.writes).toEqual(['echo hi\r']);
+  });
+
   it('a poll that loses the session marks the tab gone', async () => {
     const { conn, controller } = await started();
     await controller.openSession(controller.state.rows[0]!);
@@ -319,3 +344,88 @@ describe('warnings + dispose', () => {
     expect(controller.state.tabs[0]!.live).toBe(false);
   });
 });
+
+describe('agent probe + launch', () => {
+  function makeLaunchController() {
+    const conn = new FakeConnection();
+    const controller = new HostWorkspaceController({
+      link: LINK,
+      makeConnection: () => conn as unknown as import('../src/terminal/connection').SshConnection,
+      pollMs: 60_000,
+      launchTimeoutMs: 200,
+    });
+    return { conn, controller };
+  }
+
+  it('probeAgent answers from the helper help, PATH-wrapped, never cached shut', async () => {
+    const { conn, controller } = makeLaunchController();
+    await controller.start();
+    const before = conn.execCalls.length;
+    await controller.probeAgent();
+    const probeCalls = conn.execCalls.slice(before);
+    expect(probeCalls.some((c) => c.includes('pocketshell agent --help'))).toBe(true);
+    expect(probeCalls.every((c) => c.includes('.local/bin'))).toBe(true);
+    expect(controller.state.agentSupport?.subcommands).toEqual(['claude', 'codex']);
+    expect(controller.state.agentProbing).toBe(false);
+  });
+
+  it('launch creates the session, waits for the PTY to speak, then types the line', async () => {
+    const { conn, controller } = makeLaunchController();
+    await controller.start();
+    conn.execCalls.length = 0;
+    const p = controller.launchAgentSession(
+      { kind: 'claude', dir: '/home/a/git/proj', skipPermissions: true, profile: null },
+      '/home/a/git/proj',
+      'side',
+    );
+    const pty = () => conn.ptys.at(-1)!;
+    await vi.waitFor(
+      () => {
+        expect(controller.state.tabs.some((t) => t.key === 'apx:u2')).toBe(true);
+        // One emit per poll: whichever lands after the launch armed its wait
+        // resolves it, and the assert then holds on the NEXT poll (the write
+        // lands in a microtask after the resolver fires).
+        pty().emit('main $ ');
+        expect(pty().writes.join('')).toContain('pocketshell agent');
+      },
+      { interval: 5, timeout: 500 },
+    );
+    const outcome = await p;
+    expect(outcome.ok).toBe(true);
+    // The helper's WRAPPER line, not a bare `claude` — and Enter with it.
+    expect(pty().writes.at(-1)).toBe("pocketshell agent claude --dir '/home/a/git/proj'\r");
+    expect(controller.state.actionError).toBe('');
+  });
+
+  it('a PTY that never speaks expires into the paste-it-yourself remedy', async () => {
+    const { conn, controller } = makeLaunchController();
+    await controller.start();
+    const p = controller.launchAgentSession(
+      { kind: 'claude', dir: '/home/a/git/proj', skipPermissions: true, profile: null },
+      '/home/a/git/proj',
+      'side',
+    );
+    const outcome = await p;
+    expect(outcome.ok).toBe(true); // the session itself is real either way
+    expect(controller.state.actionError).toContain('did not come up in time');
+    expect(controller.state.actionError).toContain("pocketshell agent claude --dir '/home/a/git/proj'");
+    expect(conn.ptys.at(-1)!.writes).toEqual([]);
+  });
+
+  it('a launch the host would refuse costs nothing: no session, no exec', async () => {
+    const { conn, controller } = makeLaunchController();
+    await controller.start();
+    const before = conn.execCalls.length;
+    const outcome = await controller.launchAgentSession(
+      { kind: 'claude', dir: '', skipPermissions: true, profile: null },
+      '/home/a/git/proj',
+      'side',
+    );
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain('cannot be launched');
+    expect(controller.state.actionError).toContain('cannot be launched');
+    expect(conn.execCalls.length).toBe(before);
+  });
+});
+
+
