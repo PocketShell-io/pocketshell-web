@@ -3362,6 +3362,35 @@ button.dir-row {
 
 .ws-launch-kind input {
   grid-row: span 2;
+  /* Native control beside the TITLE line, not centred against a multi-line
+     refusal sentence; and stripped of the global padded-input box, which
+     turns a check control into a ~150px box that shoves its label across
+     the dialog. accent carries the theme instead. */
+  align-self: start;
+  margin-top: 2px;
+  appearance: auto;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  accent-color: #3fb950;
+}
+
+/* The toggle rows share the same reset: checkbox adjacent to its sentence. */
+.ws-launch-toggle input[type='checkbox'] {
+  appearance: auto;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  accent-color: #3fb950;
+  flex: none;
 }
 
 .ws-launch-kind.is-off {
@@ -3522,8 +3551,17 @@ button.dir-row {
     padding: 10px 12px;
   }
 
+  /* Two sessions must stay distinguishable in the strip: the 160px cap with
+     the 44px close box left the label one character. The phase word moves
+     out of the way (the status bar owns it) and the cap widens. */
   .ws-tab {
-    max-width: 160px;
+    max-width: 220px;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .ws-tab-phase {
+    display: none;
   }
 
   .ws-statusbar {
