@@ -37,9 +37,13 @@ jobs:
           aws-region: eu-west-1
 
       - name: Build, sync to S3, invalidate CloudFront
+        # The deploy role cannot read stack outputs (no
+        # cloudformation:DescribeStacks), so deploy.sh's relay auto-detect
+        # always comes up empty in CI — pin the browser-direct relay here.
         run: |
           SITE_BUCKET=pocketshell-web-site-817685572750-eu-west-1 \
           CF_DISTRIBUTION_ID=E2OY1IN2FXNSFE \
           WS_URL=wss://feqwtdkaw4.execute-api.eu-west-1.amazonaws.com/main \
+          DIRECT_WS_URL=wss://relay.pocketshell.io/ \
           ./scripts/deploy.sh
           aws cloudfront create-invalidation --distribution-id E2H01B6MN5ZDSI --paths "/*"
