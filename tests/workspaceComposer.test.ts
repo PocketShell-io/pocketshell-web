@@ -98,11 +98,19 @@ describe('sendComposerLine', () => {
     expect(channel.calls).toEqual(['fix the failing test', SUBMIT_KEY]);
   });
 
-  it('frames a multi-line payload in bracketed paste', async () => {
+  it('frames a multi-line payload as marker, body, marker, then submit', async () => {
     const channel = recording();
     await sendComposerLine('line one\nline two', channel.write);
-    expect(channel.calls[0]).toBe(BP_START + 'line one\nline two' + BP_END);
-    expect(channel.calls[1]).toBe(SUBMIT_KEY);
+    // Three writes, not one: the shell's escape parser eats the head of a
+    // read chunk that starts with ESC, so the start marker travels alone
+    // (shared/composerSend.ts — the desktop's composer E2E red since the
+    // fixture gained aplexer is this exact loss).
+    expect(channel.calls).toEqual([
+      BP_START,
+      'line one\nline two',
+      BP_END,
+      SUBMIT_KEY,
+    ]);
   });
 
   it('keeps the text (false, no submit) when the channel refuses the body', async () => {
