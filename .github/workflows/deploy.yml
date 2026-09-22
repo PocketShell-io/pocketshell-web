@@ -29,6 +29,22 @@ jobs:
           node-version: 24
           cache: npm
 
+      # @pocketshell/core is a file:../pocketshell-core dependency: the shared
+      # contract layer web, desktop and the Android embed all consume from one
+      # implementation. CI checks out this repo alone, so fetch the sibling to
+      # exactly the path the file: spec names and build its dist/ — the same
+      # shape as a developer machine, where the sibling sits next to this
+      # checkout. STOPGAP: when @pocketshell/core ships from npm (the
+      # tag-triggered publish workflow is already wired in that repo) the
+      # dependency flips to a registry version and these steps retire.
+      - uses: actions/checkout@v4
+        with:
+          repository: PocketShell-io/pocketshell-core
+          path: ../pocketshell-core
+          persist-credentials: false
+      - name: Build @pocketshell/core (file sibling)
+        run: npm ci && npm run build
+        working-directory: ../pocketshell-core
       - run: npm ci
 
       - uses: aws-actions/configure-aws-credentials@v4
