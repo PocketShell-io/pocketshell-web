@@ -28,23 +28,32 @@ browser (Vue 3 SPA) ── HTTPS ──▶ S3 + CloudFront (pocketshell.io)
 ## Shared code with the desktop app
 
 The sync contract is not reimplemented here, it is shared with
-pocketshell-desktop:
+pocketshell-desktop through one package:
 
-- `src/shared/{types,syncMerge,sync,syncConfig}.ts` are VERBATIM copies of
-  the desktop's `src/shared/` modules — refresh them with
-  `scripts/sync-shared.sh` after changing them there, never edit the copies.
-  The web host list is parsed by the desktop's `parseSyncPayload`, so a
-  blob either app writes reads identically in both.
-- `src/shared/syncCrypto.ts` is the browser twin of the desktop's
+- `@pocketshell/core` (the [pocketshell-core](../pocketshell-core) repo) is the
+  single implementation of the contract layer: `types`, `syncMerge`, `sync`,
+  `syncConfig`, the zero-knowledge blob both clients parse, `sshConfigCore`,
+  `osc52`, `aplexer` (+ commands, parsers, client core), `shellQuote`,
+  `agentLaunch`, `agentCommands`, `composerSend`, `knownHostsCore`, `sftpCore`,
+  `net`, `byteSize`, and `userBinPath`. The web host list is parsed by the
+  desktop's `parseSyncPayload`, so a blob either app writes reads identically
+  in both. A change lands in the core repo once and both apps pick it up —
+  the old `scripts/sync-shared.sh` verbatim-copy loop is gone.
+- The package is consumed locally as `file:../pocketshell-core` (npm links it,
+  so a core rebuild is enough — no republish). When it is published to npm,
+  the file: spec turns into a version.
+- `src/shared/syncCrypto.ts` remains a browser twin of the desktop's
   `src/main/sync/SyncCrypto.ts` (WebCrypto instead of `node:crypto`, same
-  envelope byte-for-byte) — hand-maintained, change in lockstep.
+  envelope byte-for-byte) — hand-maintained, change in lockstep. Moving it
+  behind an injected-crypto interface into the core is the obvious next step.
 - `src/api/sync.ts` ports the desktop's `SyncService` (same errors, same
   8 KB limit, same conflict shape); only the token source differs, because
   a browser cannot refresh a Google token silently.
 
 `tests/syncCrypto.test.ts` proves envelope interop with the desktop format
 in BOTH directions (node writes → browser reads, browser writes → node
-reads), and `tests/syncMerge.test.ts` pins the desktop's parse/merge rules.
+reads), and the sync/aplexer/osc52/agent tests run the core package's code
+directly — the same suite the core repo runs.
 
 
 ## Security model

@@ -1,7 +1,7 @@
 /** Runtime config from /config.js, loaded before this bundle. The sync API
  * URL defaults to the desktop app's constant (src/shared/syncConfig.ts) so
  * the two clients move together; /config.js overrides for this deployment. */
-import { SYNC_API_URL } from './shared/syncConfig';
+import { SYNC_API_URL } from '@pocketshell/core';
 
 export interface AppConfig {
   syncApiUrl: string;

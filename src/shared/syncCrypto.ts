@@ -12,9 +12,10 @@
  * garbage output. tests/syncCrypto.test.ts proves interop with the desktop
  * format in both directions.
  *
- * Vendoring policy: types/syncMerge/sync/syncConfig are copied verbatim by
- * scripts/sync-shared.sh; this file is hand-maintained because the runtime
- * differs — change it in lockstep with the desktop's SyncCrypto.
+ * Package policy: the rest of the contract layer ships in @pocketshell/core;
+ * this file stays web-local because the runtime differs — change it in
+ * lockstep with the desktop's SyncCrypto (or move it behind an injected
+ * crypto interface into the core).
  */
 
 const FORMAT_VERSION = 1;

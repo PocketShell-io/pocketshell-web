@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { decryptEnvelope, encryptToEnvelope } from '../shared/syncCrypto';
-import { knownHostsToken, type HostKeyPin } from '../shared/knownHostsCore';
+import { knownHostsToken, type HostKeyPin } from '@pocketshell/core';
 import { useHostsStore } from './hosts';
 
 const PINS_STORAGE = 'ps.hostPins';

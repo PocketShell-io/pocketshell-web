@@ -13,11 +13,11 @@
  * host's `--sort` order is the sidebar's order, and this controller is a
  * fold of the snapshot, not a sort of it.
  */
-import { aplexerAttachCommand } from '../shared/aplexer';
+import { aplexerAttachCommand } from '@pocketshell/core';
 import type { AplexerWarning } from '../aplexer/warningsParse';
 import { AplexerClient } from '../aplexer/client';
 import type { AplexerStartOutcome } from '../aplexer/client';
-import type { SessionSummary } from '../shared/types';
+import type { SessionSummary } from '@pocketshell/core';
 import {
   buildLaunchCommand,
   KIND_LABELS,
@@ -25,7 +25,7 @@ import {
   type AgentProfile,
   type HostAgentSupport,
   type LaunchChoice,
-} from '../shared/agentLaunch';
+} from '@pocketshell/core';
 import { PocketshellProbe } from './agentProbe';
 import { SshConnection, type KnownHostsHooks, type PtyChannel } from '../terminal/connection';
 import type { BridgeAuth } from '../terminal/bridge';

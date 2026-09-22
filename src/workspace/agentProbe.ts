@@ -17,12 +17,12 @@
  * so a helper upgraded while the tab is connected starts offering the new
  * engine without a reconnect.
  */
-import { pathAwareCommand } from '../shared/aplexerCommands';
+import { pathAwareCommand } from '@pocketshell/core';
 import {
   parseProfileRows,
   type AgentProfile,
   type HostAgentSupport,
-} from '../shared/agentLaunch';
+} from '@pocketshell/core';
 import type { ExecOutcome } from '../terminal/connection';
 
 /** The one thing the probe needs from a connection — AplexerClient's shape. */

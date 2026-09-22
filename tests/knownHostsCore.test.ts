@@ -5,7 +5,7 @@ import {
   decodePublicKeyBlob,
   knownHostsToken,
   verifyHostKeyPin,
-} from '../src/shared/knownHostsCore';
+} from '@pocketshell/core';
 
 // The vendored shared core (desktop src/shared/knownHostsCore.ts): the
 // reference implementations for base64 and blob layout are Node's Buffer —

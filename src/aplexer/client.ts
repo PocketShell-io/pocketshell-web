@@ -9,16 +9,16 @@
  * aplexer is the MAIN session manager wherever it is installed; a host
  * without it gets the plain-shell terminal, not a broken panel.
  */
-import type { AplexerSessionRecord, AplexerSortKey, AplexerWarning } from '../shared/aplexer';
-import { APLEXER_LIST_SORT } from '../shared/aplexer';
-import type { SessionSummary } from '../shared/types';
+import type { AplexerSessionRecord, AplexerSortKey, AplexerWarning } from '@pocketshell/core';
+import { APLEXER_LIST_SORT } from '@pocketshell/core';
+import type { SessionSummary } from '@pocketshell/core';
 import {
   AplexerCore,
   type AplexerAckOutcome,
   type AplexerKillOutcome,
   type AplexerRenameOutcome,
   type AplexerStartOutcome,
-} from '../shared/aplexerClientCore';
+} from '@pocketshell/core';
 import type { ExecOutcome } from '../terminal/connection';
 
 export type {

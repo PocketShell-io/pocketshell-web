@@ -14,7 +14,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { decodeOsc52SetClipboard } from '../shared/osc52';
+import { decodeOsc52SetClipboard } from '@pocketshell/core';
 import {
   HostWorkspaceController,
   type ControllerState,
@@ -27,7 +27,7 @@ import FilesPane from './FilesPane.vue';
 import { WorkspaceSftp } from '../workspace/sftp';
 import { formatAge } from '../aplexer/warningsParse';
 import { acceptedInput, liveAgentKind, paletteFor, sendComposerLine } from '../workspace/composer';
-import type { AgentCommand } from '../shared/agentCommands';
+import type { AgentCommand } from '@pocketshell/core';
 import {
   buildLaunchCommand,
   kindUnavailableReason,
@@ -39,7 +39,7 @@ import {
   supportsSkipPermissions,
   type HostAgentSupport,
   type LaunchableKind,
-} from '../shared/agentLaunch';
+} from '@pocketshell/core';
 import { config } from '../config';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';

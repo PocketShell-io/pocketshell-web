@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aplexerAttachCommand } from '../src/shared/aplexer';
+import { aplexerAttachCommand } from '@pocketshell/core';
 
 describe('aplexerAttachCommand', () => {
   it('joins by id when the uuid is known', () => {

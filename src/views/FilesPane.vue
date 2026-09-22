@@ -8,7 +8,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { WorkspaceSftp, MAX_TEXT_READ_BYTES, type DirEntry } from '../workspace/sftp';
-import { formatBytes } from '../shared/byteSize';
+import { formatBytes } from '@pocketshell/core';
 
 const props = defineProps<{ sftp: WorkspaceSftp }>();
 

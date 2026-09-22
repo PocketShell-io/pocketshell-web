@@ -1,12 +1,12 @@
-import { buildHosts, parseDirectiveLine } from './shared/sshConfigCore.js';
-import type { Directive } from './shared/sshConfigCore.js';
-import type { HostEntry } from './shared/types';
+import { buildHosts, parseDirectiveLine } from '@pocketshell/core';
+import type { Directive } from '@pocketshell/core';
+import type { HostEntry } from '@pocketshell/core';
 
 /**
  * Browser twin of the desktop's src/main/ssh-config/SshConfigParser: the
- * directive folding is the SAME code the desktop runs —
- * src/shared/sshConfigCore.ts, vendored verbatim from the desktop repo by
- * scripts/sync-shared.sh — and this module is the browser half of the split.
+ * directive folding is the SAME code the desktop runs — sshConfigCore in
+ * @pocketshell/core, one implementation for both clients — and this module
+ * is the browser half of the split.
  * It parses the text of an uploaded ~/.ssh/config IN THIS TAB, and that text
  * never leaves the browser; only entries the user then ticks join the synced
  * list, encrypted like any other host.

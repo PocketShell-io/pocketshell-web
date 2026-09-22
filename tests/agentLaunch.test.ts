@@ -21,7 +21,7 @@ import {
   launchBlocker,
   supportsProfiles,
   supportsSkipPermissions,
-} from '../src/shared/agentLaunch';
+} from '@pocketshell/core';
 
 const readFixture = (name: string): string =>
   readFileSync(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)), 'utf8');

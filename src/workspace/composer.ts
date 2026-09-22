@@ -10,17 +10,17 @@
  * This file is only the wiring contract between them, pinned by
  * tests/workspaceComposer.test.ts.
  */
-import { agentKindFromEngine } from '../shared/aplexerParsers';
+import { agentKindFromEngine } from '@pocketshell/core';
 import {
   composerAgentKind,
   deliverPayload,
   type ComposerAgentKind,
-} from '../shared/composerSend';
+} from '@pocketshell/core';
 import {
   filteredCommands,
   insertionTextFor,
   type AgentCommand,
-} from '../shared/agentCommands';
+} from '@pocketshell/core';
 
 /** The engine a tab runs, narrowed to the engines the composer can talk to. */
 export function liveAgentKind(engine: string | null | undefined): ComposerAgentKind | null {

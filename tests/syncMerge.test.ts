@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assembleSyncSet, parseSyncPayload } from '../src/shared/syncMerge';
-import type { HostEntry } from '../src/shared/types';
+import { assembleSyncSet, parseSyncPayload } from '@pocketshell/core';
+import type { HostEntry } from '@pocketshell/core';
 
 // A subset of the desktop repo's tests/unit/syncMerge.test.ts, running
 // against the VENDORED copy — the web app must read the account blob with

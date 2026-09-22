@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeHostDraft, upsertHost } from '../src/hostForm';
-import type { HostEntry } from '../src/shared/types';
+import type { HostEntry } from '@pocketshell/core';
 
 function host(name: string, hostname = `${name}.example.com`, port = 22): HostEntry {
   return {

@@ -13,7 +13,7 @@ import { Client as SSHClient } from 'ssh2';
 import type { ClientChannel, SFTPWrapper } from 'ssh2';
 import { Buffer } from 'node:buffer';
 import { connectWebSocketDuplex } from './wsduplex';
-import { decodePublicKeyBlob, verifyHostKeyPin, type HostKeyPin } from '../shared/knownHostsCore';
+import { decodePublicKeyBlob, verifyHostKeyPin, type HostKeyPin } from '@pocketshell/core';
 import { sha256Fingerprint } from './hostKeyFingerprint';
 import type { BridgeAuth } from './bridge';
 

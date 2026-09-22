@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOsc52SetClipboard } from '../src/shared/osc52';
+import { decodeOsc52SetClipboard } from '@pocketshell/core';
 
 // The desktop's tests/unit/osc52.test.ts, kept in step: this module is a
 // verbatim vendored copy, and the web pane answers the same tmux yank

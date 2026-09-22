@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia';
 import { makeSyncService, SyncConflictError } from '../api/sync';
-import { SYNC_SLOT } from '../shared/syncConfig';
-import { parseSyncPayload, serializeSyncPayload } from '../shared/syncMerge';
+import { SYNC_SLOT } from '@pocketshell/core';
+import { parseSyncPayload, serializeSyncPayload } from '@pocketshell/core';
 import { decryptEnvelope, encryptToEnvelope } from '../shared/syncCrypto';
-import type { HostEntry } from '../shared/types';
+import type { HostEntry } from '@pocketshell/core';
 import { upsertHost } from '../hostForm';
 import { useAuthStore } from './auth';
 

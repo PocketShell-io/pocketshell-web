@@ -5,7 +5,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { createSession, type TerminalSession } from '../terminal/session';
-import { decodeOsc52SetClipboard } from '../shared/osc52';
+import { decodeOsc52SetClipboard } from '@pocketshell/core';
 import {
   ackAllWarnings,
   ackWarning,

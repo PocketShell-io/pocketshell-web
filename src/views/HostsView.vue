@@ -9,7 +9,7 @@ import { normalizeHostDraft } from '../hostForm';
 import { parseSshConfigText } from '../sshConfigImport';
 import { claimsOf } from '../auth/google';
 import { forgetPassphrase, recallPassphrase, rememberPassphrase } from '../shared/passphraseVault';
-import type { HostEntry } from '../shared/types';
+import type { HostEntry } from '@pocketshell/core';
 
 const auth = useAuthStore();
 const hosts = useHostsStore();

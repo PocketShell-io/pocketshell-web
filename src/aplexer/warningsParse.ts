@@ -11,7 +11,7 @@
  * untrustworthy and the whole batch is refused — half-showing a crash list
  * is worse than showing none.
  */
-import type { AplexerWarning } from '../shared/aplexer';
+import type { AplexerWarning } from '@pocketshell/core';
 
 export type { AplexerWarning };
 

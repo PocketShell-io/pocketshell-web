@@ -69,9 +69,9 @@ vi.mock('../src/api/sync', () => {
 });
 
 import { decryptEnvelope, encryptToEnvelope } from '../src/shared/syncCrypto';
-import { serializeSyncPayload } from '../src/shared/syncMerge';
+import { serializeSyncPayload } from '@pocketshell/core';
 import { useHostsStore, type HostSecret } from '../src/stores/hosts';
-import type { HostEntry } from '../src/shared/types';
+import type { HostEntry } from '@pocketshell/core';
 
 const PASSPHRASE = 'correct horse';
 

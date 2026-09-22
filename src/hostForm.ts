@@ -1,13 +1,13 @@
-import type { HostEntry } from './shared/types';
+import type { HostEntry } from '@pocketshell/core';
 
 /**
  * The web-side host form: validating what a browser user submits and the
  * one-entry merge into the synced list. Pure, so tests drive it without
  * Pinia or the network.
  *
- * This module is WEB-ONLY — src/shared/syncMerge.ts is a verbatim vendored
- * copy of the desktop's file (scripts/sync-shared.sh), and the web creating
- * a host is a web-only capability, so the helpers live here instead.
+ * This module is WEB-ONLY — syncMerge now ships in @pocketshell/core (one
+ * implementation for desktop and web), and the web creating a host is a
+ * web-only capability, so the helpers live here instead.
  *
  * Validation mirrors the desktop's coerceHostEntries (shared/sync.ts) — the
  * rules an entry must survive before it can be written back to

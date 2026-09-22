@@ -4,7 +4,7 @@ import {
   aplexerRecordToSummary,
   byOldestCreated,
   parseAplexerSnapshot,
-} from '../src/shared/aplexerParsers';
+} from '@pocketshell/core';
 
 const LIVE_ROW = {
   id: '11111111-1111-1111-1111-111111111111',

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecOutcome } from '../src/terminal/connection';
 import { AplexerClient } from '../src/aplexer/client';
-import { aplexerAckCommand, aplexerProbeCommand, aplexerSnapshotCommand } from '../src/shared/aplexerCommands';
-import { pathAwareCommand } from '../src/shared/aplexerCommands';
+import { aplexerAckCommand, aplexerProbeCommand, aplexerSnapshotCommand } from '@pocketshell/core';
+import { pathAwareCommand } from '@pocketshell/core';
 
 const RECORD = {
   id: 'u1',

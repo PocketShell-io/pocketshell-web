@@ -6,14 +6,14 @@
  * insertion, and the never-eat-a-prompt delivery refusal.
  */
 import { describe, expect, it } from 'vitest';
-import { commandsFor } from '../src/shared/agentCommands';
+import { commandsFor } from '@pocketshell/core';
 import {
   BP_END,
   BP_START,
   SUBMIT_KEY,
   composerTiming,
   sendRoute,
-} from '../src/shared/composerSend';
+} from '@pocketshell/core';
 import {
   acceptedInput,
   liveAgentKind,

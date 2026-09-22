@@ -15,8 +15,8 @@
 import type { SFTPWrapper } from 'ssh2';
 import { Buffer } from 'node:buffer';
 import type { SshConnection } from '../terminal/connection';
-import { toDirEntry, type DirEntry } from '../shared/sftpCore';
-import { formatBytes } from '../shared/byteSize';
+import { toDirEntry, type DirEntry } from '@pocketshell/core';
+import { formatBytes } from '@pocketshell/core';
 
 export type { DirEntry };
 
