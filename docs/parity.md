@@ -28,6 +28,35 @@ library) rather than re-implementing it.
   `[host]:port` token, the trusted/mismatch/unknown verdict, and the RFC 4251
   blob decode, so a browser pin and a known_hosts line classify a key with
   the same rules (added 2026-09-20)
+- `aplexerCommands.ts` — every `a` command line and the refusal classifiers
+  (unknown flag / live refusal / not found / ack not found), plus the
+  PATH-aware wrapper both clients run before every probe and join (added
+  2026-09-22)
+- `aplexerParsers.ts` — the snapshot and warnings parsers, the
+  record→panel-row mapping, the single-record `a start` parse, and the
+  agent-kind vocabulary (the tmux option mapper delegates to it), so both
+  clients read a host answer byte-identically (added 2026-09-22)
+- `aplexerClientCore.ts` — the aplexer client's brain: the capability caches
+  (`a` present, `--sort` supported), the total never-throw contracts, and the
+  outcome shapes, over a one-method exec transport. Desktop and web keep thin
+  shells (per-connectionId Map vs one connection) and nothing else (added
+  2026-09-22)
+- `sftpCore.ts` — the `DirEntry`/`FileStat` shapes and the
+  type-classification rules (longname first char, guarded attrs fallback) so
+  a listing renders the same verdicts on both; the desktop's SftpService and
+  the web's `workspace/sftp.ts` normalise with the same functions (added
+  2026-09-22)
+- `byteSize.ts` — the B/KB/MB/GB ladder and the oversize sentence, so a size
+  in a listing and a size named in a refusal read the same on both (added
+  2026-09-22)
+
+The 2026-09-22 extraction also retired the web's hand-ported copies
+(`aplexer/commands.ts`, `aplexer/snapshot.ts`) — and proved the point: the
+copies had already DRIFTED, with the web snapshot parser dropping
+terminal-phase rows the desktop keeps and re-declaring its own
+`AplexerWarning` type. Unifying resolved both in the desktop's favor; the
+one deliberate per-transport difference that stays is the bridge-PTY
+warnings parser (all-or-nothing there, drop-bad-rows over exec).
 
 Rules: edit in the desktop repo, commit there, run the script here, commit the
 refresh. Wrappers stay per-platform: the desktop wrapper owns the filesystem

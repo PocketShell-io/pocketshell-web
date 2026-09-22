@@ -17,7 +17,7 @@
  * so a helper upgraded while the tab is connected starts offering the new
  * engine without a reconnect.
  */
-import { pathAwareCommand } from '../aplexer/commands';
+import { pathAwareCommand } from '../shared/aplexerCommands';
 import {
   parseProfileRows,
   type AgentProfile,

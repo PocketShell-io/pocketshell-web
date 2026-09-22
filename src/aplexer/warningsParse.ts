@@ -1,25 +1,25 @@
 /**
- * The pure half of the aplexer warnings contract — the `AplexerWarning`
- * shape, the JSON parser, and the compact age formatter. Split from
- * `warnings.ts` so the exec-channel client (`client.ts`) can share the exact
- * parser without importing that file's ephemeral-bridge runner.
+ * The bridge-PTY half of the aplexer warnings contract: the all-or-nothing
+ * parser and the compact age formatter. Split from `warnings.ts` so the
+ * exec-channel client can share the AplexerWarning shape (from
+ * `shared/aplexer.ts`, like the desktop) without importing this file's
+ * ephemeral-bridge runner.
+ *
+ * The parser policy here is deliberately NOT the desktop exec path's
+ * (`shared/aplexerParsers.ts` drops one bad row and keeps the rest): over a
+ * PTY there is no framing, so one bad row means the output itself is
+ * untrustworthy and the whole batch is refused — half-showing a crash list
+ * is worse than showing none.
  */
-export interface AplexerWarning {
-  session: string;
-  workspace: string;
-  tag: string;
-  engine: string;
-  kind: 'oom' | 'crash';
-  detail: string;
-  created_at_ms: number;
-}
+import type { AplexerWarning } from '../shared/aplexer';
+
+export type { AplexerWarning };
 
 /**
  * Parse `a warnings --json` output: an array of warning rows, or null when
  * anything is off — unparseable text (including the shell's "command not
  * found"), a non-array, or a row that fails the shape check. One bad shape
- * hides the whole banner: half-showing a crash list is worse than showing
- * none. PTY carriage returns are stripped before parsing.
+ * hides the whole banner. PTY carriage returns are stripped before parsing.
  */
 export function parseWarningsJson(text: string): AplexerWarning[] | null {
   let parsed: unknown;

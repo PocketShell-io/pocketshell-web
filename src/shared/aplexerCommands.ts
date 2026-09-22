@@ -1,26 +1,33 @@
 /**
- * The `a` command lines the sessions workspace runs, and the classifiers
- * that tell a CLI refusal apart from a real failure.
+ * The `a` command lines the clients run, and the classifiers that tell a CLI
+ * refusal apart from a real failure.
  *
- * Ported from the desktop's `helper/AplexerClient.ts` command builders and
- * `helper/bootstrap.ts` PATH wrapper: same sentences matched, same quoting,
- * so the two clients can never disagree about what a host said. The
- * workspace in the browser is the aplexer arm only — hosts without `a` keep
- * today's plain-shell terminal, and the desktop's tmux fallback stays a
- * desktop path.
+ * One source of truth for BOTH clients: the desktop's `helper/AplexerClient`
+ * and the browser's `aplexer/client` build the same lines and match the same
+ * host sentences, so the two can never disagree about what the host said or
+ * was asked. Pure string work only — renderer-safe, no Node, no ssh2.
  */
-import { USER_BIN_PATH } from '../shared/userBinPath';
-import { shellEscapeInsideSingleQuotes, shellQuote, shellQuoteRemotePath } from '../shared/shellQuote';
-import type { AplexerSortKey } from '../shared/aplexer';
+
+import { USER_BIN_PATH } from './userBinPath';
+import { shellEscapeInsideSingleQuotes, shellQuote, shellQuoteRemotePath } from './shellQuote';
+import type { AplexerSortKey } from './aplexer';
 
 /**
- * Wrap a command so it runs under the user's full PATH: sshd's exec channel
- * often has just `/usr/bin:/bin`, and `a` lives in `~/.local/bin`. The same
- * wrapper the desktop runs before every probe, with the same dir list
- * (shared/userBinPath.ts), so the two clients probe and join identically.
+ * Wrap a command so it runs under the user's full PATH: source the login
+ * shell rc, prepend the standard user-bin dirs, then run the command. Mirrors
+ * the Android `pathAwareCommand` wrapper.
+ *
+ * sshd's exec channel often has just `/usr/bin:/bin`, and `a` lives in
+ * `~/.local/bin`. The dir list is shared (`userBinPath.ts`) so the two
+ * clients probe and join identically.
  */
 export function pathAwareCommand(command: string): string {
   return `/bin/sh -lc 'export PATH="${USER_BIN_PATH}:$PATH"; ${shellEscapeInsideSingleQuotes(command)}'`;
+}
+
+/** The availability probe: is there an `a` on PATH at all? */
+export function aplexerProbeCommand(): string {
+  return 'command -v a';
 }
 
 /**
@@ -45,8 +52,11 @@ export function isAplexerUnknownFlag(stderr: string): boolean {
 /**
  * `a start --workspace W --tag T`: create a shell session for a folder.
  *
- * `--json` prints the created record; a live holder is refused with exit 1
- * and `already belongs to` on stderr (see {@link isAplexerStartRefusal}).
+ * No `--engine`: a folder session is a plain shell, the same thing the tmux
+ * fallback creates. Agent engines stay a terminal-typed launch on top (the
+ * pending-launch flow), so engine/profile resolution is not on this path and
+ * cannot fail it. `--json` prints the created record; a live holder is
+ * refused with exit 1 and `already belongs to` on stderr (see below).
  */
 export function aplexerStartCommand(workspace: string, tag: string): string {
   return `a start --workspace ${shellQuoteRemotePath(workspace)} --tag ${shellQuote(tag)} --json`;
@@ -54,7 +64,6 @@ export function aplexerStartCommand(workspace: string, tag: string): string {
 
 /** True when [stderr] is `a start` refusing a workspace+tag that is live. */
 export function isAplexerStartRefusal(exitCode: number | null, stderr: string): boolean {
-  if (exitCode === null) return false; // a transport failure is never the CLI refusing
   return exitCode !== 0 && /already belongs to/i.test(stderr);
 }
 
@@ -65,7 +74,6 @@ export function aplexerKillCommand(id: string): string {
 
 /** True when [stderr] is `a kill` reporting the id is already gone. */
 export function isAplexerNotFound(exitCode: number | null, stderr: string): boolean {
-  if (exitCode === null) return false; // a transport failure is never the CLI refusing
   return exitCode !== 0 && /no matching session/i.test(stderr);
 }
 
@@ -80,7 +88,11 @@ export function aplexerRenameCommand(id: string, tag: string): string {
   return `a rename ${shellQuote(id)} --tag ${shellQuote(tag)}`;
 }
 
-/** `a warnings --json`: every unacknowledged crash/OOM warning on the host. */
+/**
+ * `a warnings --json`: every unacknowledged crash/OOM warning on the host,
+ * including ones whose session record is already pruned — which is exactly
+ * the row this app's snapshot parse would otherwise silently drop.
+ */
 export function aplexerWarningsCommand(): string {
   return 'a warnings --json';
 }
@@ -88,7 +100,10 @@ export function aplexerWarningsCommand(): string {
 /**
  * `a ack [TARGET]`: acknowledge warnings so they stop listing, host-side and
  * durably. Bare acks everything; a target acks one. The target is the
- * warning's session UUID, not the `workspace:tag` selector.
+ * warning's session UUID, not the `workspace:tag` selector: the UUID is
+ * exact by construction, and the crashed session may already be pruned, so
+ * the selector form has nothing left to resolve against while the warning
+ * store still knows the id.
  */
 export function aplexerAckCommand(target?: string): string {
   return target === undefined ? 'a ack' : `a ack ${shellQuote(target)}`;
@@ -96,11 +111,5 @@ export function aplexerAckCommand(target?: string): string {
 
 /** True when [stderr] is `a ack` finding nothing under the given target. */
 export function isAplexerAckNotFound(exitCode: number | null, stderr: string): boolean {
-  if (exitCode === null) return false; // a transport failure is never the CLI refusing
   return exitCode !== 0 && /no matching unacknowledged warning/i.test(stderr);
-}
-
-/** The availability probe's inner command (the client PATH-wraps it). */
-export function aplexerProbeCommand(): string {
-  return 'command -v a';
 }

@@ -1,10 +1,13 @@
 /**
  * SFTP over the workspace's live connection — the browser twin of the
- * desktop's SftpService: one SFTPWrapper cached per connection, promise
- * operations, and the desktop's contract that a host "no" comes back as a
- * value, never a throw. Missing on purpose: the desktop's binary and
- * create-with-`wx` verbs — the web pane edits text files it opened on
- * purpose, and anything bigger is refused before the read.
+ * desktop's SftpService. The entry shapes and the type-classification rules
+ * are the SHARED core (`shared/sftpCore.ts`): both clients normalise a
+ * listing with the exact same functions, so a host's readdir renders the
+ * same verdicts on both. What remains browser-side is the transport (one
+ * SFTPWrapper cached per connection, un-cached on a failed acquisition so
+ * the next call retries a fresh channel), the never-throw result contract,
+ * and the text-editor policy: capped reads, NUL-sniffed so a binary comes
+ * back as a sentence instead of mojibake in a textarea.
  *
  * The transport only exists on the direct path (the browser speaks SSH
  * itself); a bridge-mode host has no SFTP and the pane says so.
@@ -12,14 +15,10 @@
 import type { SFTPWrapper } from 'ssh2';
 import { Buffer } from 'node:buffer';
 import type { SshConnection } from '../terminal/connection';
+import { toDirEntry, type DirEntry } from '../shared/sftpCore';
+import { formatBytes } from '../shared/byteSize';
 
-export interface SftpDirEntry {
-  name: string;
-  type: 'dir' | 'file' | 'symlink' | 'other';
-  size: number;
-  /** Epoch ms, from the entry's attrs. */
-  modifyTime: number;
-}
+export type { DirEntry };
 
 export type SftpResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -50,20 +49,15 @@ export class WorkspaceSftp {
     }
   }
 
-  async list(path: string): Promise<SftpResult<SftpDirEntry[]>> {
+  async list(path: string): Promise<SftpResult<DirEntry[]>> {
     try {
       const sftp = await this.acquire();
-      const raw = await new Promise<Array<{ filename: string; longname: string; attrs: { isDirectory(): boolean; size: number; mtime: number } }>>((resolve, reject) => {
+      const raw = await new Promise<Array<{ filename: string; longname: string; attrs: object }>>((resolve, reject) => {
         sftp.readdir(path, (err, list) => (err ? reject(err) : resolve(list)));
       });
       const entries = raw
         .filter((item) => item.filename !== '.' && item.filename !== '..')
-        .map((item) => ({
-          name: item.filename,
-          type: entryType(item.longname, item.attrs),
-          size: item.attrs.size,
-          modifyTime: item.attrs.mtime * 1000,
-        }));
+        .map((item) => toDirEntry({ ...item.attrs, longname: item.longname }, item.filename));
       return { ok: true, value: entries };
     } catch (e) {
       return { ok: false, error: sentence(e, path) };
@@ -79,7 +73,10 @@ export class WorkspaceSftp {
         sftp.stat(path, (err, stats) => (err ? reject(err) : resolve(stats.size)));
       });
       if (size > MAX_TEXT_READ_BYTES) {
-        return { ok: false, error: `Too large to edit: ${path} is ${Math.ceil(size / 1000)} KB — the editor caps at ${Math.floor(MAX_TEXT_READ_BYTES / 1000)} KB.` };
+        return {
+          ok: false,
+          error: `Too large to edit: ${path} is ${formatBytes(size)} — the editor caps at ${formatBytes(MAX_TEXT_READ_BYTES)}.`,
+        };
       }
       const buf = await new Promise<Buffer>((resolve, reject) => {
         const chunks: Buffer[] = [];
@@ -123,21 +120,6 @@ export class WorkspaceSftp {
     }
     return this.wrapper;
   }
-}
-
-/** Type from the longname's ls-style first character (OpenSSH always sends
- * it). The attrs fallback is guarded: ssh2's Stats helpers read fs constants
- * the browser bundle does not have, and calling one throws. */
-function entryType(longname: string, attrs: { isDirectory?: () => boolean }): SftpDirEntry['type'] {
-  if (longname.startsWith('d')) return 'dir';
-  if (longname.startsWith('l')) return 'symlink';
-  if (longname.startsWith('-')) return 'file';
-  try {
-    if (typeof attrs.isDirectory === 'function' && attrs.isDirectory()) return 'dir';
-  } catch {
-    // no fs constants in the browser — the longname already told us enough
-  }
-  return 'other';
 }
 
 /** ssh2's transport errors are terse ("No such file") — name the path that

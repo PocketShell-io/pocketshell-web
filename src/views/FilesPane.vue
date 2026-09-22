@@ -7,13 +7,14 @@
  * failure lands here as a sentence next to the thing that failed.
  */
 import { computed, onMounted, ref } from 'vue';
-import { WorkspaceSftp, MAX_TEXT_READ_BYTES, type SftpDirEntry } from '../workspace/sftp';
+import { WorkspaceSftp, MAX_TEXT_READ_BYTES, type DirEntry } from '../workspace/sftp';
+import { formatBytes } from '../shared/byteSize';
 
 const props = defineProps<{ sftp: WorkspaceSftp }>();
 
 const path = ref('');
 const homePath = ref('');
-const entries = ref<SftpDirEntry[]>([]);
+const entries = ref<DirEntry[]>([]);
 const loading = ref(false);
 const error = ref('');
 
@@ -57,7 +58,7 @@ async function go(to: string): Promise<void> {
   }
 }
 
-async function open(entry: SftpDirEntry): Promise<void> {
+async function open(entry: DirEntry): Promise<void> {
   if (entry.type === 'dir' || entry.type === 'symlink') {
     await go(join(path.value, entry.name));
     return;
@@ -99,14 +100,12 @@ function join(dir: string, name: string): string {
   return dir === '/' ? `/${name}` : `${dir}/${name}`;
 }
 
-function sizeLabel(entry: SftpDirEntry): string {
+function sizeLabel(entry: DirEntry): string {
   if (entry.type !== 'file') return '';
-  if (entry.size < 1000) return `${entry.size} B`;
-  if (entry.size < 1_000_000) return `${(entry.size / 1000).toFixed(1)} KB`;
-  return `${(entry.size / 1_000_000).toFixed(1)} MB`;
+  return formatBytes(entry.size);
 }
 
-function ageLabel(entry: SftpDirEntry): string {
+function ageLabel(entry: DirEntry): string {
   if (entry.modifyTime === 0) return '';
   const s = Math.max(1, Math.round((Date.now() - entry.modifyTime) / 1000));
   if (s < 60) return `${s}s ago`;

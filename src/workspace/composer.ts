@@ -6,11 +6,11 @@
  * Everything hard lives in the vendored shared modules: delivery framing
  * and timing in `shared/composerSend` (bracketed paste, separate submit
  * key, the 250 ms Enter-settling delay), the command catalog in
- * `shared/agentCommands`, the engine vocabulary in `aplexer/snapshot`.
+ * `shared/agentCommands`, the engine vocabulary in `shared/aplexerParsers`.
  * This file is only the wiring contract between them, pinned by
  * tests/workspaceComposer.test.ts.
  */
-import { agentKindFromEngine } from '../aplexer/snapshot';
+import { agentKindFromEngine } from '../shared/aplexerParsers';
 import {
   composerAgentKind,
   deliverPayload,

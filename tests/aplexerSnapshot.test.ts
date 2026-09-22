@@ -4,7 +4,7 @@ import {
   aplexerRecordToSummary,
   byOldestCreated,
   parseAplexerSnapshot,
-} from '../src/aplexer/snapshot';
+} from '../src/shared/aplexerParsers';
 
 const LIVE_ROW = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -24,16 +24,20 @@ describe('parseAplexerSnapshot', () => {
     expect(rows.map((r) => r.tag)).toEqual(['main', 'ssh-broke']);
   });
 
-  it('drops dead workers and terminal phases but keeps plain old-host rows', () => {
+  it('drops dead workers and unenriched terminal phases — liveness is the pair, never the phase alone', () => {
     const dead = { ...LIVE_ROW, worker_alive: false };
-    const exited = { ...LIVE_ROW, phase: 'exited' };
-    const failed = { ...LIVE_ROW, phase: 'failed' };
-    // No worker_alive field at all: an old host — its phase is all there is.
-    const oldHost = { ...LIVE_ROW };
-    delete (oldHost as Record<string, unknown>)['worker_alive'];
-    const rows = parseAplexerSnapshot(JSON.stringify([dead, exited, failed, oldHost]));
+    // No worker_alive field at all plus a terminal phase: an old host — a
+    // session that will never attach again. (`worker_alive: undefined`
+    // serialises out of JSON.stringify, which is the point.)
+    const gone = { ...LIVE_ROW, phase: 'exited', worker_alive: undefined };
+    const failed = { ...LIVE_ROW, phase: 'failed', worker_alive: undefined };
+    // The host explicitly says alive: the row stays even on a terminal
+    // phase — contradictory host data is the host's to prune, not ours to
+    // hide. Same rule the desktop's parser pins.
+    const exitedLive = { ...LIVE_ROW, phase: 'exited' };
+    const rows = parseAplexerSnapshot(JSON.stringify([dead, gone, failed, exitedLive]));
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.phase).toBe('running');
+    expect(rows[0]!.phase).toBe('exited');
   });
 
   it('drops corrupt rows individually, not the batch', () => {
@@ -54,7 +58,8 @@ describe('parseAplexerSnapshot', () => {
     const rows = parseAplexerSnapshot(
       JSON.stringify([{ id: 'x', workspace: '/w', tag: 't', phase: 'running', created_at_ms: 5 }]),
     );
-    expect(rows[0]).toMatchObject({ engine: '', cwd: null, created_at_ms: 5 });
+    expect(rows[0]).toMatchObject({ engine: '', created_at_ms: 5 });
+    expect('cwd' in rows[0]!).toBe(false);
     expect('last_activity_ms' in rows[0]!).toBe(false);
   });
 });
