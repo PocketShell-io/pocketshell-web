@@ -52,6 +52,12 @@ jobs:
           ln -s "$GITHUB_WORKSPACE/pocketshell-core" "$GITHUB_WORKSPACE/../pocketshell-core"
           cd "$GITHUB_WORKSPACE/pocketshell-core"
           npm ci && npm run build
+          # The shared interface package (@pocketshell/ui) rides in this
+          # sibling and is compiled from source by the web build; its pinned
+          # devDeps (vue, the xterm types) must resolve from here. TypeScript
+          # resolves the @ui alias without following symlinks, so it walks
+          # node_modules above the sibling — not the web workspace's own.
+          npm ci --prefix packages/ui --no-fund --no-audit
       - run: npm ci
 
       - uses: aws-actions/configure-aws-credentials@v4
