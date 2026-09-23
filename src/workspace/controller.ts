@@ -20,11 +20,14 @@ import type { AplexerStartOutcome } from '../aplexer/client';
 import type { SessionSummary } from '@pocketshell/core';
 import {
   buildLaunchCommand,
+  groupSessionsIntoRoots,
+  inferHome,
   KIND_LABELS,
   launchBlocker,
   type AgentProfile,
   type HostAgentSupport,
   type LaunchChoice,
+  type SessionRootFolder,
 } from '@pocketshell/core';
 import { PocketshellProbe } from './agentProbe';
 import { SshConnection, type KnownHostsHooks, type PtyChannel } from '../terminal/connection';
@@ -52,14 +55,6 @@ export interface SessionRow {
   activityMs: number;
 }
 
-/** The sidebar's folder level: sessions grouped by their workspace path,
- * in the host's order. */
-export interface WorkspaceGroup {
-  workspace: string;
-  label: string;
-  rows: SessionRow[];
-}
-
 /** One open terminal tab. */
 export interface WorkspaceTab {
   /** `apx:<uuid>` for a session tab, `shell` for the raw-shell tab. */
@@ -81,7 +76,17 @@ export interface ControllerState {
   status: string;
   /** The host answers `a`. Null until probed. */
   aplexer: boolean | null;
-  groups: WorkspaceGroup[];
+  /**
+   * The sidebar's folder tree — roots -> directories -> rows, folded by the
+   * ONE derivation the desktop panel uses (core `groupSessionsIntoRoots`), so
+   * both clients group a host identically. `$HOME` is inferred from the
+   * session paths (the desktop's fallback), so root keys read `~/git`.
+   */
+  roots: SessionRootFolder[];
+  /** The `$HOME` the grouping resolved, for absolute-path prefill (`+` on a root). */
+  home: string | null;
+  /** The folder whose workspace the tab bar shows — a `SessionDirectory.key`. */
+  activeFolder: string | null;
   /** Flat rows in host order — the tab bar and status bar read this. */
   rows: SessionRow[];
   tabs: WorkspaceTab[];
@@ -129,7 +134,9 @@ export class HostWorkspaceController {
     error: '',
     status: 'connecting…',
     aplexer: null,
-    groups: [],
+    roots: [],
+    home: null,
+    activeFolder: null,
     rows: [],
     tabs: [],
     activeKey: null,
@@ -218,7 +225,71 @@ export class HostWorkspaceController {
     await this.refreshWarnings();
     await this.refreshSessions();
     this.patch({ phase: 'ready' });
+    // The desktop's workspace memory, one slot shallow: the folder the user
+    // had open on this host reopens (and re-attaches its first tab) on the
+    // next visit. No memory of tabs-within-folder yet — the host order is
+    // the accessed sort, so the top row is the tab they were most likely in.
+    const saved = this.recallFolder();
+    if (saved !== null && this.hasFolder(saved)) this.openFolder(saved);
     this.schedulePoll();
+  }
+
+  /**
+   * Open a folder's workspace: mark it active and, unless the active tab
+   * already belongs to the folder (or is the Files tab), attach its first
+   * session — the host's accessed sort puts the most recent one on top, the
+   * same row the desktop's restored workspace lands on.
+   */
+  openFolder(key: string): void {
+    const dir = this.state.roots.flatMap((r) => r.directories).find((d) => d.key === key);
+    if (!dir) return;
+    const activeKey = this.state.activeKey;
+    const inFolder =
+      activeKey !== null &&
+      (activeKey === 'files' ||
+        dir.rows.some((r) => `apx:${r.session.aplexerId ?? ''}` === activeKey));
+    this.patch({ activeFolder: key });
+    this.rememberFolder(key);
+    if (!inFolder && dir.rows.length > 0) {
+      const first = dir.rows[0]!;
+      const row = this.state.rows.find((r) => r.id === (first.session.aplexerId ?? ''));
+      if (row) void this.openSession(row);
+    }
+  }
+
+  private hasFolder(key: string): boolean {
+    return this.state.roots.some((r) => r.directories.some((d) => d.key === key));
+  }
+
+  /** The folder key a session id files under, or null when the tree has none. */
+  private folderKeyForSession(id: string): string | null {
+    for (const root of this.state.roots) {
+      for (const dir of root.directories) {
+        if (dir.rows.some((r) => (r.session.aplexerId ?? '') === id)) return dir.key;
+      }
+    }
+    return null;
+  }
+
+  private folderMemoryKey(): string {
+    const { user, host, port } = this.deps.link;
+    return `ps.folder:${user}@${host}:${port}`;
+  }
+
+  private rememberFolder(key: string): void {
+    try {
+      localStorage.setItem(this.folderMemoryKey(), key);
+    } catch {
+      // No storage (private mode, tests) — the memory just does not persist.
+    }
+  }
+
+  private recallFolder(): string | null {
+    try {
+      return localStorage.getItem(this.folderMemoryKey());
+    } catch {
+      return null;
+    }
   }
 
   /** Show a session's terminal: attach through `a attach` on a fresh PTY. */
@@ -257,6 +328,9 @@ export class HostWorkspaceController {
           },
         ],
         activeKey: key,
+        // A session opened from anywhere (create flow, tab restore) files its
+        // folder in: the sidebar marks that row, not the previously open one.
+        activeFolder: this.folderKeyForSession(row.id) ?? this.state.activeFolder,
       });
     } catch (e) {
       this.patch({
@@ -617,11 +691,16 @@ export class HostWorkspaceController {
     if (summaries === null) {
       // No aplexer (the probe already said so) or the probe raced a
       // disconnect — either way the sidebar stays empty, not an error.
-      this.patch({ groups: [], rows: [] });
+      this.patch({ roots: [], home: null, rows: [] });
       return;
     }
+    // The same `$HOME` answer the grouping uses internally, kept in state so
+    // the root `+`s can prefill absolute paths (the picker needs a real
+    // directory, `~/git` is a shell expansion).
+    const home = inferHome(summaries.map((s) => s.path));
+    const roots = groupSessionsIntoRoots(summaries, home, []);
     const rows = summaries.map(summaryToRow);
-    this.patch({ rows, groups: groupByWorkspace(rows) });
+    this.patch({ rows, roots, home });
     this.syncTabsWithRows(rows);
   }
 
@@ -687,25 +766,8 @@ function summaryToRow(s: SessionSummary): SessionRow {
   };
 }
 
-/** The folder level: sessions grouped by workspace, host order preserved. */
-function groupByWorkspace(rows: SessionRow[]): WorkspaceGroup[] {
-  const groups: WorkspaceGroup[] = [];
-  const byPath = new Map<string, WorkspaceGroup>();
-  for (const row of rows) {
-    const key = row.workspace || '/';
-    let group = byPath.get(key);
-    if (!group) {
-      group = { workspace: key, label: leafOf(key), rows: [] };
-      byPath.set(key, group);
-      groups.push(group);
-    }
-    group.rows.push(row);
-  }
-  return groups;
-}
-
-/** Trailing path component, the folder row's label (`~/git/mixer` → mixer). */
-function leafOf(path: string): string {
+/** The trailing path component, the tab subtitle (`~/git/mixer` -> mixer). */
+export function leafOf(path: string): string {
   const trimmed = path.replace(/\/+$/, '');
   if (trimmed === '') return '/';
   const slash = trimmed.lastIndexOf('/');

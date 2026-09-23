@@ -2838,163 +2838,326 @@ button.dir-row {
   color: #8b949e;
 }
 
-.ws-new {
-  padding: 8px 12px;
-  font-size: var(--text-small);
-}
-
 .ws-side-empty {
   margin: 4px 6px;
   font-size: var(--text-small);
   line-height: 1.5;
 }
 
-.ws-tree,
-.ws-rows {
+/* ── The folder tree (the desktop panel's SessionTreeRows) ────────────────
+   Geometry is the desktop's exactly — 28px rows, dot column, 2px selection
+   rail — because the tree algebra is shared too (@pocketshell/core's
+   groupSessionsIntoRoots): one derivation, one look. Colours are the
+   desktop's packages/ui tokens, written out; the sidebar does not otherwise
+   use them. Under the phone breakpoint the rows re-meet the 44px finger
+   floor (the rule this file has carried since the touch-rows round). */
+
+.ws-folders {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.ws-root {
+  margin-bottom: 4px;
+}
+
+/* A grouping header, not a node: no chevron, no click. Hover reveals the
+   root's `+` and touches nothing else — the row is inert by design. */
+.ws-root-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px 0 12px;
+  font-weight: 600;
+  overflow: hidden;
+}
+
+.ws-root-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The `~/` every root header repeats, receding so `git` is what lands. */
+.ws-path-prefix {
+  color: #6e7681;
+}
+
+/* `other` is a bucket, not a directory: toned down to say so. */
+.ws-root-label.is-bucket {
+  font-weight: 400;
+  color: #8b949e;
+}
+
+/* Beside the label, not pinned right — a count thrown to the far edge reads
+   as its own column ("move 10 closer to git"). */
+.ws-dir-count {
+  flex: none;
+  font-weight: 400;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #8b949e;
+}
+
+/* The per-root `+`: hover- and focus-revealed, always laid out so the label
+   never reflows; shown unconditionally where hover does not exist. */
+.ws-root-add {
+  flex: none;
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8b949e;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-root-header:hover .ws-root-add,
+.ws-root-add:focus-visible {
+  opacity: 1;
+}
+
+.ws-root-add:hover {
+  color: #e6edf3;
+  background: #21262d;
+}
+
+@media (hover: none) {
+  .ws-root-add {
+    opacity: 1;
+  }
+}
+
+.ws-dir-list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.ws-tree {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-/* The workspace row is a grouping header: its full path in mono, the count
-   beside it, no disclosure mark — clicking a session is the only action. */
-.ws-group-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 0;
-  padding: 4px 6px 2px;
-  min-width: 0;
-}
-
-.ws-group-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-  font-family: ui-monospace, monospace;
-  font-size: var(--text-fine);
-  color: #8b949e;
-}
-
-.ws-group-count {
-  flex: none;
-  font-family: ui-monospace, monospace;
-  font-size: var(--text-fine);
-  color: #8b949e;
-}
-
-.ws-rows {
-  display: flex;
-  flex-direction: column;
-}
-
-.ws-row {
+/* A folder row IS the destination: dot, label, count, badges, age. One step
+   in from the root header (18px padding + the 2px rail puts the dot at 20,
+   8px right of the root's). */
+.ws-dir-row {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 44px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 6px;
+  height: 28px;
   background: transparent;
-  text-align: left;
-  font: inherit;
+  border: 0;
+  border-left: 2px solid transparent;
   color: #e6edf3;
+  text-align: left;
+  padding: 0 10px 0 18px;
   cursor: pointer;
+  font-family: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.3846;
+  overflow: hidden;
 }
 
-.ws-row:hover {
-  background: #21262d;
+.ws-dir-row:hover {
+  background: rgba(230, 237, 243, 0.05);
 }
 
-/* The selection rail: the folder row's accent rule, at 2px inside the
-   button's rounded frame. */
-.ws-row.is-active {
-  background: #1c2431;
-  box-shadow: inset 2px 0 0 #58a6ff;
+/* Selection is accent-tinted and railed; hover is a neutral lift. */
+.ws-dir-row.is-current {
+  background: rgba(34, 211, 238, 0.12);
+  border-left-color: #22d3ee;
 }
 
-.ws-row-dot {
+.ws-dot {
   flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #30363d;
+  background: #6e7681;
 }
 
-.ws-row-dot.is-live {
-  background: #3fb950;
+.ws-dot.is-active {
+  background: #22c55e;
 }
 
-.ws-row-dot.is-idle {
-  background: #8b949e;
-}
-
-.ws-row-name {
-  flex: 1;
+/* The label wins the width fight; everything else shrinks first. */
+.ws-dir-label {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, monospace;
-  font-size: var(--text-small);
+  color: #e6edf3;
 }
 
-.ws-row-engine {
-  flex: none;
+.ws-dir-label.is-mono {
   font-family: ui-monospace, monospace;
-  font-size: 11px;
-  color: #a371f7;
-}
-
-.ws-row-age {
-  flex: none;
-  font-family: ui-monospace, monospace;
-  font-size: var(--text-fine);
   color: #8b949e;
 }
 
-.ws-row-actions {
-  flex: none;
-  display: none;
-  gap: 2px;
+/* A folder holding an attached session is semibold — weight and the green
+   dot say the same thing. */
+.ws-dir-row.is-attached .ws-dir-label {
+  font-weight: 600;
 }
 
-.ws-row:hover .ws-row-actions,
-.ws-row.is-active .ws-row-actions,
-.ws-row:focus-within .ws-row-actions {
+/* The desktop's --agent chip: violet on its own tint, radius 4. */
+.ws-badge {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  line-height: 1.45;
+  font-size: 11px;
+  font-weight: 500;
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.14);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
 }
 
-.ws-row-act {
+/* Transient detector states read as "not settled yet", not as a live agent. */
+.ws-badge.is-dim {
+  color: #8b949e;
+  background: transparent;
+  border-color: #2d333b;
+}
+
+.ws-dir-age {
   flex: none;
-  min-width: 32px;
-  min-height: 32px;
-  padding: 4px;
+  margin-left: auto;
+  font-size: 11px;
+  color: #8b949e;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Only a REGISTERED root can be empty; prose, not a row — no dot, so it
+   starts where a label starts (36px). */
+.ws-empty-root {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px 0 36px;
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* The tree's empty state: what is empty AND the way out of it. */
+.ws-empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.ws-empty-panel p {
+  margin: 0;
+}
+
+.ws-icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: 0;
+  border-radius: 4px;
   background: transparent;
   color: #8b949e;
+  font-size: 14px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.ws-row-act:hover {
+.ws-icon-btn:hover:not(:disabled) {
   color: #e6edf3;
+  background: #21262d;
+}
+
+.ws-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* An unattached folder tab: it will join on click. Muted dot only — no
+   phase word, no close box (the session is not attached to close). */
+.ws-tab.is-detached .ws-tab-dot {
   background: #30363d;
 }
 
-.ws-row-act.is-danger:hover {
+.ws-tab-files {
+  flex: none;
+}
+
+/* The tab menu — rename/stop, where the old sidebar rows' ✎ ✕ went. */
+.ws-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.ws-tab-menu {
+  position: fixed;
+  min-width: 170px;
+  padding: 4px;
+  background: #1c2129;
+  border: 1px solid #2d333b;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.72);
+}
+
+.ws-tab-menu-head {
+  margin: 0;
+  padding: 4px 10px 6px;
+  font-size: 11px;
+  color: #8b949e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-tab-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #e6edf3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-tab-menu button:hover:not(:disabled) {
+  background: #30363d;
+}
+
+.ws-tab-menu button.is-danger {
   color: #f85149;
+}
+
+.ws-tab-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Main column: tab strip, terminals, status bar. */
@@ -3492,22 +3655,22 @@ button.dir-row {
     transform: none;
   }
 
-  .ws-row-actions {
-    display: inline-flex;
+  /* The tree re-meets the 44px finger floor on phones: the desktop's 28px
+     rows are a desktop-width decision, and this file's touch rule predates
+     and outlives it. */
+  .ws-dir-row,
+  .ws-root-header {
+    height: 44px;
   }
 
-  /* The tab strip and the drawer's + New meet the same 44px finger floor as
-     the rows; pointer widths keep the accepted 40px tab / 24px close boxes. */
+  /* The tab strip meets the same 44px finger floor as the tree rows;
+     pointer widths keep the accepted 40px tab / 24px close boxes. */
   .ws-tab {
     min-height: 44px;
   }
 
   .ws-tab-close {
     min-width: 44px;
-    min-height: 44px;
-  }
-
-  .ws-new {
     min-height: 44px;
   }
 

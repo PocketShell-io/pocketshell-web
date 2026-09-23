@@ -17,6 +17,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { decodeOsc52SetClipboard } from '@pocketshell/core';
 import {
   HostWorkspaceController,
+  leafOf,
   type ControllerState,
   type SessionRow,
   type WorkspaceLink,
@@ -29,16 +30,24 @@ import { formatAge } from '../aplexer/warningsParse';
 import { acceptedInput, liveAgentKind, paletteFor, sendComposerLine } from '../workspace/composer';
 import type { AgentCommand } from '@pocketshell/core';
 import {
+  agentBadges,
   buildLaunchCommand,
+  dirTooltip,
+  fmtRelative,
   kindUnavailableReason,
   KIND_LABELS,
   LAUNCHABLE_KINDS,
   profileFlagName,
   profilesFor,
+  rootHeaderParts,
+  rootHostPath,
+  rootTooltip,
   supportsProfiles,
   supportsSkipPermissions,
   type HostAgentSupport,
   type LaunchableKind,
+  type SessionDirectory,
+  type SessionRootFolder,
 } from '@pocketshell/core';
 import { config } from '../config';
 import { useAuthStore } from '../stores/auth';
@@ -261,6 +270,15 @@ watch(
   },
 );
 
+// Choosing a folder is navigation too: the drawer gets out of the way (narrow
+// screens), the same contract the active-tab watcher already honours.
+watch(
+  () => state.value?.activeFolder,
+  () => {
+    sidebarOpen.value = false;
+  },
+);
+
 function observeStage(el: Element | ComponentPublicInstance | null) {
   stageObserver?.disconnect();
   const htmlEl = el instanceof HTMLElement ? el : null;
@@ -285,8 +303,114 @@ function cssEscape(value: string): string {
 
 // --- sidebar actions ------------------------------------------------------
 
-function openRow(row: SessionRow) {
-  void controller?.openSession(row);
+/**
+ * The folder whose workspace the tab bar shows, out of the same tree the
+ * sidebar renders — one derivation, two readers, so the marked row and the
+ * open workspace can never disagree.
+ */
+const activeFolderDir = computed<SessionDirectory | null>(() => {
+  const key = state.value?.activeFolder;
+  if (key === null || key === undefined) return null;
+  return state.value?.roots.flatMap((r) => r.directories).find((d) => d.key === key) ?? null;
+});
+
+/** One tab in the bar: a folder session (maybe not attached yet), or a
+ * chrome tab (Files, raw shell) straight from the controller. */
+interface BarTab {
+  key: string;
+  label: string;
+  subtitle: string;
+  phase: string;
+  live: boolean;
+  /** The tab's PTY/channel exists — it can be activated without a join. */
+  open: boolean;
+  /** A session tab (rename/stop apply) rather than Files/shell chrome. */
+  session: boolean;
+}
+
+/**
+ * The tab bar. With a folder open it is the desktop's model: one tab per
+ * session IN the folder, attached or not, then any stray open tabs (another
+ * folder's attach, a session the snapshot dropped — kept so it can be
+ * closed), then the chrome tabs. Without a folder it is yesterday's bar:
+ * exactly the open tabs.
+ */
+const barTabs = computed<BarTab[]>(() => {
+  const s = state.value;
+  if (!s) return [];
+  const asBar = (t: {
+    key: string;
+    label: string;
+    subtitle: string;
+    phase: string;
+    live: boolean;
+  }): BarTab => ({
+    ...t,
+    open: true,
+    session: t.key.startsWith('apx:'),
+  });
+  const dir = activeFolderDir.value;
+  if (!dir) return s.tabs.map(asBar);
+  const openByKey = new Map(s.tabs.map((t) => [t.key, t]));
+  const folder: BarTab[] = dir.rows.map((r) => {
+    const key = `apx:${r.session.aplexerId ?? ''}`;
+    const open = openByKey.get(key);
+    return {
+      key,
+      label: r.session.tag ?? r.session.name,
+      subtitle: leafOf(r.session.workspace ?? r.session.path ?? ''),
+      phase: open?.phase ?? r.session.aplexerPhase ?? 'running',
+      live: open?.live ?? false,
+      open: open !== undefined,
+      session: true,
+    };
+  });
+  const folderKeys = new Set(folder.map((t) => t.key));
+  const strays = s.tabs
+    .filter((t) => t.key.startsWith('apx:') && !folderKeys.has(t.key))
+    .map(asBar);
+  const chrome = s.tabs.filter((t) => !t.key.startsWith('apx:')).map(asBar);
+  return [...folder, ...strays, ...chrome];
+});
+
+function onTabClick(tab: BarTab) {
+  if (!tab.open && tab.session) {
+    const row = state.value?.rows.find((r) => `apx:${r.id}` === tab.key);
+    if (row) void controller?.openSession(row);
+    return;
+  }
+  controller?.setActive(tab.key);
+}
+
+// --- tab context menu (rename / stop — where the sidebar rows' ✎ ✕ went) ---
+
+const tabMenu = ref<{ tab: BarTab; x: number; y: number } | null>(null);
+
+function openTabMenu(tab: BarTab, event: MouseEvent) {
+  if (!tab.session) return;
+  tabMenu.value = { tab, x: event.clientX, y: event.clientY };
+}
+
+const tabMenuRow = computed<SessionRow | null>(() => {
+  const key = tabMenu.value?.tab.key;
+  if (key === undefined) return null;
+  return state.value?.rows.find((r) => `apx:${r.id}` === key) ?? null;
+});
+
+function closeTabMenu() {
+  tabMenu.value = null;
+}
+
+function renameFromTabMenu() {
+  const row = tabMenuRow.value;
+  closeTabMenu();
+  if (row) askRename(row);
+}
+
+function stopFromTabMenu() {
+  const row = tabMenuRow.value;
+  closeTabMenu();
+  if (row) askKill(row);
 }
 
 function askNew() {
@@ -300,7 +424,28 @@ function askNew() {
   void controller?.probeAgent();
 }
 
-const workspaceOptions = computed(() => state.value?.groups.map((g) => g.workspace) ?? []);
+const workspaceOptions = computed(() => [
+  ...new Set((state.value?.rows ?? []).map((r) => r.workspace).filter((w) => w !== '')),
+]);
+
+/** Where the root `+` starts the dialog: the root's real directory, or no
+ * prefill when its `$HOME` never resolved (the desktop picker's behaviour). */
+function newInRoot(root: SessionRootFolder) {
+  const path = rootHostPath(root.key, state.value?.home ?? null);
+  newError.value = '';
+  newTag.value = '';
+  newWorkspace.value = path ?? '';
+  if (path !== '') suggestTag();
+  launchAgent.value = false;
+  showNew.value = true;
+  void controller?.probeAgent();
+}
+
+function rootAddTitle(root: SessionRootFolder): string {
+  return rootHostPath(root.key, state.value?.home ?? null) === null
+    ? `cannot resolve $HOME on this host, so ${root.label} has no directory to start in`
+    : `New session in ${root.key}`;
+}
 
 // --- agent launch step ------------------------------------------------------
 
@@ -500,19 +645,6 @@ async function sendLine() {
 
 // --- display helpers ------------------------------------------------------
 
-/** Compact sidebar age: `12m`, `3h`, `2d`, then a date (desktop §6). */
-function compactAge(ms: number): string {
-  const seconds = Math.max(0, Math.floor((now.value - ms) / 1000));
-  if (seconds < 60) return 'now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 14) return `${days}d`;
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
 const BUSY_STATUSES = new Set(['connecting…', 'reconnecting…']);
 const busy = computed(
   () =>
@@ -609,10 +741,27 @@ function back() {
             </ul>
           </section>
 
+          <!-- The desktop panel's header strip, minus the buttons a browser
+               has no overlay to open: the workspace owns no ports/usage/
+               settings surfaces here, and back lives in the topbar. -->
           <div class="ws-side-head">
             <span class="ws-side-title">Sessions</span>
-            <button class="ws-new" @click="controller?.openFilesTab()">Files</button>
-            <button class="ws-new" :disabled="state?.aplexer === false" @click="askNew">+ New</button>
+            <button
+              class="ws-icon-btn"
+              title="New session in any folder"
+              :disabled="state?.aplexer === false"
+              @click="askNew"
+            >
+              +
+            </button>
+            <button
+              class="ws-icon-btn"
+              title="Refresh sessions"
+              :disabled="state?.actionBusy"
+              @click="refreshNow"
+            >
+              ⟳
+            </button>
           </div>
 
           <p v-if="state?.aplexer === false" class="ws-side-empty muted">
@@ -620,55 +769,127 @@ function back() {
             you have a plain shell.
           </p>
           <p v-else-if="state?.phase !== 'ready'" class="ws-side-empty muted">loading…</p>
-          <p v-else-if="state?.groups.length === 0" class="ws-side-empty muted">
-            no sessions — start one with + New
-          </p>
 
-          <ul v-else class="ws-tree">
-            <li v-for="g in state?.groups" :key="g.workspace" class="ws-group">
-              <p class="ws-group-row" :title="g.workspace">
-                <span class="ws-group-label">{{ g.workspace }}</span>
-                <span class="ws-group-count">{{ g.rows.length }}</span>
-              </p>
-              <ul class="ws-rows">
-                <li v-for="row in g.rows" :key="row.id">
+          <!-- The desktop's folder view: root sections over folder rows, one
+               row per directory — the tree derivation is @pocketshell/core's
+               groupSessionsIntoRoots, the SAME function the desktop panel
+               renders, so both clients group a host identically. -->
+          <div v-else class="ws-folders">
+            <section v-for="root in state?.roots" :key="root.key" class="ws-root">
+              <!-- A grouping header, not a node: no chevron, no click. The
+                   `~/` recedes into its own span; the count hugs the label;
+                   the `+` appears on hover/focus. -->
+              <div class="ws-root-header" :title="rootTooltip(root)">
+                <span class="ws-dot" :class="{ 'is-active': root.active }" />
+                <span class="ws-root-label" :class="{ 'is-bucket': root.other }">
+                  <span v-if="rootHeaderParts(root).prefix" class="ws-path-prefix">{{
+                    rootHeaderParts(root).prefix
+                  }}</span>{{ rootHeaderParts(root).text }}
+                </span>
+                <span class="ws-dir-count">{{ root.sessionCount }}</span>
+                <button
+                  v-if="!root.other"
+                  class="ws-root-add"
+                  :title="rootAddTitle(root)"
+                  @click.stop="newInRoot(root)"
+                >
+                  +
+                </button>
+              </div>
+
+              <ul class="ws-dir-list">
+                <li v-if="!root.directories.length" class="ws-empty-root muted">
+                  no sessions here yet
+                </li>
+                <!-- ONE ROW PER FOLDER: the row IS the destination; its
+                     sessions are the tabs of the workspace it opens. -->
+                <li v-for="dir in root.directories" :key="dir.key">
                   <button
-                    class="ws-row"
-                    :class="{ 'is-active': activeTab?.key === `apx:${row.id}` }"
-                    :title="`${g.workspace}:${row.tag} · ${row.engine} · ${row.phase}`"
-                    @click="openRow(row)"
+                    class="ws-dir-row"
+                    :class="{
+                      'is-current': dir.key === state?.activeFolder,
+                      'is-attached': dir.active,
+                      'is-orphan': dir.untracked,
+                    }"
+                    :title="dirTooltip(dir)"
+                    @click="controller?.openFolder(dir.key)"
                   >
-                    <span class="ws-row-dot" :class="row.phase === 'running' ? 'is-live' : 'is-idle'" aria-hidden="true" />
-                    <span class="ws-row-name">{{ row.tag }}</span>
-                    <span v-if="row.engine !== '' && row.engine !== 'shell'" class="ws-row-engine">{{ row.engine }}</span>
-                    <span class="ws-row-age">{{ compactAge(row.activityMs) }}</span>
-                    <span class="ws-row-actions">
-                      <button class="ws-row-act" :aria-label="`Rename ${row.tag}`" @click.stop="askRename(row)">✎</button>
-                      <button class="ws-row-act is-danger" :aria-label="`Stop ${row.tag}`" @click.stop="askKill(row)">✕</button>
+                    <span class="ws-dot" :class="{ 'is-active': dir.active }" />
+                    <span class="ws-dir-label" :class="{ 'is-mono': dir.untracked }">{{
+                      dir.label
+                    }}</span>
+                    <!-- Counted only from 2 up, beside the label, ahead of
+                         the badges — the desktop row's exact field order. -->
+                    <span v-if="dir.rows.length > 1" class="ws-dir-count">
+                      {{ dir.rows.length }}
                     </span>
+                    <span
+                      v-for="badge in agentBadges(dir)"
+                      :key="badge"
+                      class="ws-badge"
+                      :class="{ 'is-dim': badge === 'probing…' || badge === 'exited' }"
+                    >
+                      {{ badge }}
+                    </span>
+                    <!-- The folder's age is its NEWEST session's. -->
+                    <span class="ws-dir-age">{{ fmtRelative(dir.mostRecentActivity, now) }}</span>
                   </button>
                 </li>
               </ul>
-            </li>
-          </ul>
+            </section>
+
+            <!-- The desktop tree's empty state: what is empty AND the way
+                 out of it. -->
+            <div v-if="!state?.roots.length" class="ws-empty-panel">
+              <p class="muted">no sessions</p>
+              <button @click="askNew">New session…</button>
+            </div>
+          </div>
         </aside>
 
         <div class="ws-main">
-          <div class="ws-tabbar" role="tablist" aria-label="Open sessions">
+          <!-- The desktop folder-workspace bar: every session IN the open
+               folder is a tab, attached or not — clicking an unattached one
+               joins it. Then strays, then chrome, then Files. -->
+          <div class="ws-tabbar" role="tablist" aria-label="Workspace tabs">
             <button
-              v-for="tab in state?.tabs"
+              v-for="tab in barTabs"
               :key="tab.key"
               class="ws-tab"
-              :class="{ 'is-active': tab.key === state?.activeKey, 'is-dead': !tab.live && tab.key !== 'files' }"
+              :class="{
+                'is-active': tab.key === state?.activeKey,
+                'is-dead': tab.open && !tab.live && tab.key !== 'files',
+                'is-detached': tab.session && !tab.open,
+              }"
               role="tab"
               :aria-selected="tab.key === state?.activeKey"
               :title="tab.subtitle === '' ? tab.label : `${tab.subtitle}:${tab.label}`"
-              @click="controller?.setActive(tab.key)"
+              @click="onTabClick(tab)"
+              @contextmenu.prevent="openTabMenu(tab, $event)"
             >
               <span class="ws-tab-dot" :class="{ 'is-live': tab.live && tab.phase === 'running' }" aria-hidden="true" />
               <span class="ws-tab-label">{{ tab.label }}</span>
-              <span v-if="tab.key !== 'files'" class="ws-tab-phase">{{ phaseWord(tab) }}</span>
-              <span class="ws-tab-close" aria-hidden="true" @click.stop="controller?.closeTab(tab.key)">✕</span>
+              <span v-if="tab.key !== 'files' && (tab.open || !tab.session)" class="ws-tab-phase">{{ phaseWord(tab) }}</span>
+              <span v-if="tab.open" class="ws-tab-close" aria-hidden="true" @click.stop="controller?.closeTab(tab.key)">✕</span>
+            </button>
+            <!-- Files: one click away at the bar's end, the desktop bar's
+                 Files slot. Opened lazily — the tab exists only once visited. -->
+            <button
+              v-if="state?.phase === 'ready'"
+              class="ws-tab ws-tab-files"
+              :class="{ 'is-active': state?.activeKey === 'files' }"
+              role="tab"
+              :aria-selected="state?.activeKey === 'files'"
+              title="Files (SFTP)"
+              @click="controller?.openFilesTab()"
+            >
+              <span class="ws-tab-label">Files</span>
+              <span
+                v-if="state?.tabs.some((t) => t.key === 'files')"
+                class="ws-tab-close"
+                aria-hidden="true"
+                @click.stop="controller?.closeTab('files')"
+              >✕</span>
             </button>
             <span class="ws-tabbar-spacer" />
             <button
@@ -765,6 +986,23 @@ function back() {
               {{ state?.rows.length }} session{{ state?.rows.length === 1 ? '' : 's' }} · {{ state?.tabs.length }} open
             </span>
           </footer>
+        </div>
+      </div>
+
+      <!-- The tab menu: rename and stop live HERE now, where the old sidebar
+           rows' ✎ ✕ used to — the desktop moved the same operations into its
+           tab bar when the rows became folder rows. -->
+      <div v-if="tabMenu !== null" class="ws-menu-backdrop" @click="closeTabMenu" @contextmenu.prevent="closeTabMenu">
+        <div
+          class="ws-tab-menu"
+          role="menu"
+          :aria-label="`Actions for ${tabMenu.tab.label}`"
+          :style="{ left: `${tabMenu.x}px`, top: `${tabMenu.y}px` }"
+          @click.stop
+        >
+          <p class="ws-tab-menu-head">{{ tabMenu.tab.label }}</p>
+          <button role="menuitem" :disabled="tabMenuRow === null" @click="renameFromTabMenu">Rename…</button>
+          <button role="menuitem" class="is-danger" :disabled="tabMenuRow === null" @click="stopFromTabMenu">Stop…</button>
         </div>
       </div>
 

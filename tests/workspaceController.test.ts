@@ -150,11 +150,14 @@ describe('workspace start', () => {
     expect(controller.state.phase).toBe('ready');
     expect(controller.state.aplexer).toBe(true);
     expect(controller.state.rows.map((r) => r.tag)).toEqual(['main']);
-    expect(controller.state.groups).toHaveLength(1);
-    expect(controller.state.groups[0]).toMatchObject({
-      workspace: '/home/a/git/proj',
-      label: 'proj',
-    });
+    // The sidebar tree is the desktop's derivation (core
+    // groupSessionsIntoRoots): $HOME inferred from the paths, root `~/git`,
+    // one folder row for the project.
+    expect(controller.state.home).toBe('/home/a');
+    expect(controller.state.roots).toHaveLength(1);
+    const root = controller.state.roots[0]!;
+    expect(root).toMatchObject({ key: '~/git', label: 'git', sessionCount: 1 });
+    expect(root.directories[0]).toMatchObject({ key: '~/git/proj', label: 'proj' });
     // Availability was probed under the PATH-aware wrapper, like the desktop.
     expect(conn.execCalls[0]).toContain('command -v a');
     expect(conn.execCalls[0]).toContain('.local/bin');
@@ -245,6 +248,37 @@ describe('session tabs', () => {
     expect(controller.state.tabs[0]!.phase).toBe('gone');
     // The tab itself stays until its channel exits.
     expect(controller.state.tabs).toHaveLength(1);
+  });
+});
+
+describe('folder workspaces', () => {
+  it('openFolder marks the folder and attaches its first (most recent) session', async () => {
+    const { conn, controller } = await started();
+    const dir = controller.state.roots[0]!.directories[0]!;
+    controller.openFolder(dir.key);
+    expect(controller.state.activeFolder).toBe('~/git/proj');
+    await vi.waitFor(() => expect(controller.state.activeKey).toBe('apx:u1'));
+    expect(conn.ptys[0]!.command).toContain(`a attach 'u1'`);
+  });
+
+  it('opening a session files its folder, whatever opened it', async () => {
+    const { controller } = await started();
+    await controller.openSession(controller.state.rows[0]!);
+    expect(controller.state.activeFolder).toBe('~/git/proj');
+  });
+
+  it('re-opening the active session\'s folder does not attach a second tab', async () => {
+    const { controller } = await started();
+    await controller.openSession(controller.state.rows[0]!);
+    controller.openFolder('~/git/proj');
+    expect(controller.state.activeKey).toBe('apx:u1');
+    expect(controller.state.tabs).toHaveLength(1);
+  });
+
+  it('an unknown folder key is refused, state untouched', async () => {
+    const { controller } = await started();
+    controller.openFolder('~/nowhere');
+    expect(controller.state.activeFolder).toBeNull();
   });
 });
 
