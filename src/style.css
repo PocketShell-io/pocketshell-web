@@ -1,8 +1,8 @@
 :root {
   color-scheme: dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  background: #0d1117;
-  color: #e6edf3;
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--fg);
 }
 
 * {
@@ -15,22 +15,23 @@ body {
 }
 
 a {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 :focus-visible {
-  outline: 2px solid #58a6ff;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-/* Buttons and button-looking links share one idiom (6px radius, family hues). */
+/* Buttons and button-looking links share one idiom, taken from the desktop's
+   .btn: surface-2 fill, strong border, translucent state-hover lift. */
 button,
 .button {
   font: inherit;
-  background: #21262d;
-  color: #e6edf3;
-  border: 1px solid #30363d;
-  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
   padding: 6px 14px;
   cursor: pointer;
   display: inline-flex;
@@ -39,31 +40,25 @@ button,
   text-decoration: none;
 }
 
-button:hover,
-.button:hover {
-  background: #30363d;
+button:hover:not(:disabled),
+.button:hover:not(:disabled) {
+  background: var(--state-hover);
 }
 
-/* Primary text is #fff everywhere: inherited #e6edf3 measured 3.92:1 on the
-   fill (AA needs 4.5) while #fff measures 4.63. Hover darkens rather than
-   lightens — #388bfd fell to 2.83:1, and #1663d2 (same hue as the rest
-   fill) holds 5.60:1. */
+/* The desktop's filled primary: accent fill with on-accent text (10.62:1).
+   The round-7 #fff reprieve belonged to the old blue palette and retires
+   with it. */
 button.primary,
 .button.primary {
-  background: #1f6feb;
-  border-color: #1f6feb;
-  color: #fff;
-}
-
-button.primary:hover,
-.button.primary:hover {
-  background: #1663d2;
-  border-color: #1663d2;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: var(--fw-semibold);
 }
 
 button:disabled,
 .button:disabled {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: default;
 }
 
@@ -76,9 +71,9 @@ button:disabled,
 input,
 textarea {
   font: inherit;
-  background: #0d1117;
-  color: #e6edf3;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
 }
@@ -93,15 +88,15 @@ textarea {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 10px;
   cursor: pointer;
 }
 
 .filepick:focus-within {
-  outline: 2px solid #58a6ff;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -127,15 +122,15 @@ label.filepick input[type='file']:focus {
 
 .filepick-btn {
   flex-shrink: 0;
-  background: #21262d;
-  color: #e6edf3;
-  border: 1px solid #30363d;
+  background: var(--border-soft);
+  color: var(--fg);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 12px;
 }
 
 .filepick:hover .filepick-btn {
-  background: #30363d;
+  background: var(--border);
 }
 
 .filepick-name {
@@ -143,7 +138,7 @@ label.filepick input[type='file']:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 /* Below 350px the caption cannot share the row with the button without being
@@ -162,11 +157,11 @@ label.filepick input[type='file']:focus {
 }
 
 .error {
-  color: #f85149;
+  color: var(--error);
 }
 
 .muted {
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .topbar {
@@ -174,13 +169,13 @@ label.filepick input[type='file']:focus {
   align-items: center;
   gap: 16px;
   padding: 10px 20px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .topbar .brand {
   font-weight: 700;
   text-decoration: none;
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .topbar .spacer {
@@ -230,7 +225,7 @@ main.page > h1 {
 /* Placeholder text in the muted family; the UA default measures 4.11:1 on
    the input background, under the 4.5 floor the forms depend on. */
 main.page ::placeholder {
-  color: #8b949e;
+  color: var(--fg-secondary);
   opacity: 1;
 }
 
@@ -239,8 +234,8 @@ main.page ::placeholder {
    hairline-separated mono rows — the anatomy the landing advertises. */
 .hosts-card {
   margin-top: 16px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -251,15 +246,15 @@ main.page ::placeholder {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 16px;
-  border-bottom: 1px solid #21262d;
-  font-family: ui-monospace, monospace;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .hosts-bar .pill {
-  color: #3fb950;
-  border: 1px solid #30363d;
+  color: var(--success);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 1px 8px;
   font-size: var(--text-fine);
@@ -272,8 +267,8 @@ main.page ::placeholder {
   align-items: center;
   gap: 8px 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid #21262d;
-  font-family: ui-monospace, monospace;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
 }
 
@@ -289,7 +284,7 @@ main.page ::placeholder {
 }
 
 .host-row .name {
-  color: #e6edf3;
+  color: var(--fg);
   font-weight: 600;
   /* Host names are arbitrary user input: an unbreakable 40-char token must
      end-ellipsis inside the row (the sanctioned .email/.meta pattern), never
@@ -301,7 +296,7 @@ main.page ::placeholder {
 }
 
 .host-row .meta {
-  color: #8b949e;
+  color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -376,7 +371,7 @@ main.page ::placeholder {
 .notice {
   margin: 12px 0 0;
   font-size: var(--text-small);
-  color: #8b949e;
+  color: var(--fg-secondary);
   overflow-wrap: anywhere;
 }
 
@@ -414,7 +409,7 @@ main.page ::placeholder {
    invalid port paints its own 1px border in the .error hue — the field and
    the message read as one. Absent aria-invalid computes exactly as before. */
 #hf-port[aria-invalid='true'] {
-  border-color: #f85149;
+  border-color: var(--error);
 }
 
 /* Bases are sized so field contents fit untruncated: the "Name (e.g.
@@ -460,8 +455,8 @@ main.page ::placeholder {
 /* Edit mode locks the name (it keys the synced entry); show it as locked,
    not as an ordinary field that happens to ignore typing. */
 .hostform input:disabled {
-  color: #8b949e;
-  background: #161b22;
+  color: var(--fg-secondary);
+  background: var(--surface);
   cursor: not-allowed;
 }
 
@@ -470,8 +465,8 @@ main.page ::placeholder {
    the disclosure marker replaced by the FAQ's mono +/−. */
 details.keybox {
   margin-top: 16px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -494,14 +489,14 @@ details.keybox > summary::-webkit-details-marker {
 /* Pointer feedback over the clickable card title, the landing's own
    .faq summary:hover idiom (the +/− marker keeps its muted color, as there). */
 details.keybox > summary:hover {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 details.keybox > summary::after {
   content: '+';
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-lede);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 details.keybox[open] > summary::after {
@@ -533,7 +528,7 @@ details.keybox > summary .sumtitle {
 .card-lede {
   margin: 0 0 12px;
   font-size: var(--text-small);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 /* Visible field labels: the fine-print step, programmatically tied to its
@@ -542,13 +537,13 @@ details.keybox > summary .sumtitle {
   display: block;
   margin: 0 0 4px;
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 details.keybox textarea {
   width: 100%;
   min-height: 90px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
 }
 
@@ -592,13 +587,13 @@ details.keybox textarea {
   align-items: center;
   gap: 8px;
   padding: 8px 0;
-  border-bottom: 1px solid #21262d;
-  font-family: ui-monospace, monospace;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
 }
 
 .import-row input[type='checkbox'] {
-  accent-color: #1f6feb;
+  accent-color: var(--accent-dim);
   flex-shrink: 0;
 }
 
@@ -622,14 +617,14 @@ details.keybox textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .import-row .tag {
   flex-shrink: 0;
   font-size: var(--text-fine);
-  color: #8b949e;
-  border: 1px solid #30363d;
+  color: var(--fg-secondary);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 1px 8px;
   white-space: nowrap;
@@ -692,8 +687,8 @@ details.keybox textarea {
   width: min(400px, 100%);
   margin: 0 auto;
   padding: 32px 28px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   text-align: center;
 }
@@ -712,7 +707,7 @@ details.keybox textarea {
   /* R5-A1: the whole label.import-row is the live hit target (a row click
      toggles its checkbox), so at pointer widths it answers like its clickable
      siblings — pointer cursor, and on hover-capable pointers the accepted
-     row-hover token #1c2129 (the terminal dir-row/tab idiom). The
+     row-hover token var(--surface-2) (the terminal dir-row/tab idiom). The
      (hover: hover) guard means a touch device never paints or sticks it, and
      the 390/320 rest renders — cursor included — stay exactly as accepted. */
   label.import-row {
@@ -721,7 +716,7 @@ details.keybox textarea {
 
   @media (hover: hover) {
     label.import-row:hover {
-      background: #1c2129;
+      background: var(--surface-2);
     }
   }
 }
@@ -746,11 +741,11 @@ details.keybox textarea {
   width: 40px;
   height: 40px;
   margin-bottom: 16px;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #3fb950;
-  font-family: ui-monospace, monospace;
+  color: var(--success);
+  font-family: var(--font-mono);
   font-size: var(--text-lede);
   font-weight: 700;
 }
@@ -764,7 +759,7 @@ details.keybox textarea {
 .unlock-lede {
   margin: 0;
   font-size: var(--text-small);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .unlock-form {
@@ -785,7 +780,7 @@ details.keybox textarea {
 }
 
 /* Remember-me: the card's one checkbox, with the .import-row anatomy
-   (checkbox + text, accent #1f6feb); the hint below is the .keypass-hint
+   (checkbox + text, accent var(--accent-dim)); the hint below is the .keypass-hint
    fine-print voice. min-height keeps the label a 44px touch target;
    flex-start lets the text wrap under itself on phones. */
 .unlock-remember {
@@ -800,14 +795,14 @@ details.keybox textarea {
 }
 
 .unlock-remember input[type='checkbox'] {
-  accent-color: #1f6feb;
+  accent-color: var(--accent-dim);
   flex-shrink: 0;
 }
 
 .unlock-remember-hint {
   margin: 0;
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .unlock-form .error {
@@ -906,8 +901,8 @@ details.keybox textarea {
 }
 
 /* ---- /term: the terminal screen (per-screen block, round-2) ----
-   The screen is ONE card in the landing .term-mock idiom: #161b22 surface,
-   #30363d border, 6px radius, tone-glow lift, a hairline-separated chrome
+   The screen is ONE card in the landing .term-mock idiom: var(--surface) surface,
+   var(--border) border, 6px radius, tone-glow lift, a hairline-separated chrome
    bar, and the terminal area below. It hangs below the untouched 54px
    app-topbar; the fixed frame starts at that measured bar height. */
 .term-screen {
@@ -934,14 +929,13 @@ details.keybox textarea {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   /* Same frame lift as .term-mock. */
   box-shadow:
-    0 16px 48px rgba(31, 109, 235, 0.12),
-    0 24px 64px rgba(1, 4, 9, 0.6);
+    var(--shadow-overlay);
 }
 
 .term-topbar {
@@ -950,16 +944,16 @@ details.keybox textarea {
   gap: 16px;
   padding: 10px 20px;
   /* Hairline between the chrome bar and the terminal area. */
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 /* Brand echo in the landing's `>_` vocabulary. */
 .term-mark {
   flex: none;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-small);
   font-weight: 600;
-  color: #3fb950;
+  color: var(--success);
 }
 
 /* The screen's one heading: the bar title, mono in the .hosts-bar /
@@ -972,11 +966,11 @@ details.keybox textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-body);
   font-weight: 600;
   line-height: 1.3;
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 /* Connection state in the hosts-bar pill idiom, tinted per state: brand
@@ -986,27 +980,27 @@ details.keybox textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 1px 8px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
   white-space: nowrap;
 }
 
 .term-status.is-connected {
-  color: #3fb950;
+  color: var(--success);
 }
 
 .term-status.is-busy {
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .term-status.is-down {
-  color: #f85149;
+  color: var(--error);
 }
 
-/* The terminal area inside the card sits on the canvas's own #0d1117 ground,
+/* The terminal area inside the card sits on the canvas's own var(--bg) ground,
    so the fitted canvas fills it seamlessly; the bar's hairline separates. */
 .terminal-wrap {
   flex: 1;
@@ -1015,7 +1009,7 @@ details.keybox textarea {
   flex-direction: column;
   gap: 12px;
   padding: 12px 14px 14px;
-  background: #0d1117;
+  background: var(--bg);
 }
 
 .terminal-wrap .term {
@@ -1025,13 +1019,13 @@ details.keybox textarea {
 }
 
 /* Failures render in the accepted .auth-notice idiom — a bordered card on
-   #161b22 with the error fg — never a bare paragraph on the ground. The
+   var(--surface) with the error fg — never a bare paragraph on the ground. The
    sentences stay verbatim; the card adds the recovery control. */
 .term-notice {
   flex: none;
   padding: 14px 16px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -1053,9 +1047,9 @@ details.keybox textarea {
 .warn-banner {
   flex: none;
   padding: 12px 14px;
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-left: 3px solid #d29922;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
   border-radius: 6px;
   display: flex;
   flex-direction: column;
@@ -1071,7 +1065,7 @@ details.keybox textarea {
 
 .warn-title {
   margin: 0;
-  color: #e6edf3;
+  color: var(--fg);
   font-size: var(--text-small);
   font-weight: 600;
 }
@@ -1083,7 +1077,7 @@ details.keybox textarea {
 
 .warn-stale {
   margin: 0;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: var(--text-fine);
 }
 
@@ -1101,42 +1095,42 @@ details.keybox textarea {
   align-items: center;
   gap: 6px 10px;
   padding: 8px 0;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-soft);
   font-size: var(--text-small);
 }
 
 .warn-kind {
   flex: none;
-  border: 1px solid #bb8009;
+  border: 1px solid var(--warning);
   border-radius: 999px;
   padding: 0 8px;
-  color: #d29922;
-  font-family: ui-monospace, monospace;
+  color: var(--warning);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
   text-transform: uppercase;
 }
 
 .warn-kind.is-crash {
-  border-color: #f85149;
-  color: #f85149;
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .warn-sel {
-  font-family: ui-monospace, monospace;
-  color: #e6edf3;
+  font-family: var(--font-mono);
+  color: var(--fg);
   overflow-wrap: anywhere;
 }
 
 .warn-detail {
   flex: 1 1 12em;
   min-width: 0;
-  color: #b6c0ca;
+  color: var(--fg-secondary);
   overflow-wrap: anywhere;
 }
 
 .warn-age {
-  color: #8b949e;
-  font-family: ui-monospace, monospace;
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
   white-space: nowrap;
 }
@@ -1161,7 +1155,7 @@ details.keybox textarea {
 .host-warns {
   margin-top: 6px;
   padding-left: 10px;
-  border-left: 2px solid #d29922;
+  border-left: 2px solid var(--warning);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1245,8 +1239,8 @@ details.keybox textarea {
 }
 
 .brand-mark {
-  font-family: ui-monospace, monospace;
-  color: #3fb950;
+  font-family: var(--font-mono);
+  color: var(--success);
   margin-right: 2px;
 }
 
@@ -1257,20 +1251,20 @@ details.keybox textarea {
 }
 
 .landing .nav-link {
-  color: #e6edf3;
+  color: var(--fg);
   text-decoration: none;
   padding: 6px 0;
   font-size: var(--text-body);
 }
 
 .landing .nav-link:hover {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 .landing .text-link {
-  color: #58a6ff;
+  color: var(--accent);
   text-decoration: underline;
-  text-decoration-color: #30363d;
+  text-decoration-color: var(--border);
   text-underline-offset: 3px;
   display: inline-block;
   padding: 6px 2px;
@@ -1278,7 +1272,7 @@ details.keybox textarea {
 }
 
 .landing .text-link:hover {
-  text-decoration-color: #58a6ff;
+  text-decoration-color: var(--accent);
 }
 
 /* Hero: centered copy, product visual right below the fold line. */
@@ -1292,9 +1286,9 @@ details.keybox textarea {
   display: inline-flex;
   align-items: center;
   font-size: var(--text-small);
-  color: #58a6ff;
-  background: #161b22;
-  border: 1px solid #30363d;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 14px;
   margin: 0 0 20px;
@@ -1312,7 +1306,7 @@ details.keybox textarea {
 .hero .sub {
   font-size: var(--text-lede);
   line-height: 1.6;
-  color: #8b949e;
+  color: var(--fg-secondary);
   max-width: 56ch;
   margin: 0 auto 28px;
 }
@@ -1336,18 +1330,18 @@ details.keybox textarea {
 }
 
 .chip {
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 12px;
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
   background: rgba(22, 27, 34, 0.6);
 }
 
 .cta-note {
   margin: 14px 0 0;
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 /* Fact strip: one hairline-grid row of concrete claims under the hero. */
@@ -1359,23 +1353,23 @@ details.keybox textarea {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
-  background: #30363d;
-  border: 1px solid #30363d;
+  background: var(--border);
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
 }
 
 .fact {
-  background: #161b22;
+  background: var(--surface);
   padding: 16px 20px;
   font-size: var(--text-fine);
   line-height: 1.5;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .fact strong {
   display: block;
-  color: #e6edf3;
+  color: var(--fg);
   font-size: var(--text-small);
   margin-bottom: 2px;
 }
@@ -1386,8 +1380,8 @@ details.keybox textarea {
 
 /* Desktop-app mock: the hero recreates the actual PocketShell desktop window
    — session panel, tab bar, agent session, prompt composer — using the app's
-   own dark-theme tokens (pocketshell-electron App.vue: #0d1117 ground,
-   #161b22 surfaces, #22d3ee accent, #a78bfa agent, #22c55e attached dot). */
+   own dark-theme tokens (pocketshell-electron App.vue: var(--bg) ground,
+   var(--surface) surfaces, var(--accent) accent, var(--agent) agent, var(--success) attached dot). */
 
 .icon-defs {
   position: absolute;
@@ -1400,14 +1394,13 @@ details.keybox textarea {
   max-width: 860px;
   margin: 0 auto;
   text-align: left;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   /* Same frame lift as .term-mock. */
   box-shadow:
-    0 16px 48px rgba(31, 109, 235, 0.12),
-    0 24px 64px rgba(1, 4, 9, 0.6);
+    var(--shadow-overlay);
 }
 
 .desktop-mock .bar {
@@ -1415,21 +1408,21 @@ details.keybox textarea {
   align-items: center;
   gap: 6px;
   padding: 10px 14px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .desktop-mock .dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #30363d;
+  background: var(--border);
 }
 
 .desktop-mock .title {
   margin-left: 8px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .desk-body {
@@ -1451,8 +1444,8 @@ details.keybox textarea {
   flex: 0 0 238px;
   display: flex;
   flex-direction: column;
-  background: #161b22;
-  border-right: 1px solid #21262d;
+  background: var(--surface);
+  border-right: 1px solid var(--border-soft);
 }
 
 .side-head {
@@ -1461,7 +1454,7 @@ details.keybox textarea {
   gap: 2px;
   height: 36px;
   padding: 0 6px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .side-spacer {
@@ -1474,7 +1467,7 @@ details.keybox textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .side-btn svg {
@@ -1512,8 +1505,8 @@ details.keybox textarea {
 }
 
 .dir-row.current {
-  background: rgba(34, 211, 238, 0.12);
-  border-left-color: #22d3ee;
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
 }
 
 .sdot {
@@ -1521,11 +1514,11 @@ details.keybox textarea {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6e7681;
+  background: var(--fg-muted);
 }
 
 .sdot.on {
-  background: #22c55e;
+  background: var(--success);
 }
 
 .dlabel {
@@ -1538,13 +1531,13 @@ details.keybox textarea {
 /* An unplaced session is labelled by its NAME, in mono (the app's untracked
    row treatment). */
 .dlabel.mono {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .count {
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -1552,7 +1545,7 @@ details.keybox textarea {
 .row-add {
   margin-left: auto;
   display: inline-flex;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .badge {
@@ -1560,15 +1553,15 @@ details.keybox textarea {
   font-size: 10px;
   font-weight: 500;
   line-height: 1.5;
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.14);
+  color: var(--agent);
+  background: var(--agent-soft);
   border-radius: 4px;
   padding: 0 3px;
 }
 
 .time {
   margin-left: auto;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -1600,11 +1593,11 @@ button.dir-row {
 
 .dir-row:not(.current):hover,
 .tab:not(.on):hover {
-  background: #1c2129;
+  background: var(--surface-2);
 }
 
 .desktop-mock button:focus-visible {
-  outline: 1px solid #22d3ee;
+  outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
 
@@ -1629,7 +1622,7 @@ button.dir-row {
   gap: 2px;
   height: 34px;
   padding: 0 8px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .tab {
@@ -1640,13 +1633,13 @@ button.dir-row {
   padding: 0 8px;
   border-radius: 6px;
   font-size: 12px;
-  color: #8b949e;
+  color: var(--fg-secondary);
   white-space: nowrap;
 }
 
 .tab.on {
-  background: #1c2129;
-  color: #e6edf3;
+  background: var(--surface-2);
+  color: var(--fg);
 }
 
 .tab svg,
@@ -1657,7 +1650,7 @@ button.dir-row {
 
 .tab-x {
   display: inline-flex;
-  color: #6e7681;
+  color: var(--fg-muted);
 }
 
 .tab-x svg {
@@ -1668,12 +1661,12 @@ button.dir-row {
 .tab-add {
   display: inline-flex;
   padding: 0 6px;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .desk-term {
   flex: 1;
-  background: #0c0c0c;
+  background: var(--term-bg);
   padding: 14px 18px;
   /* Mocks are decorative: content must scroll on narrow screens, never clip. */
   overflow-x: auto;
@@ -1681,10 +1674,10 @@ button.dir-row {
 
 .desk-term pre {
   margin: 0;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 13.5px;
   line-height: 1.7;
-  color: #cccccc;
+  color: var(--term-fg);
   /* Transcript lines are authored to fit the desktop panel; pre-wrap lets
      them reflow at phone width instead of overflowing the panel edge. */
   white-space: pre-wrap;
@@ -1696,23 +1689,23 @@ button.dir-row {
 }
 
 .t-add {
-  color: #3fb950;
+  color: var(--success);
 }
 
 .t-del {
-  color: #f85149;
+  color: var(--error);
 }
 
 .t-run {
-  color: #a78bfa;
+  color: var(--agent);
 }
 
 /* Prompt composer: PROMPT header, draft, then attach/slash tools, keyboard
    hint and the cyan Send. */
 
 .desk-composer {
-  border-top: 1px solid #21262d;
-  background: #161b22;
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface);
 }
 
 .comp-head {
@@ -1721,7 +1714,7 @@ button.dir-row {
   gap: 8px;
   height: 28px;
   padding: 0 10px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .comp-title {
@@ -1734,7 +1727,7 @@ button.dir-row {
 .comp-x {
   margin-left: auto;
   display: inline-flex;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .comp-x svg {
@@ -1746,14 +1739,14 @@ button.dir-row {
   min-height: 20px;
   padding: 10px 12px 4px;
   font-size: 13px;
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 /* The Files tab has no draft; the composer shows its placeholder, like the
    app's empty composer does. */
 .comp-draft:empty::before {
   content: 'Prompt the agent…';
-  color: #6e7681;
+  color: var(--fg-muted);
 }
 
 .comp-controls {
@@ -1769,9 +1762,9 @@ button.dir-row {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .comp-tool svg {
@@ -1782,12 +1775,12 @@ button.dir-row {
 .comp-hint {
   margin-left: auto;
   font-size: 11px;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .comp-send {
-  background: #22d3ee;
-  color: #04101a;
+  background: var(--accent);
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 600;
   border-radius: 6px;
@@ -1821,14 +1814,13 @@ button.dir-row {
   max-width: 860px;
   margin: 0 auto;
   text-align: left;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   /* Lift the dark terminal off the dark page with an existing-tone glow. */
   box-shadow:
-    0 16px 48px rgba(31, 109, 235, 0.12),
-    0 24px 64px rgba(1, 4, 9, 0.6);
+    var(--shadow-overlay);
 }
 
 .term-mock .bar {
@@ -1836,27 +1828,27 @@ button.dir-row {
   align-items: center;
   gap: 6px;
   padding: 10px 14px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .term-mock .dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #30363d;
+  background: var(--border);
 }
 
 .term-mock .title {
   margin-left: 8px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .term-mock pre {
   margin: 0;
   padding: 18px 22px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 15px;
   line-height: 1.75;
   /* Same reflow guarantee as .desk-term pre: wrap, never overflow. */
@@ -1866,23 +1858,23 @@ button.dir-row {
 }
 
 .t-prompt {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 .t-user {
-  color: #3fb950;
+  color: var(--success);
 }
 
 .t-dir {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 .t-dim {
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .t-green {
-  color: #3fb950;
+  color: var(--success);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -1902,7 +1894,7 @@ button.dir-row {
 .band {
   /* Hairline divider between bands: gap, line, then breathing room. */
   margin-top: 56px;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-soft);
   padding-top: 40px;
 }
 
@@ -1917,7 +1909,7 @@ button.dir-row {
   margin: 0;
   font-size: var(--text-lede);
   line-height: 1.6;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .cards {
@@ -1928,8 +1920,8 @@ button.dir-row {
 }
 
 .card {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: var(--card-pad);
 }
@@ -1945,7 +1937,7 @@ button.dir-row {
   margin: 0;
   font-size: var(--text-body);
   line-height: 1.6;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .card-link {
@@ -1954,18 +1946,18 @@ button.dir-row {
 }
 
 .card-link:hover {
-  border-color: #58a6ff;
+  border-color: var(--accent);
 }
 
 .card-link h3 {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 .card-meta {
   display: block;
   margin-top: 12px;
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .blog-cards {
@@ -1986,8 +1978,8 @@ button.dir-row {
 }
 
 .step {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: var(--card-pad);
 }
@@ -1998,11 +1990,11 @@ button.dir-row {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 50%;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-small);
-  color: #58a6ff;
+  color: var(--accent);
   margin-bottom: 12px;
 }
 
@@ -2021,7 +2013,7 @@ button.dir-row {
 }
 
 .frow + .frow {
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-soft);
 }
 
 .frow--flip .frow-copy {
@@ -2037,7 +2029,7 @@ button.dir-row {
   margin: 0 0 16px;
   font-size: var(--text-body);
   line-height: 1.65;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .frow .chips {
@@ -2053,8 +2045,8 @@ button.dir-row {
 }
 
 .hosts-mock {
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -2064,10 +2056,10 @@ button.dir-row {
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  border-bottom: 1px solid #21262d;
-  font-family: ui-monospace, monospace;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 /* Scoped to the landing on purpose: at top-level this rule's hardcoded 12px
@@ -2076,8 +2068,8 @@ button.dir-row {
    on /app — the app's token rule was dead code (round-3 D2). Under `.landing`
    the landing's render is unchanged while app screens read their own scale. */
 .landing .hosts-bar .pill {
-  color: #3fb950;
-  border: 1px solid #30363d;
+  color: var(--success);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 1px 8px;
   font-size: 12px;
@@ -2088,8 +2080,8 @@ button.dir-row {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid #21262d;
-  font-family: ui-monospace, monospace;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
 }
 
@@ -2098,22 +2090,22 @@ button.dir-row {
 }
 
 .hosts-row .hname {
-  color: #e6edf3;
+  color: var(--fg);
   font-weight: 600;
 }
 
 .hosts-row .hmeta {
   flex: 1;
-  color: #8b949e;
+  color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .hosts-row .hbtn {
-  color: #58a6ff;
-  background: #161b22;
-  border: 1px solid #30363d;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 3px 10px;
   font-size: 12px;
@@ -2128,8 +2120,8 @@ button.dir-row {
   justify-content: center;
   gap: 24px;
   padding: 32px 24px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -2137,8 +2129,8 @@ button.dir-row {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px;
 }
@@ -2147,12 +2139,12 @@ button.dir-row {
   display: block;
   height: 5px;
   border-radius: 3px;
-  background: #30363d;
+  background: var(--border);
 }
 
 .device .screen span.hl {
   width: 62%;
-  background: #3fb950;
+  background: var(--success);
 }
 
 .device--laptop .screen {
@@ -2163,8 +2155,8 @@ button.dir-row {
 .device--laptop .base {
   height: 9px;
   margin: 0 -16px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-top: 0;
   border-radius: 0 0 8px 8px;
 }
@@ -2183,8 +2175,8 @@ button.dir-row {
 /* Security band: the data path as a numbered flow, CTA below. */
 
 .security {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 32px;
 }
@@ -2198,7 +2190,7 @@ button.dir-row {
   margin: 0;
   font-size: var(--text-body);
   line-height: 1.7;
-  color: #8b949e;
+  color: var(--fg-secondary);
   max-width: 58ch;
 }
 
@@ -2212,17 +2204,17 @@ button.dir-row {
 }
 
 .sec-item {
-  background: #0d1117;
-  border: 1px solid #21262d;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
   border-radius: 6px;
   padding: 16px;
 }
 
 .sec-item .n {
   display: block;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
-  color: #58a6ff;
+  color: var(--accent);
   margin-bottom: 8px;
 }
 
@@ -2235,14 +2227,14 @@ button.dir-row {
   margin: 0;
   font-size: var(--text-small);
   line-height: 1.55;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .sec-bridge {
   margin: 20px 0 0;
   font-size: var(--text-small);
   line-height: 1.6;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .security .button {
@@ -2253,8 +2245,8 @@ button.dir-row {
    from the synced snapshot (scripts/sync-gh-history.py), not a screenshot. */
 
 .oss {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 32px;
 }
@@ -2267,7 +2259,7 @@ button.dir-row {
   margin: 0;
   font-size: var(--text-body);
   line-height: 1.6;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .oss-figure {
@@ -2286,7 +2278,7 @@ button.dir-row {
 .oss-total {
   font-size: var(--text-body);
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .oss-legend {
@@ -2294,7 +2286,7 @@ button.dir-row {
   align-items: center;
   gap: 3px;
   font-size: var(--text-small);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .oss-legend i {
@@ -2312,14 +2304,14 @@ button.dir-row {
   display: block;
   width: 100%;
   height: auto;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
 .contrib-month,
 .contrib-wday {
-  fill: #8b949e;
+  fill: var(--fg-secondary);
   font-size: 10px;
 }
 
@@ -2335,16 +2327,16 @@ button.dir-row {
   pointer-events: none;
   transform: translate(12px, 14px);
   padding: 6px 10px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: var(--text-small);
-  color: #8b949e;
+  color: var(--fg-secondary);
   white-space: nowrap;
 }
 
 .contrib-tip strong {
-  color: #e6edf3;
+  color: var(--fg);
   font-weight: 600;
   margin-right: 6px;
 }
@@ -2359,8 +2351,8 @@ button.dir-row {
 }
 
 .faq details {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -2382,9 +2374,9 @@ button.dir-row {
 
 .faq summary::after {
   content: '+';
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-h3);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .faq details[open] summary::after {
@@ -2396,7 +2388,7 @@ button.dir-row {
   padding: 0 20px 16px;
   font-size: var(--text-body);
   line-height: 1.6;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 /* Closing CTA and footer. */
@@ -2414,20 +2406,20 @@ button.dir-row {
   max-width: 640px;
   height: auto;
   margin: 0 auto 28px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #0d1117;
+  background: var(--bg);
 }
 
 .final-cta p {
   margin: 0 0 24px;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: var(--text-lede);
 }
 
 .landing-footer {
   margin-top: var(--gap-section);
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-soft);
 }
 
 .footer-row {
@@ -2444,11 +2436,11 @@ button.dir-row {
 .foot-brand {
   font-weight: 700;
   font-size: var(--text-small);
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .footer-row .foot-dim {
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .footer-nav {
@@ -2459,33 +2451,33 @@ button.dir-row {
 }
 
 .footer-nav a {
-  color: #8b949e;
+  color: var(--fg-secondary);
   padding: 6px 0;
   white-space: nowrap;
 }
 
 .footer-nav a:hover {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 /* Bare links get an observable hover change without leaving the palette:
    dim underline -> accent (the same idiom as .nav-link). */
 .landing .brand:hover {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 .faq summary:hover {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 .oss-copy a {
   text-decoration: underline;
   text-underline-offset: 3px;
-  text-decoration-color: #30363d;
+  text-decoration-color: var(--border);
 }
 
 .oss-copy a:hover {
-  text-decoration-color: #58a6ff;
+  text-decoration-color: var(--accent);
 }
 
 @media (max-width: 900px) {
@@ -2632,8 +2624,8 @@ button.dir-row {
   align-items: center;
   width: min(400px, 100%);
   padding: 32px 28px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   text-align: center;
 }
@@ -2644,11 +2636,11 @@ button.dir-row {
   width: 40px;
   height: 40px;
   margin-bottom: 16px;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #3fb950;
-  font-family: ui-monospace, monospace;
+  color: var(--success);
+  font-family: var(--font-mono);
   font-size: var(--text-lede);
   font-weight: 700;
 }
@@ -2662,7 +2654,7 @@ button.dir-row {
 .auth-lede {
   margin: 0;
   font-size: var(--text-small);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .auth-slot {
@@ -2696,17 +2688,17 @@ button.dir-row {
   gap: 8px;
   width: 100%;
   height: 40px;
-  border: 1px dashed #30363d;
+  border: 1px dashed var(--border);
   border-radius: 6px;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: var(--text-small);
 }
 
 .auth-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid #30363d;
-  border-top-color: #8b949e;
+  border: 2px solid var(--border);
+  border-top-color: var(--fg-secondary);
   border-radius: 50%;
 }
 
@@ -2727,10 +2719,10 @@ button.dir-row {
   width: 100%;
   margin-top: 24px;
   padding: 14px 16px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #f85149;
+  color: var(--error);
   font-size: var(--text-small);
 }
 
@@ -2739,7 +2731,7 @@ button.dir-row {
 }
 
 .auth-notice code {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
@@ -2759,12 +2751,12 @@ button.dir-row {
 .auth-back a {
   display: inline-block;
   padding: 12px 16px;
-  text-decoration-color: #30363d;
+  text-decoration-color: var(--border);
   text-underline-offset: 3px;
 }
 
 .auth-back a:hover {
-  text-decoration-color: #58a6ff;
+  text-decoration-color: var(--accent);
 }
 
 /* Touch widths: the back link is the login card's only secondary control,
@@ -2783,7 +2775,7 @@ button.dir-row {
    sidebar lists the host's live sessions grouped by workspace, the tab
    strip carries one terminal per joined session, and the status bar reads
    the active tab's selector, engine, and phase. Same tokens as the rest of
-   the app: #0d1117 ground, #161b22 chrome, #30363d hairlines, mono fine
+   the app: var(--bg) ground, var(--surface) chrome, var(--border) hairlines, mono fine
    text, 44px touch floors.
    ------------------------------------------------------------------------- */
 
@@ -2805,7 +2797,7 @@ button.dir-row {
   min-height: 0;
   display: flex;
   position: relative;
-  background: #0d1117;
+  background: var(--bg);
 }
 
 .ws-sidebar {
@@ -2814,8 +2806,8 @@ button.dir-row {
   min-height: 0;
   overflow-y: auto;
   padding: 12px 10px 16px;
-  background: #161b22;
-  border-right: 1px solid #30363d;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2830,12 +2822,12 @@ button.dir-row {
 
 .ws-side-title {
   flex: 1;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .ws-side-empty {
@@ -2885,13 +2877,13 @@ button.dir-row {
 
 /* The `~/` every root header repeats, receding so `git` is what lands. */
 .ws-path-prefix {
-  color: #6e7681;
+  color: var(--fg-muted);
 }
 
 /* `other` is a bucket, not a directory: toned down to say so. */
 .ws-root-label.is-bucket {
   font-weight: 400;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 /* Beside the label, not pinned right — a count thrown to the far edge reads
@@ -2902,7 +2894,7 @@ button.dir-row {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 /* The per-root `+`: hover- and focus-revealed, always laid out so the label
@@ -2919,7 +2911,7 @@ button.dir-row {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
@@ -2933,8 +2925,8 @@ button.dir-row {
 }
 
 .ws-root-add:hover {
-  color: #e6edf3;
-  background: #21262d;
+  color: var(--fg);
+  background: var(--border-soft);
 }
 
 @media (hover: none) {
@@ -2961,24 +2953,24 @@ button.dir-row {
   background: transparent;
   border: 0;
   border-left: 2px solid transparent;
-  color: #e6edf3;
+  color: var(--fg);
   text-align: left;
   padding: 0 10px 0 18px;
   cursor: pointer;
-  font-family: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-ui);
   font-size: 13px;
   line-height: 1.3846;
   overflow: hidden;
 }
 
 .ws-dir-row:hover {
-  background: rgba(230, 237, 243, 0.05);
+  background: var(--state-hover);
 }
 
 /* Selection is accent-tinted and railed; hover is a neutral lift. */
 .ws-dir-row.is-current {
-  background: rgba(34, 211, 238, 0.12);
-  border-left-color: #22d3ee;
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
 }
 
 .ws-dot {
@@ -2986,11 +2978,11 @@ button.dir-row {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6e7681;
+  background: var(--fg-muted);
 }
 
 .ws-dot.is-active {
-  background: #22c55e;
+  background: var(--success);
 }
 
 /* The label wins the width fight; everything else shrinks first. */
@@ -3000,12 +2992,12 @@ button.dir-row {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .ws-dir-label.is-mono {
-  font-family: ui-monospace, monospace;
-  color: #8b949e;
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
 }
 
 /* A folder holding an attached session is semibold — weight and the green
@@ -3023,8 +3015,8 @@ button.dir-row {
   line-height: 1.45;
   font-size: 11px;
   font-weight: 500;
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.14);
+  color: var(--agent);
+  background: var(--agent-soft);
   border: 1px solid transparent;
   border-radius: 4px;
   padding: 0 4px;
@@ -3033,16 +3025,16 @@ button.dir-row {
 
 /* Transient detector states read as "not settled yet", not as a live agent. */
 .ws-badge.is-dim {
-  color: #8b949e;
+  color: var(--fg-secondary);
   background: transparent;
-  border-color: #2d333b;
+  border-color: var(--border);
 }
 
 .ws-dir-age {
   flex: none;
   margin-left: auto;
   font-size: 11px;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -3082,15 +3074,15 @@ button.dir-row {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
 }
 
 .ws-icon-btn:hover:not(:disabled) {
-  color: #e6edf3;
-  background: #21262d;
+  color: var(--fg);
+  background: var(--border-soft);
 }
 
 .ws-icon-btn:disabled {
@@ -3101,7 +3093,7 @@ button.dir-row {
 /* An unattached folder tab: it will join on click. Muted dot only — no
    phase word, no close box (the session is not attached to close). */
 .ws-tab.is-detached .ws-tab-dot {
-  background: #30363d;
+  background: var(--border);
 }
 
 .ws-tab-files {
@@ -3119,17 +3111,17 @@ button.dir-row {
   position: fixed;
   min-width: 170px;
   padding: 4px;
-  background: #1c2129;
-  border: 1px solid #2d333b;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.72);
+  box-shadow: 0 8px 24px var(--scrim);
 }
 
 .ws-tab-menu-head {
   margin: 0;
   padding: 4px 10px 6px;
   font-size: 11px;
-  color: #8b949e;
+  color: var(--fg-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3142,17 +3134,17 @@ button.dir-row {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #e6edf3;
+  color: var(--fg);
   text-align: left;
   cursor: pointer;
 }
 
 .ws-tab-menu button:hover:not(:disabled) {
-  background: #30363d;
+  background: var(--border);
 }
 
 .ws-tab-menu button.is-danger {
-  color: #f85149;
+  color: var(--error);
 }
 
 .ws-tab-menu button:disabled {
@@ -3176,8 +3168,8 @@ button.dir-row {
   gap: 2px;
   padding: 6px 8px 0;
   overflow-x: auto;
-  border-bottom: 1px solid #30363d;
-  background: #0d1117;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
   scrollbar-width: none;
 }
 
@@ -3194,23 +3186,23 @@ button.dir-row {
   border-radius: 6px 6px 0 0;
   background: transparent;
   font: inherit;
-  color: #8b949e;
+  color: var(--fg-secondary);
   cursor: pointer;
 }
 
 .ws-tab:hover {
-  background: #161b22;
-  color: #e6edf3;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .ws-tab.is-active {
-  background: #161b22;
-  border-bottom-color: #58a6ff;
-  color: #e6edf3;
+  background: var(--surface);
+  border-bottom-color: var(--accent);
+  color: var(--fg);
 }
 
 .ws-tab.is-dead {
-  color: #6e7681;
+  color: var(--fg-muted);
 }
 
 .ws-tab-dot {
@@ -3218,11 +3210,11 @@ button.dir-row {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #30363d;
+  background: var(--border);
 }
 
 .ws-tab-dot.is-live {
-  background: #3fb950;
+  background: var(--success);
 }
 
 .ws-tab-label {
@@ -3230,15 +3222,15 @@ button.dir-row {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-small);
 }
 
 .ws-tab-phase {
   flex: none;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: #6e7681;
+  color: var(--fg-muted);
 }
 
 .ws-tab-close {
@@ -3253,8 +3245,8 @@ button.dir-row {
 }
 
 .ws-tab-close:hover {
-  background: #30363d;
-  color: #f85149;
+  background: var(--border);
+  color: var(--error);
 }
 
 .ws-tabbar-spacer {
@@ -3267,22 +3259,22 @@ button.dir-row {
   min-height: 40px;
   border: 0;
   background: transparent;
-  color: #8b949e;
+  color: var(--fg-secondary);
   font-size: 16px;
   cursor: pointer;
 }
 
 .ws-tab-refresh:hover {
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .ws-action-error {
   flex: none;
   margin: 0;
   padding: 8px 14px;
-  background: #2d1215;
-  border-bottom: 1px solid #f85149;
-  color: #f85149;
+  background: var(--error-soft);
+  border-bottom: 1px solid var(--error);
+  color: var(--error);
   font-size: var(--text-small);
   display: flex;
   align-items: center;
@@ -3328,7 +3320,7 @@ button.dir-row {
 
 .ws-placeholder-title {
   margin: 0;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-body);
   font-weight: 600;
 }
@@ -3350,9 +3342,9 @@ button.dir-row {
   gap: 10px;
   min-height: 36px;
   padding: 4px 14px;
-  border-top: 1px solid #30363d;
-  background: #161b22;
-  font-family: ui-monospace, monospace;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
   white-space: nowrap;
   overflow: hidden;
@@ -3362,21 +3354,21 @@ button.dir-row {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .ws-status-engine {
   flex: none;
-  color: #a371f7;
+  color: var(--agent);
 }
 
 .ws-status-phase {
   flex: none;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .ws-status-phase.is-live {
-  color: #3fb950;
+  color: var(--success);
 }
 
 .ws-status-count {
@@ -3392,8 +3384,8 @@ button.dir-row {
   align-items: flex-end;
   gap: 8px;
   padding: 8px;
-  border-top: 1px solid #21262d;
-  background: #0d1117;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg);
 }
 
 .ws-composer-input {
@@ -3402,17 +3394,17 @@ button.dir-row {
   min-height: 38px;
   max-height: 132px;
   padding: 9px 10px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #e6edf3;
+  color: var(--fg);
   font-family: inherit;
   font-size: var(--text-body);
   line-height: 1.4;
 }
 
 .ws-composer-input::placeholder {
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .ws-composer-input:disabled {
@@ -3432,10 +3424,10 @@ button.dir-row {
   flex-direction: column;
   max-height: 246px;
   overflow-y: auto;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 16px 40px rgba(1, 4, 9, 0.6);
+  box-shadow: var(--shadow-overlay);
   z-index: 40;
 }
 
@@ -3451,8 +3443,8 @@ button.dir-row {
   padding: 7px 10px;
   background: none;
   border: 0;
-  border-top: 1px solid #21262d;
-  color: #e6edf3;
+  border-top: 1px solid var(--border-soft);
+  color: var(--fg);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -3463,24 +3455,24 @@ button.dir-row {
 }
 
 .ws-palette button.is-picked {
-  background: #21262d;
+  background: var(--border-soft);
 }
 
 .ws-palette-cmd {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
-  color: #3fb950;
+  color: var(--success);
 }
 
 .ws-palette-label {
   font-size: var(--text-fine);
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .ws-palette-desc {
   grid-column: 1 / -1;
   font-size: var(--text-fine);
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 /* Agent launch step: the New dialog's optional second half — pick the
@@ -3490,7 +3482,7 @@ button.dir-row {
    distinguishable at a glance. */
 .ws-launch {
   margin-top: 2px;
-  border-top: 1px solid #30363d;
+  border-top: 1px solid var(--border);
   padding-top: 10px;
   display: flex;
   flex-direction: column;
@@ -3502,7 +3494,7 @@ button.dir-row {
   align-items: center;
   gap: 8px;
   font-size: var(--text-small);
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .ws-launch-kinds {
@@ -3517,9 +3509,9 @@ button.dir-row {
   gap: 2px 8px;
   align-items: center;
   padding: 6px 8px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #0d1117;
+  background: var(--bg);
   cursor: pointer;
 }
 
@@ -3539,7 +3531,7 @@ button.dir-row {
   border: 0;
   border-radius: 0;
   background: none;
-  accent-color: #3fb950;
+  accent-color: var(--success);
 }
 
 /* The toggle rows share the same reset: checkbox adjacent to its sentence. */
@@ -3552,7 +3544,7 @@ button.dir-row {
   border: 0;
   border-radius: 0;
   background: none;
-  accent-color: #3fb950;
+  accent-color: var(--success);
   flex: none;
 }
 
@@ -3563,24 +3555,24 @@ button.dir-row {
 
 .ws-launch-kind-label {
   font-size: var(--text-small);
-  color: #e6edf3;
+  color: var(--fg);
 }
 
 .ws-launch-kind-reason {
   font-size: var(--text-fine);
   line-height: 1.4;
-  color: #8b949e;
+  color: var(--fg-secondary);
 }
 
 .ws-launch-line {
   margin: 0;
   padding: 8px 10px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #161b22;
-  font-family: ui-monospace, monospace;
+  background: var(--surface);
+  font-family: var(--font-mono);
   font-size: var(--text-fine);
-  color: #3fb950;
+  color: var(--success);
   overflow-wrap: anywhere;
 }
 
@@ -3593,17 +3585,17 @@ button.dir-row {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(1, 4, 9, 0.72);
+  background: var(--scrim);
 }
 
 .ws-dialog {
   width: 100%;
   max-width: 440px;
   padding: 18px 20px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 24px 64px rgba(1, 4, 9, 0.6);
+  box-shadow: var(--shadow-overlay);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3617,12 +3609,12 @@ button.dir-row {
 .ws-dialog input {
   width: 100%;
   padding: 10px 12px;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #e6edf3;
+  color: var(--fg);
   font: inherit;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .ws-dialog .flabel {
@@ -3648,7 +3640,7 @@ button.dir-row {
     width: min(320px, 86vw);
     transform: translateX(-102%);
     transition: transform 0.18s ease;
-    box-shadow: 0 16px 48px rgba(1, 4, 9, 0.6);
+    box-shadow: var(--shadow-overlay);
   }
 
   .ws-body.is-sidebar-open .ws-sidebar {
@@ -3754,13 +3746,13 @@ button.dir-row {
   border: 0;
   border-radius: 6px;
   background: none;
-  color: #58a6ff;
+  color: var(--accent);
   font: inherit;
   cursor: pointer;
 }
 
 .ws-files-crumbs button:hover {
-  background: #161b22;
+  background: var(--surface);
   text-decoration: underline;
 }
 
@@ -3778,9 +3770,9 @@ button.dir-row {
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid #21262d;
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
-  background: #0d1117;
+  background: var(--bg);
 }
 
 .ws-files-row {
@@ -3791,9 +3783,9 @@ button.dir-row {
   min-height: 36px;
   padding: 4px 10px;
   border: 0;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--surface);
   background: none;
-  color: #e6edf3;
+  color: var(--fg);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -3804,18 +3796,18 @@ button.dir-row {
 }
 
 .ws-files-row:hover {
-  background: #161b22;
+  background: var(--surface);
 }
 
 .ws-files-name {
   flex: 1;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 
 .ws-files-name.is-dir {
-  color: #58a6ff;
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -3846,7 +3838,7 @@ button.dir-row {
 .ws-files-editor-name {
   flex: 1;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 
@@ -3854,8 +3846,8 @@ button.dir-row {
   flex: none;
   padding: 1px 8px;
   border-radius: 999px;
-  background: #302114;
-  color: #f0b72e;
+  background: var(--warning-soft);
+  color: var(--warning);
   font-size: 11px;
 }
 
@@ -3874,18 +3866,18 @@ button.dir-row {
   width: 100%;
   min-height: 200px;
   padding: 10px;
-  border: 1px solid #21262d;
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
-  background: #0d1117;
-  color: #e6edf3;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.45;
   resize: none;
 }
 
 .ws-files-textarea:focus {
-  outline: 2px solid #1f6feb;
+  outline: 2px solid var(--accent-dim);
   outline-offset: -1px;
 }
 
@@ -3915,13 +3907,13 @@ button.dir-row {
   border: 0;
   border-radius: 6px;
   background: none;
-  color: #58a6ff;
+  color: var(--accent);
   font: inherit;
   cursor: pointer;
 }
 
 .ws-files-crumbs button:hover {
-  background: #161b22;
+  background: var(--surface);
   text-decoration: underline;
 }
 
@@ -3939,9 +3931,9 @@ button.dir-row {
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid #21262d;
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
-  background: #0d1117;
+  background: var(--bg);
 }
 
 .ws-files-row {
@@ -3952,9 +3944,9 @@ button.dir-row {
   min-height: 36px;
   padding: 4px 10px;
   border: 0;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--surface);
   background: none;
-  color: #e6edf3;
+  color: var(--fg);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -3965,18 +3957,18 @@ button.dir-row {
 }
 
 .ws-files-row:hover {
-  background: #161b22;
+  background: var(--surface);
 }
 
 .ws-files-name {
   flex: 1;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 
 .ws-files-name.is-dir {
-  color: #58a6ff;
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -4007,7 +3999,7 @@ button.dir-row {
 .ws-files-editor-name {
   flex: 1;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 
@@ -4015,8 +4007,8 @@ button.dir-row {
   flex: none;
   padding: 1px 8px;
   border-radius: 999px;
-  background: #302114;
-  color: #f0b72e;
+  background: var(--warning-soft);
+  color: var(--warning);
   font-size: 11px;
 }
 
@@ -4035,17 +4027,17 @@ button.dir-row {
   width: 100%;
   min-height: 200px;
   padding: 10px;
-  border: 1px solid #21262d;
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
-  background: #0d1117;
-  color: #e6edf3;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.45;
   resize: none;
 }
 
 .ws-files-textarea:focus {
-  outline: 2px solid #1f6feb;
+  outline: 2px solid var(--accent-dim);
   outline-offset: -1px;
 }
