@@ -3714,15 +3714,11 @@ button.dir-row {
     padding: 10px 12px;
   }
 
-  /* Two sessions must stay distinguishable in the strip: the 160px cap with
-     the 44px close box left the label one character. The phase word moves
-     out of the way (the status bar owns it) and the cap widens. */
-  .ws-tab {
-    max-width: 220px;
-    flex: 0 1 auto;
-    min-width: 0;
-  }
-
+  /* The strip scrolls rather than shrinking tabs — the desktop bar's rule:
+     shrink-to-fit clamps .ws-tab-label to zero width once three tabs are
+     open, and the persistent Files tab makes three the phone norm. Tabs
+     keep their base flex: none, so each label holds its min-content width.
+     The phase word still hides — the status bar owns it. */
   .ws-tab-phase {
     display: none;
   }
