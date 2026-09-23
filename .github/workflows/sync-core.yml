@@ -1,0 +1,57 @@
+# Keeps the live site in lockstep with @pocketshell/core — the repo where the
+# shared contract layer AND the shared interface package (@pocketshell/ui)
+# now live, so a change merged there must reach the web without anyone
+# touching this repo.
+#
+# Every 15 minutes: compare the core commit the deployed bundle was built
+# from (served as /core-sha.txt by the site itself — the deployed artifact is
+# the state, there is no branch or variable to keep in step) against core
+# main. A mismatch dispatches the Deploy site workflow, which checks out the
+# new core sibling, rebuilds, and refreshes the pin.
+#
+# This is a PULL, not a push: no cross-repo PAT exists, so core cannot reach
+# into this repo — and it does not need to. The in-flight guard below also
+# absorbs a stale CloudFront read of the pin (dispatch once and let the
+# running deploy finish rather than queueing duplicates every tick).
+name: sync core
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: sync-core
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare the live core pin with core main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          live="$(curl -fsSL --max-time 20 "https://app.pocketshell.io/core-sha.txt?nocache=$RANDOM" | tr -d '[:space:]')"
+          head="$(git ls-remote https://github.com/PocketShell-io/pocketshell-core refs/heads/main | cut -f1)"
+          echo "live pin: $live"
+          echo "core main: $head"
+          if [ "$live" = "$head" ]; then
+            echo "site is in lockstep with core main"
+            exit 0
+          fi
+          if gh run list --workflow deploy.yml --limit 1 --json status \
+             --jq '.[0].status | select(. == "in_progress" or . == "queued")' | grep -q .; then
+            echo "a deploy is already in flight for this change; re-checking after it lands"
+            exit 0
+          fi
+          echo "core main moved past the deployed pin - dispatching Deploy site"
+          gh workflow run deploy.yml --ref main

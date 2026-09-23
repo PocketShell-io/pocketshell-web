@@ -40,6 +40,13 @@ fi
 
 npm run build
 
+# Which @pocketshell/core commit this bundle was built from, served off the
+# site itself. The scheduled sync-core workflow curls this file and compares
+# it with core main; a mismatch dispatches this deploy, so a core change
+# reaches the site without anyone touching this repo. The deployed artifact
+# is the state — there is no branch or variable to keep in step.
+git -C "${CORE_DIR:-../pocketshell-core}" rev-parse HEAD > dist/core-sha.txt 2>/dev/null || echo unknown > dist/core-sha.txt
+
 # config.js is generated at deploy time so rotations do not need code changes.
 cp public/config.js dist/config.js
 python3 - "$WS_URL" "$DIRECT_WS_URL" <<'EOF'
