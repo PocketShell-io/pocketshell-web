@@ -43,6 +43,10 @@ export default defineConfig({
       // ssh2's SSH-agent support is node-only (net/child_process, __dirname
       // at module scope); the direct session never uses an agent.
       './agent.js': fileURLToPath(new URL('./src/shims/ssh2-agent.ts', import.meta.url)),
+      // The shared interface package (@pocketshell/ui) rides in the same
+      // core sibling the file: dependency uses — one UI source for desktop,
+      // web and Android, consumed as source.
+      '@ui': fileURLToPath(new URL('../pocketshell-core/packages/ui/src', import.meta.url)),
     },
   },
 });

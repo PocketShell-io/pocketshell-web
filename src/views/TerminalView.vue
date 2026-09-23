@@ -6,6 +6,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { createSession, type TerminalSession } from '../terminal/session';
 import { decodeOsc52SetClipboard } from '@pocketshell/core';
+// The same terminal themes desktop ships — one palette registry in
+// @pocketshell/core, so the web pane renders the exact colours desktop does.
+import { resolveTheme, THEME_CHOICE_DEFAULT } from '@ui/themes';
 import {
   ackAllWarnings,
   ackWarning,
@@ -56,7 +59,7 @@ onMounted(async () => {
   term = new Terminal({
     cursorBlink: true,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    theme: { background: '#0d1117', foreground: '#e6edf3' },
+    theme: resolveTheme(THEME_CHOICE_DEFAULT).terminal,
   });
   fit = new FitAddon();
   term.loadAddon(fit);
