@@ -346,16 +346,31 @@ export const webApi: PocketShellApi = {
 
   sync: webSyncApi(),
 
-  // The one loud hole: port forwarding is not implemented in the browser
-  // transport yet. Every call fails with its own name — never a silent no-op.
-  forwards: new Proxy(
-    {},
-    {
-      get: (_t, prop) => (): never => {
-        throw new UnsupportedCapability(`forwards.${String(prop)}`);
-      },
-    },
-  ) as PocketShellApi['forwards'],
+  // Port forwarding is not implemented in the browser transport yet. The
+  // READ side answers EMPTY rather than throwing: the workspace view polls
+  // `list`/`isAutoEnabled` on every mount, and a poll that fails paints the
+  // diag banner red forever for a feature the web has never had. Empty is
+  // the honest answer — there are no forwards. The WRITE side (start, add,
+  // toggle…) still fails with its own name, so nothing can pretend to
+  // forward anything.
+  forwards: {
+    scan: () => Promise.reject(new UnsupportedCapability('forwards.scan')),
+    startAuto: () => Promise.reject(new UnsupportedCapability('forwards.startAuto')),
+    stopAuto: () => Promise.reject(new UnsupportedCapability('forwards.stopAuto')),
+    addManual: () => Promise.reject(new UnsupportedCapability('forwards.addManual')),
+    remove: () => Promise.reject(new UnsupportedCapability('forwards.remove')),
+    list: () => Promise.resolve([]),
+    refresh: () => Promise.resolve(false),
+    discovered: () => Promise.resolve([]),
+    status: () => Promise.resolve(null),
+    setName: () => Promise.reject(new UnsupportedCapability('forwards.setName')),
+    setRemap: () => Promise.reject(new UnsupportedCapability('forwards.setRemap')),
+    clearRemap: () => Promise.reject(new UnsupportedCapability('forwards.clearRemap')),
+    setIntent: () => Promise.reject(new UnsupportedCapability('forwards.setIntent')),
+    togglePort: () => Promise.reject(new UnsupportedCapability('forwards.togglePort')),
+    isAutoEnabled: () => Promise.resolve(false),
+    onStates: () => () => {},
+  },
 
   diag: {
     // REAL — no desktop log file on the web; the console is the sink.
