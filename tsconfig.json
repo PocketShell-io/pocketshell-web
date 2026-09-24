@@ -16,7 +16,11 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@ui/*": ["../pocketshell-core/packages/ui/src/*"]
+      "@ui/*": ["../pocketshell-core/packages/ui/src/*"],
+      "@pocketshell/core": ["../pocketshell-core/dist/esm/index.d.ts"],
+      "@pocketshell/core/*": ["../pocketshell-core/dist/esm/*"],
+      "@pocketshell/core": ["../pocketshell-core/dist/esm/index.d.ts"],
+      "@pocketshell/core/*": ["../pocketshell-core/dist/esm/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts"]

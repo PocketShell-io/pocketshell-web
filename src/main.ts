@@ -8,6 +8,12 @@ import '@xterm/xterm/css/xterm.css';
 // follows so app rules keep winning the cascade where both define a class.
 import '@ui/styles.css';
 import './style.css';
+// The browser transport IS the platform. The shared app tree receives it
+// through the seam; this is the one line that binds them.
+import { provideApi } from '@ui/app/ipc';
+import { webApi } from './platform/webApi';
+
+provideApi(webApi);
 
 createApp(App).use(createPinia()).use(router).mount('#app');
 

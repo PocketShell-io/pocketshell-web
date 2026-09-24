@@ -47,6 +47,25 @@ export default defineConfig({
       // core sibling the file: dependency uses — one UI source for desktop,
       // web and Android, consumed as source.
       '@ui': fileURLToPath(new URL('../pocketshell-core/packages/ui/src', import.meta.url)),
+      // The app tree lives inside the core repo; bare imports of
+      // @pocketshell/core from there cannot see this repo's node_modules.
+      '@pocketshell/core/shared': fileURLToPath(new URL('../pocketshell-core/src/shared', import.meta.url)),
+      '@pocketshell/core/attachments': fileURLToPath(new URL('../pocketshell-core/src/attachments', import.meta.url)),
+      '@pocketshell/core/preview': fileURLToPath(new URL('../pocketshell-core/src/preview', import.meta.url)),
+      '@pocketshell/core': fileURLToPath(new URL('../pocketshell-core/src', import.meta.url)),
     },
+    // Every shared lib the app tree imports would otherwise resolve to the
+    // ui package's own node_modules copy — a SECOND pinia/vue/xterm instance
+    // beside the app's, which breaks pinia's active-instance global.
+    dedupe: [
+      'vue', 'pinia', 'vue-router',
+      '@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links',
+      '@codemirror/commands', '@codemirror/language', '@codemirror/state', '@codemirror/view',
+      '@codemirror/legacy-modes', '@codemirror/lang-cpp', '@codemirror/lang-css', '@codemirror/lang-go',
+      '@codemirror/lang-html', '@codemirror/lang-java', '@codemirror/lang-javascript', '@codemirror/lang-json',
+      '@codemirror/lang-markdown', '@codemirror/lang-php', '@codemirror/lang-python', '@codemirror/lang-rust',
+      '@codemirror/lang-sql', '@codemirror/lang-vue', '@codemirror/lang-xml', '@codemirror/lang-yaml',
+      '@lezer/highlight', '@lezer/common', '@lezer/lr',
+    ],
   },
 });
