@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { useConnectionStore } from '@ui/app/stores/connection';
 import { useHostsStore } from '../stores/hosts';
 import { useWarningsStore } from '../stores/warnings';
 import { formatAge, type AplexerWarning } from '../aplexer/warnings';
@@ -12,6 +13,7 @@ import { forgetPassphrase, recallPassphrase, rememberPassphrase } from '../share
 import type { HostEntry } from '@pocketshell/core';
 
 const auth = useAuthStore();
+const connection = useConnectionStore();
 const hosts = useHostsStore();
 const warnings = useWarningsStore();
 const router = useRouter();
@@ -333,8 +335,20 @@ function cancelImport() {
   importOpen.value = false;
 }
 
-function open(host: HostEntry) {
-  router.push({ name: 'term', params: { name: host.name } });
+async function open(host: HostEntry) {
+  // The shared connection store owns dialling now: it resolves the secret,
+  // runs the TOFU pin, fires bootstrap, and lands the workspace on the
+  // desktop's routes. A second click on a connected host re-enters.
+  if (
+    connection.state === 'connected' &&
+    connection.activeHost?.name === host.name &&
+    connection.connectionId
+  ) {
+    void router.push({ name: 'host-sessions', params: { name: host.name } });
+    return;
+  }
+  const ok = await connection.connect(host);
+  if (ok) void router.push({ name: 'host-sessions', params: { name: host.name } });
 }
 </script>
 

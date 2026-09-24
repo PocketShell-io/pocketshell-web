@@ -17,14 +17,14 @@ const ready = isConfigured();
 
 onMounted(async () => {
   if (auth.signedIn) {
-    router.replace({ name: 'hosts' });
+    router.replace({ name: 'app-hosts' });
     return;
   }
   if (!ready) return;
   try {
     await renderLoginButton(buttonEl.value!, (idToken) => {
       auth.signIn(idToken);
-      router.push({ name: 'hosts' });
+      router.push({ name: 'app-hosts' });
     });
     gsi.value = 'ready';
   } catch (e) {
