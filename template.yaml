@@ -42,6 +42,19 @@ Resources:
         - {Key: Environment, Value: sandbox}
         - {Key: ManagedBy, Value: cloudformation}
 
+  # Google Search Console domain verification (DNS TXT, pocketshell.io).
+  # Verify at https://search.google.com/search-console after deploy.sh
+  # applies this record.
+  GoogleSearchConsoleVerification:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref Zone
+      Name: pocketshell.io.
+      Type: TXT
+      TTL: 300
+      ResourceRecords:
+        - '"google-site-verification=f9ySYFL37PL0nr0hJbsO2PuLZysIyCgrWFU-eb9rhPc"'
+
   # ---- Static site ----------------------------------------------------
 
   SiteBucket:
