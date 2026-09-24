@@ -21,7 +21,7 @@ import { useHostsStore } from './hosts';
  * host's `a` is the source of truth: an ack re-runs the command, and the
  * refetched list (not the ack's exit status) decides what remains visible.
  */
-export const useWarningsStore = defineStore('warnings', {
+export const useWarningsStore = defineStore('host-warnings', {
   state: () => ({
     /** Host name → its unacknowledged warnings. A host absent from the map
      * has nothing to show; entries for hosts that left the list are pruned. */
