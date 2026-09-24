@@ -17,14 +17,16 @@ const ready = isConfigured();
 
 onMounted(async () => {
   if (auth.signedIn) {
-    router.replace({ name: 'app-hosts' });
+    router.replace({ name: 'hosts' });
     return;
   }
   if (!ready) return;
   try {
     await renderLoginButton(buttonEl.value!, (idToken) => {
       auth.signIn(idToken);
-      router.push({ name: 'app-hosts' });
+      // Sign-in lands on the home — the shared host picker — the same screen
+      // every back path returns to; host prep lives one hop away on /app.
+      router.push({ name: 'hosts' });
     });
     gsi.value = 'ready';
   } catch (e) {

@@ -6,7 +6,6 @@ import SessionPlaceholderView from '@ui/app/views/SessionPlaceholderView.vue';
 import SessionRedirectView from '@ui/app/views/SessionRedirectView.vue';
 import AccountView from '@ui/app/views/AccountView.vue';
 import { useAuthStore } from './stores/auth';
-import { useHostsStore } from './stores/hosts';
 
 /**
  * The DESKTOP's route map on the WEB's history. Three levels, each with a
@@ -50,10 +49,6 @@ const routes: RouteRecordRaw[] = [
   // import — the pieces the desktop does in ~/.ssh/config files. The shared
   // picker owns CONNECTING; this page owns preparing hosts for it.
   { path: '/app', name: 'app-hosts', component: () => import('./views/HostsView.vue') },
-  // The web's own host surface: sync unlock, host/key management, config
-  // import — the pieces the desktop does in ~/.ssh/config files. The shared
-  // picker owns CONNECTING; this page owns preparing hosts for it.
-  { path: '/app', name: 'app-hosts', component: () => import('./views/HostsView.vue') },
   { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ];
@@ -80,12 +75,11 @@ router.beforeEach((to) => {
   if (useAuthStore().signedIn && to.name === 'login') {
     return { name: 'hosts' };
   }
-  // The picker reads the synced host list, which is empty until the sync
-  // passphrase has unlocked it — so an unlocked-less visit to the picker
-  // lands on the unlock/manage surface first, exactly the old flow's shape.
-  if (to.name === 'hosts' && !useHostsStore().unlocked) {
-    return { name: 'app-hosts' };
-  }
+  // `/` is the home, unconditionally once signed in — the same picker the
+  // desktop opens on. A signed-in-but-locked account sees the picker's
+  // locked note and reaches the unlock through Account & sync; bouncing to
+  // the manage surface instead made the app open on a different screen than
+  // every back path returns to.
   return true;
 });
 
