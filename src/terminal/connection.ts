@@ -209,8 +209,15 @@ export class SshConnection {
    * One exec channel, collected. Never rejects — a transport failure comes
    * back as `error` with a null exit code, so a caller can treat "the host
    * said no" and "the road was out" differently without try/except glue.
+   *
+   * [opts.stdin] is written to the channel and the stream ended — how
+   * `pocketshell env set` / `tree` receive their JSON payloads without
+   * putting values on a `ps`-readable command line.
    */
-  async exec(command: string, opts: { timeoutMs?: number } = {}): Promise<ExecOutcome> {
+  async exec(
+    command: string,
+    opts: { timeoutMs?: number; stdin?: string } = {},
+  ): Promise<ExecOutcome> {
     const conn = this.conn;
     if (conn === null || this.closedByUs) {
       return { exitCode: null, stdout: '', stderr: '', error: 'connection is not open' };
@@ -248,6 +255,10 @@ export class SshConnection {
           return;
         }
         stream = ch;
+        if (opts.stdin !== undefined) {
+          ch.write(opts.stdin);
+          ch.end();
+        }
         ch.on('data', (chunk: Buffer) => append('stdout', chunk));
         ch.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
         ch.on('exit', (code: number | null) => {

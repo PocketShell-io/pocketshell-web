@@ -61,6 +61,16 @@ export class AplexerClient {
     return this.core.snapshotRecords(sort);
   }
 
+  /** The live record holding [workspace]+[tag], or null. */
+  async findSession(workspace: string, tag: string): Promise<AplexerSessionRecord | null> {
+    return this.core.findSession(workspace, tag);
+  }
+
+  /** Live tags in one workspace, or null when `a` is absent. */
+  async liveTags(workspace: string): Promise<Set<string> | null> {
+    return this.core.liveTags(workspace);
+  }
+
   /** Start a shell session for [workspace] under [tag]. Never throws. */
   async startSession(opts: { workspace: string; tag: string }): Promise<AplexerStartOutcome> {
     return this.core.startSession(opts);
