@@ -26,7 +26,7 @@
  */
 import type { PocketShellApi, Unsubscribe } from '@ui/app/api';
 import type { ConnectionState } from '@pocketshell/core';
-import type { CloneProgress, HostEntry, UpdateCheckResult } from '@pocketshell/core';
+import type { CloneProgress, HostEntry } from '@pocketshell/core';
 import { vscodeRemoteFolderUrl } from '@pocketshell/core/shared/vscodeDeepLink';
 import { SshConnection } from '../terminal/connection';
 import { useAuthStore } from '../stores/auth';
@@ -376,17 +376,6 @@ export const webApi: PocketShellApi = {
     // REAL — no desktop log file on the web; the console is the sink.
     log(entry) {
       console.info(`[pocketshell] ${entry.kind}: ${entry.message}`, entry.detail ?? '');
-    },
-  },
-
-  update: {
-    // The web app is its own deployment: a reload IS the update path, so the
-    // honest answer is "you are running the current build".
-    async check(): Promise<UpdateCheckResult> {
-      return { status: 'up-to-date', currentVersion: 'web' };
-    },
-    async open(url) {
-      window.open(url, '_blank', 'noopener');
     },
   },
 
