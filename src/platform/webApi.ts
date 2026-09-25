@@ -27,7 +27,6 @@
 import type { PocketShellApi, Unsubscribe } from '@ui/app/api';
 import type { ConnectionState } from '@pocketshell/core';
 import type { CloneProgress, HostEntry } from '@pocketshell/core';
-import { vscodeRemoteFolderUrl } from '@pocketshell/core/shared/vscodeDeepLink';
 import { SshConnection } from '../terminal/connection';
 import { useAuthStore } from '../stores/auth';
 import { useSyncStore } from '@ui/app/stores/sync';
@@ -364,8 +363,15 @@ export const webApi: PocketShellApi = {
     deleteFile: (connectionId, path) => servicesOf(connectionId).sftp.deleteFile(connectionId, path),
     rmdir: (connectionId, path) => servicesOf(connectionId).sftp.rmdir(connectionId, path),
     realPath: (connectionId, path) => servicesOf(connectionId).sftp.realPath(connectionId, path),
-    upload: (payload) => servicesOf(payload.connectionId).sftp.upload(),
-    download: (payload) => servicesOf(payload.connectionId).sftp.download(),
+    // The LOCAL-path transfer pair is desktop-filesystem shape (the desktop
+    // main reads the user's disk through native dialogs); the browser has no
+    // such paths, and the shared stores never call them — saveAs above is
+    // the download surface they drive, and the twin answers it for real.
+    // These two refuse with their own names, the forwards pattern:
+    // state-independent (no connection needed to learn the answer) and
+    // greppable, so nothing can pretend to move a file.
+    upload: () => Promise.reject(new UnsupportedCapability('sftp.upload')),
+    download: () => Promise.reject(new UnsupportedCapability('sftp.download')),
     saveAs: (payload) => servicesOf(payload.connectionId).sftp.saveAs(payload),
     onProgress: () => () => {},
   },
@@ -434,20 +440,11 @@ export const webApi: PocketShellApi = {
     },
   },
 
-  editors: {
-    // The OS-dispatched vscode:// URL, built by the shared builder — the
-    // browser hands the scheme to the user's machine the same way
-    // shell.openExternal does on the desktop.
-    async openVsCode(req) {
-      const url = vscodeRemoteFolderUrl(
-        typeof req.hostToken === 'string' ? req.hostToken : '',
-        typeof req.path === 'string' ? req.path : '',
-      );
-      if (!url) return false;
-      window.location.href = url;
-      return true;
-    },
-  },
+  // The editors group is deliberately absent: the vscode:// deep link's host
+  // token resolves against the user's LOCAL ~/.ssh/config (Remote-SSH reads
+  // it on the dispatched machine), which a browser cannot see or vouch for —
+  // a synced-only host would strand the user in a VS Code connect error this
+  // app cannot explain. The shared UI hides the action over the seam.
 
   win: {
     // REAL — the browser equivalent of the OS window title.

@@ -8,11 +8,12 @@
  * Errors with sentences, exactly what the shared files store catches.
  *
  * The transfer pair (`upload`/`download` with localPath) is a desktop-filesystem
- * shape the shared UI never calls — the browser has no local paths — so the
- * group implements the surfaces the shared stores actually drive: list,
- * stat, editor reads/writes, the tree's file/folder operations, realPath,
- * binary reads for the viewer, and saveAs, which on the web means a real
- * browser download of a remote file.
+ * shape the browser has no local paths for and the shared UI never calls, so
+ * this twin does not carry it at all — the seam refuses both by name
+ * (UnsupportedCapability in webApi.ts). The group implements the surfaces the
+ * shared stores actually drive: list, stat, editor reads/writes, the tree's
+ * file/folder operations, realPath, binary reads for the viewer, and saveAs,
+ * which on the web means a real browser download of a remote file.
  */
 import { Buffer } from 'node:buffer';
 import type { SFTPWrapper } from 'ssh2';
@@ -263,18 +264,6 @@ export class SftpService {
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
     return name;
-  }
-
-  // --- the desktop-local transfer surfaces the web does not have -----------
-  // `upload`/`download` take LOCAL paths (the desktop main reads the user's
-  // disk); the browser has no such paths and the shared stores never call
-  // them, so they refuse loudly rather than pretend.
-  async upload(): Promise<boolean> {
-    throw new Error('sftp.upload needs a local file path — not available in the browser');
-  }
-
-  async download(): Promise<boolean> {
-    throw new Error('sftp.download needs a local file path — not available in the browser');
   }
 
   onProgress(): () => void {
