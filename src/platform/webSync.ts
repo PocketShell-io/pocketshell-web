@@ -88,9 +88,14 @@ export class WebSync {
   }
 
   /** The session cache the host picker reads — null until this session has
-   * decrypted the account copy once (the desktop's contract verbatim). */
+   * decrypted the account copy once (the desktop's contract verbatim). On
+   * the web the hosts store pulls main DIRECTLY (the vault auto-unlock), so
+   * once it is unlocked its list IS the account's; reporting null then would
+   * keep the picker's "check the account" note up over a full host list. */
   async accountHostsList(): Promise<HostEntry[] | null> {
-    return this.accountHosts;
+    if (this.accountHosts !== null) return this.accountHosts;
+    const hosts = useHostsStore();
+    return hosts.unlocked ? hosts.hosts : null;
   }
 
   /**

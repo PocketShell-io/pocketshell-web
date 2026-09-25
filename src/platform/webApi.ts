@@ -30,6 +30,9 @@ import type { CloneProgress, HostEntry } from '@pocketshell/core';
 import { vscodeRemoteFolderUrl } from '@pocketshell/core/shared/vscodeDeepLink';
 import { SshConnection } from '../terminal/connection';
 import { useAuthStore } from '../stores/auth';
+import { useSyncStore } from '@ui/app/stores/sync';
+import { claimsOf } from '../auth/google';
+import { forgetPassphrase, recallPassphrase } from '../shared/passphraseVault';
 import { useHostPinsStore } from '../stores/hostPins';
 import { useHostsStore } from '../stores/hosts';
 import { ShellService } from './shellService';
@@ -204,6 +207,45 @@ async function connectHost(payload: {
   return { ok: true, connectionId: id };
 }
 
+/**
+ * The silent vault unlock, memoized per account. The web's old home was the
+ * hosts screen, whose mount ran this — the shared picker became the home and
+ * nothing ran it any more, so a returning user's synced hosts (and the keys
+ * that dial them) never loaded. The host read is the moment the list is
+ * needed, so `listConfigHosts` awaits it. A vault miss resolves having done
+ * nothing; a stale passphrase is dropped exactly as the hosts screen drops
+ * it, and the picker's locked note takes over the guidance.
+ */
+let vaultUnlock: { sub: string; done: Promise<void> } | null = null;
+function ensureHostsUnlocked(): Promise<void> {
+  const auth = useAuthStore();
+  if (!auth.signedIn) return Promise.resolve();
+  const sub = claimsOf(auth.idToken).sub;
+  // A plain `vaultUnlock?.sub === sub` here reads true when BOTH are
+  // undefined — a token without a `sub` claim and no memo yet — and returns
+  // `.done` off null.
+  if (vaultUnlock !== null && vaultUnlock.sub === sub) return vaultUnlock.done;
+  const done = (async () => {
+    const hosts = useHostsStore();
+    if (hosts.unlocked) return;
+    const saved = await recallPassphrase(sub);
+    if (saved === null || saved === '') return;
+    hosts.passphraseRemembered = true;
+    try {
+      await hosts.unlock(saved);
+      // The unlock just made the account list readable, so re-seed the shared
+      // sync cache: a picker mounted while the unlock was in flight seeded it
+      // too early and would keep the locked note up over a full host list.
+      void useSyncStore().refreshStatus().catch(() => undefined);
+    } catch {
+      hosts.passphraseRemembered = false;
+      await forgetPassphrase(sub);
+    }
+  })().catch(() => undefined);
+  vaultUnlock = { sub, done };
+  return done;
+}
+
 export const webApi: PocketShellApi = {
   ssh: {
     async connect(payload) {
@@ -224,10 +266,23 @@ export const webApi: PocketShellApi = {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
     },
-    // REAL — the synced host list stands in for ~/.ssh/config on the web.
+    // REAL — the synced host list stands in for ~/.ssh/config on the web,
+    // and the read first runs the vault unlock, so a returning user's list
+    // (and its dialing keys) is actually there when the home picker mounts.
     async listConfigHosts() {
+      await ensureHostsUnlocked();
       return useHostsStore().hosts;
     },
+  },
+
+  // The browser has no config file to name: the picker's local group IS the
+  // synced account list, and an empty one routes to the web's add/import
+  // surface — which nothing else links to since the picker became the home.
+  hosts: {
+    groupLabel: 'From your account',
+    sourceName: 'your synced hosts',
+    emptyHint: 'No hosts here yet.',
+    emptyAction: { label: 'Add a host', route: '/app' },
   },
 
   shell: {
