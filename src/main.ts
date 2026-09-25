@@ -13,6 +13,7 @@ import './style.css';
 import { provideApi, api } from '@ui/app/ipc';
 import { recordDiagError } from '@ui/app/diag';
 import { webApi } from './platform/webApi';
+import { armNavGuard } from './platform/navGuard';
 import { useConnectionStore } from '@ui/app/stores/connection';
 
 provideApi(webApi);
@@ -39,6 +40,11 @@ app.use(pinia).use(router).mount('#app');
 // the store's liveness probe still answers a resumed tab that lost its
 // relay socket while the OS slept.
 api.app.onResumed(() => void useConnectionStore(pinia).onOsResume());
+
+// The one brake a browser tab has on its reserved chords (Ctrl+W) and its
+// close button: the generic leave dialog, asked only while a workspace is
+// open. The why lives in platform/navGuard.ts.
+armNavGuard(pinia);
 
 // The /fwd/ service worker + its page side. Runs whether or not the user is
 // signed in — requests are answered (with guidance) by the forwarder only
