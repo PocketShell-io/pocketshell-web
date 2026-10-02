@@ -24,9 +24,18 @@ a {
 }
 
 /* Buttons and button-looking links share one idiom, taken from the desktop's
-   .btn: surface-2 fill, strong border, translucent state-hover lift. */
-button,
-.button {
+   .btn: surface-2 fill, strong border, translucent state-hover lift.
+
+   Scoped to the legacy pages (sign-in, host prep), which are the only places
+   that wear it. As a bare `button` rule it leaked into the shared app tree:
+   the shared components' scoped styles redeclare fill, border and padding but
+   deliberately not border-radius (core ships none globally either), so the
+   radius rounded the workspace tab's 2px active underline into a smile and
+   the session row's 2px accent rail into an arc — the one visible web-vs-
+   desktop divergence this file could still produce. Scoped, the shared tree
+   renders from the shared stylesheet alone on both platforms. */
+main.page button,
+main.page .button {
   font: inherit;
   background: var(--surface-2);
   color: var(--fg);
@@ -40,36 +49,39 @@ button,
   text-decoration: none;
 }
 
-button:hover:not(:disabled),
-.button:hover:not(:disabled) {
+main.page button:hover:not(:disabled),
+main.page .button:hover:not(:disabled) {
   background: var(--state-hover);
 }
 
 /* The desktop's filled primary: accent fill with on-accent text (10.62:1).
    The round-7 #fff reprieve belonged to the old blue palette and retires
    with it. */
-button.primary,
-.button.primary {
+main.page button.primary,
+main.page .button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
   font-weight: var(--fw-semibold);
 }
 
-button:disabled,
-.button:disabled {
+main.page button:disabled,
+main.page .button:disabled {
   opacity: var(--disabled-opacity);
   cursor: default;
 }
 
-.button.large {
+main.page .button.large {
   padding: 12px 22px;
   font-size: 16px;
   font-weight: 600;
 }
 
-input,
-textarea {
+/* Same scoping as the button idiom above: the shared tree's fields (the tab
+   rename, the shared dialogs) style themselves and must not inherit this
+   radius and padding. */
+main.page input,
+main.page textarea {
   font: inherit;
   background: var(--bg);
   color: var(--fg);
