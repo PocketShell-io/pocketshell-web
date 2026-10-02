@@ -1,6 +1,6 @@
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
-import App from './App.vue';
+import AppRoot from '@ui/app/AppRoot.vue';
 import { router } from './router';
 import { startForwarder } from './forward/forwarder';
 import '@xterm/xterm/css/xterm.css';
@@ -18,7 +18,11 @@ import { useConnectionStore } from '@ui/app/stores/connection';
 
 provideApi(webApi);
 
-const app = createApp(App);
+// The shared app root (@ui/app/AppRoot.vue): theme and typography watchers,
+// the diagnostics and update strips, the router outlet, the app's Ctrl+W.
+// A browser tab has no window menu holding that chord, so the root claims it
+// everywhere; browser zoom belongs to the browser, so there is no zoom writer.
+const app = createApp(AppRoot);
 // The desktop's three nets under "an unhandled renderer error must be
 // visible", wired the same way: Vue's pipeline, unhandled rejections, and
 // window-level errors all land in the diag strip instead of a blank screen.
