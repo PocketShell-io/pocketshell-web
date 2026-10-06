@@ -28,6 +28,7 @@ import type { PocketShellApi, Unsubscribe } from '@ui/app/api';
 import type { ConnectionState } from '@pocketshell/core';
 import type { CloneProgress, HostEntry } from '@pocketshell/core';
 import { SshConnection } from '../terminal/connection';
+import { LinkSshConnection } from '../terminal/linkConnection';
 import { useAuthStore } from '../stores/auth';
 import { useSyncStore } from '@ui/app/stores/sync';
 import { claimsOf } from '../auth/google';
@@ -142,6 +143,17 @@ async function connectHost(payload: {
     return { ok: false, error: `No synced host for ${payload.user ? `${payload.user}@` : ''}${payload.host}:${wantedPort}` };
   }
   const secret = await store.getHostSecret(entry.name);
+  if (entry.link) {
+    // A link host (no inbound SSH) needs exactly one secret: the shared
+    // relay token, stored in the vault's password slot.
+    if (!secret || (secret.password ?? '') === '') {
+      return {
+        ok: false,
+        error: 'No relay token attached for this link host yet — attach it as the host password and unlock again.',
+      };
+    }
+    return connectViaLink(entry, secret.password!);
+  }
   if (!secret || ((secret.privateKeyPem ?? '') === '' && (secret.password ?? '') === '')) {
     return {
       ok: false,
@@ -180,8 +192,18 @@ async function connectHost(payload: {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  const id = `conn-${nextConnectionId++}`;
+  const id = registerConnectionBundle(conn);
   connectionIdRef = id;
+  emitState(id, 'connected');
+  return { ok: true, connectionId: id };
+}
+
+/** One services bundle per connection id — the shared body of the SSH and
+ * link dials (the desktop main gives its services the same lifetime). The
+ * conn is typed as SshConnection because every service rides its surface;
+ * the link connection is structurally identical by construction. */
+function registerConnectionBundle(conn: SshConnection): string {
+  const id = `conn-${nextConnectionId++}`;
   connections.set(id, conn);
   const sftp = new SftpService(conn);
   const bundle: ConnectionServices = {
@@ -202,6 +224,36 @@ async function connectHost(payload: {
   bundle.shell.onExited(({ shellId, exitCode }) => {
     for (const handler of shellExitListeners) handler({ shellId, exitCode });
   });
+  return id;
+}
+
+/** The link dial: no SSH handshake, no key — the relay token is the whole
+ * secret. Everything downstream (sessions, attach, tree, usage) execs the
+ * same commands over the relayed channels. */
+async function connectViaLink(
+  entry: HostEntry,
+  linkToken: string,
+): Promise<{ ok: true; connectionId: string } | { ok: false; error: string }> {
+  const link = entry.link;
+  if (!link) return { ok: false, error: `Host ${entry.name} has no link configuration.` };
+  const conn = new LinkSshConnection();
+  let connectionIdRef: string | null = null;
+  try {
+    await conn.connect({
+      link,
+      linkToken,
+      onClosed: () => {
+        const id = connectionIdRef;
+        if (id === null) return;
+        evictConnection(id);
+        emitState(id, 'lost');
+      },
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  const id = registerConnectionBundle(conn as unknown as SshConnection);
+  connectionIdRef = id;
   emitState(id, 'connected');
   return { ok: true, connectionId: id };
 }

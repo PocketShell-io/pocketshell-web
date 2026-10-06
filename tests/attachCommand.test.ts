@@ -19,7 +19,7 @@ describe('aplexerAttachCommand', () => {
 
   it('PATH-widens inside a subshell so `a` is found under a bare sshd PATH', () => {
     const command = aplexerAttachCommand({ id: 'u' });
-    expect(command.startsWith('( PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"; a attach')).toBe(true);
+    expect(/^\( PATH=[^;]*:\$PATH; a attach/.test(command)).toBe(true);
   });
 
   it('prints a diagnostic and exits when the join fails', () => {

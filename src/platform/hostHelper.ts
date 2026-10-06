@@ -14,7 +14,7 @@
  * does.
  */
 import type { AplexerWarning, BootstrapResult, ExecResult, SessionSummary, ToolState, UsageRow } from '@pocketshell/core';
-import { pathAwareCommand } from '@pocketshell/core';
+import { detectHostPlatform, pathAwareCommand } from '@pocketshell/core';
 import {
   firstNonEmptyLine,
   parseCommandV,
@@ -76,7 +76,8 @@ function systemdUserCommand(command: string): string {
 export async function runBootstrap(
   exec: (command: string) => Promise<ExecResult>,
 ): Promise<BootstrapResult> {
-  const [pocketshell, tmuxctl, tmux, aplexer, installer] = await Promise.all([
+  const [platform, pocketshell, tmuxctl, tmux, aplexer, installer] = await Promise.all([
+    detectHostPlatform(exec),
     probeTool(exec, 'pocketshell'),
     probeTool(exec, 'tmuxctl'),
     probeTool(exec, 'tmux'),
@@ -100,7 +101,7 @@ export async function runBootstrap(
     }
   }
 
-  return { pocketshell, tmuxctl, tmux, aplexer, installer, daemonRunning, daemonEnabled };
+  return { platform, pocketshell, tmuxctl, tmux, aplexer, installer, daemonRunning, daemonEnabled };
 }
 
 const TMUX_FALLBACK_LIST_COMMAND =
