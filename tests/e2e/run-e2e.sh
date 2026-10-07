@@ -17,13 +17,18 @@
 # Every wire surface the browser touches is custody-scanned — HTTP requests
 # through ONE captured-HTTP policy (the structured exact-surface URL rules
 # pinning scheme/host/effective port/path/query for the direct relay, gateway,
-# sync and broker fixtures; the method + exact-Bearer Authorization rule on
-# the account surfaces; a full secret-set scan of every header value and
-# body), the direct-relay and gateway WebSocket dial URLs through the same
+# sync and broker fixtures, scanning RAW and DECODED URL components and every
+# decoded query name/value; the method + exact-Bearer Authorization rule on
+# the account surfaces; a full secret-set scan of every COMPLETE captured
+# header value and body — all_headers + the duplicate-preserving headers_array,
+# since the request.headers property omits security/cookie headers, every
+# capture awaited before the verdict, a second Authorization entry refused),
+# the direct-relay and gateway WebSocket dial URLs through the same
 # URL policy, and EVERY recorded relay/gateway frame (binary AND text, the
 # gateway's first/auth TEXT frame included) — with offline negative controls
-# proving the oracle, the recorder, the URL policy, the captured-HTTP policy
-# and the credential-safe failure diagnostics bite.
+# proving the oracle, the recorder, the URL policy, the captured-HTTP policy,
+# the complete-header capture path and the credential-safe failure diagnostics
+# (broker handler and live method/where construction included) bite.
 #
 # Usage: tests/e2e/run-e2e.sh
 # Requires: docker, /usr/bin/python3 with playwright + cryptography,

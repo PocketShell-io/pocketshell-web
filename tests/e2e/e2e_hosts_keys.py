@@ -68,7 +68,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from playwright.async_api import async_playwright
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, quote_plus, unquote, unquote_plus, urlsplit
 
 BASE = sys.argv[1].rstrip('/')
 WORK = sys.argv[2]
@@ -288,9 +288,11 @@ def effective_port(parts) -> int | None:
 
 def _scrub(text: str) -> str:
     """A mention-safe rendering of an untrusted fragment: anything carrying
-    credential material becomes <redacted>."""
+    credential material — raw OR in its single-pass decoded form (a
+    reversibly percent/+-encoded secret is not redacted) — becomes
+    <redacted>."""
     for secret, _ in SECRET_LABELS:
-        if secret in text:
+        if secret in text or secret in unquote_plus(text):
             return '<redacted>'
     return text
 
@@ -330,6 +332,19 @@ def describe_authorization(authz: str) -> str:
     if authz.strip() == '':
         return 'empty'
     return f'an unexpected shape (length {len(authz)})'
+
+
+KNOWN_HTTP_METHODS = ('GET', 'PUT', 'POST', 'DELETE', 'HEAD', 'OPTIONS')
+
+
+def describe_method(method: str) -> str:
+    """A safe rendering of an untrusted method: the enum label for the
+    methods the live builders send, shape/length only for anything else —
+    a canary-bearing method is never echoed into a diagnostic (the policy's
+    messages AND the live loop's `where` prefix go through this)."""
+    if method in KNOWN_HTTP_METHODS:
+        return method
+    return f'an unexpected method (length {len(method)})'
 
 
 def _parse_url(url: str, where: str):
@@ -372,9 +387,12 @@ def _assert_exact_origin(parts, url: str, where: str, *, scheme: str, host: str,
 def _assert_direct_relay_query(parts, url: str, where: str) -> None:
     """The legacy exception's exact query shape: the documented dial fields
     (host, port, token), each exactly once, the sign-in as the value of the
-    ONE token field — and the sign-in must appear EXACTLY once in the whole
-    URL (no duplicate copy in another param, the path, fragment or
-    userinfo)."""
+    ONE token field (equality-pinned — no other secret can sit there, and
+    no declared secret is a substring of the sign-in). The exactly-once
+    proof for every OTHER placement — raw and DECODED: any other field's
+    name or value, the path, userinfo, fragment, host — is the decoded
+    component scan in assert_url_custody; a raw whole-URL occurrence count
+    cannot see an encoded second copy."""
     pairs = parse_qsl(parts.query, keep_blank_values=True)
     keys = [k for k, _ in pairs]
     expected = list(DIRECT_RELAY_DIAL['query_keys'])
@@ -388,9 +406,42 @@ def _assert_direct_relay_query(parts, url: str, where: str) -> None:
     assert fields['token'] == GOOGLE_TOKEN, (
         f'{where}: the relay token field is not the exact sign-in ({safe_url(url)})'
     )
-    assert url.count(GOOGLE_TOKEN) == 1, (
-        f'{where}: the sign-in must appear exactly once — as the token field ({safe_url(url)})'
-    )
+
+
+def _url_scan_material(parts, url: str, direct: bool) -> list:
+    """Every string the URL custody scan must inspect: the RAW serialized
+    URL plus each DECODED component the URI parser actually exposes — host,
+    userinfo user/password, path, the whole query string (single-pass
+    percent-decode) and each DECODED query name/value (the form semantics
+    parse_qsl/URLSearchParams implement: `+` for space plus percent
+    escapes) — and the fragment. Yields (what, text, google_allowed):
+    google_allowed marks the only entries the direct relay's ONE sign-in
+    copy necessarily rides (the raw serialization and the query string
+    contain the token field's equality-pinned value; the token VALUE entry
+    itself is equality-asserted, and no other declared secret is a substring
+    of the sign-in, so it needs no scan). Every OTHER entry — every decoded
+    field value included — is scanned against the FULL secret set, so an
+    encoded second copy in `host`, a path, userinfo or a fragment cannot
+    hide. Single-pass decoding only, exactly what the actual parser exposes:
+    no invented nested-decode guarantee."""
+    material = [
+        ('the raw URL', url, direct),
+        ('the host', unquote(parts.hostname or ''), False),
+    ]
+    if parts.username is not None:
+        material.append(('userinfo user', unquote(parts.username), False))
+    if parts.password is not None:
+        material.append(('userinfo password', unquote(parts.password), False))
+    material.append(('the path', unquote(parts.path), False))
+    if parts.query:
+        material.append(('the query string', unquote(parts.query), direct))
+        for i, (name, value) in enumerate(parse_qsl(parts.query, keep_blank_values=True), 1):
+            label = _scrub(name) or '<unnamed>'
+            material.append((f'the value of query field {i} ({label})', value, direct and name == 'token'))
+            material.append((f'the name of query field {i} ({label})', name, False))
+    if parts.fragment:
+        material.append(('the fragment', unquote(parts.fragment), False))
+    return material
 
 
 def assert_url_custody(url: str, where: str) -> None:
@@ -404,10 +455,12 @@ def assert_url_custody(url: str, where: str) -> None:
       - the ONLY credential placement on any URL is the Google sign-in as
         the ONE `token` field of the legacy direct relay's dial query;
       - everywhere else, no credential/canary may appear in ANY part of the
-        URL — path, query, fragment, userinfo or host."""
+        URL — raw or DECODED: path, query names/values, fragment, userinfo
+        or host (a +- or percent-encoded secret is still a secret)."""
     parts = _parse_url(url, where)
     host = (parts.hostname or '').lower()
-    if host == DIRECT_RELAY_DIAL['host']:
+    direct = host == DIRECT_RELAY_DIAL['host']
+    if direct:
         _assert_exact_origin(
             parts, url, where,
             scheme=DIRECT_RELAY_DIAL['scheme'], host=DIRECT_RELAY_DIAL['host'],
@@ -435,18 +488,20 @@ def assert_url_custody(url: str, where: str) -> None:
             f'{where}: {host} path is not a supported account path '
             f'(supported: {", ".join(supported)}; {safe_url(url)})'
         )
-    for secret, label in SECRET_LABELS:
-        if secret == GOOGLE_TOKEN and host == DIRECT_RELAY_DIAL['host']:
-            continue  # exactly-once-as-the-token-field asserted by the rule above
-        assert secret not in url, f'{where}: {label} rode the URL ({safe_url(url)})'
+    for what, text, google_allowed in _url_scan_material(parts, url, direct):
+        for secret, label in SECRET_LABELS:
+            if secret == GOOGLE_TOKEN and google_allowed:
+                continue  # the direct relay's ONE token-field copy (rule above)
+            assert secret not in text, f'{where}: {label} rode {what} ({safe_url(url)})'
 
 
-def assert_http_request_custody(method: str, url: str, headers: dict, body: str, where: str) -> None:
+def assert_http_request_custody(method: str, url: str, headers: dict, body: str, where: str,
+                                header_entries: list | None = None) -> None:
     """The captured-HTTP policy — the ONE policy the live recorded-request
     loop and the negative controls both run through, for EVERY captured HTTP
     request (method, URL, headers, body):
       - the URL through assert_url_custody (exact surface rules + the one
-        legacy relay exception);
+        legacy relay exception, raw AND decoded components);
       - a request TO an account surface (exact origin AND path) must be an
         allowed method and carry the sign-in as the EXACT
         `Authorization: Bearer <sign-in>` — nothing else in that header;
@@ -454,18 +509,30 @@ def assert_http_request_custody(method: str, url: str, headers: dict, body: str,
         every request, and the Authorization header of non-account requests
         is scanned against the full set too (only the exact account bearer
         is exempt — pinned by equality, so nothing can hide beside it);
+      - header_entries, when the capture supplies the duplicate-preserving
+        array (`headers_array`), are scanned exactly like dict headers, and
+        a SECOND Authorization entry is refused — the exact-Bearer exception
+        must not broaden to an unchecked second occurrence;
       - the body is scanned against the full secret set. The sync PUT
         envelopes stay ciphertext (shape-checked and decrypted in the live
-        section) — no plaintext exception exists here."""
+        section) — no plaintext exception exists here.
+    Untrusted method strings reach diagnostics only through describe_method;
+    URLs only through safe_url."""
     assert_url_custody(url, where)
     parts = _parse_url(url, where)
     host = (parts.hostname or '').lower()
     surface = next(((h, p, methods) for h, p, methods in ACCOUNT_HTTP_SURFACES if h == host and p == parts.path), None)
     authz = next((v for k, v in headers.items() if k.lower() == 'authorization'), '')
+    if header_entries is not None:
+        authz_entry_values = [v for k, v in header_entries if k.lower() == 'authorization']
+        assert len(authz_entry_values) <= 1, (
+            f'{where}: {len(authz_entry_values)} Authorization header entries — the exact Bearer must be '
+            f'the ONE Authorization header ({safe_url(url)})'
+        )
     if surface is not None:
         surface_host, surface_path, methods = surface
         assert method in methods, (
-            f'{where}: {method} is not a supported method for {surface_host} {surface_path} '
+            f'{where}: {describe_method(method)} is not a supported method for {surface_host} {surface_path} '
             f'(allowed: {", ".join(methods)}; {safe_url(url)})'
         )
         assert authz == f'Bearer {GOOGLE_TOKEN}', (
@@ -476,7 +543,7 @@ def assert_http_request_custody(method: str, url: str, headers: dict, body: str,
         assert GOOGLE_TOKEN not in authz, (
             f'{where}: the Google sign-in rode the Authorization header of a non-account request ({safe_url(url)})'
         )
-    for key, value in headers.items():
+    for key, value in list(headers.items()) + list(header_entries or []):
         if surface is not None and key.lower() == 'authorization':
             continue  # pinned to the EXACT bearer by the equality above
         name = _scrub(key)
@@ -514,14 +581,24 @@ def url_custody_negative_control() -> None:
     in their query) PLUS the exactness shapes — wrong scheme/port/path on the
     direct exception and the account surfaces, duplicate token placements
     (fragment, userinfo, a second field, an unexpected param), a missing
-    token field, and a canary on the legacy relay. The documented positives —
-    the exact relay dial (any field order, explicit default port), every
+    token field, and a canary on the legacy relay — PLUS the encoded
+    placements the raw-URL scan cannot see: +-encoded (URLSearchParams form
+    semantics) and percent-encoded secrets in decoded field values, path,
+    userinfo and fragment. The documented positives — the exact relay dial
+    (any field order, explicit default port, honest encoding), every
     supported account path, and the clean gateway dial — must PASS."""
+    rejected: list[str] = []
+    honored: list[str] = []
+
     def fails(url: str, what: str) -> None:
+        rejected.append(what)
         _must_reject(what, lambda: assert_url_custody(url, 'negative-control'))
 
     def passes(url: str, what: str) -> None:
+        honored.append(what)
         _must_accept(what, lambda: assert_url_custody(url, 'negative-control'))
+
+    enc_first = '%' + GOOGLE_TOKEN[0].encode().hex() + GOOGLE_TOKEN[1:]
 
     relay_q = 'host=127.0.0.1&port=22&token='
     # attacker shapes around the account hostnames (frozen counterexamples)
@@ -559,6 +636,22 @@ def url_custody_negative_control() -> None:
           'a relay dial without the token field')
     fails(f'wss://direct.e2e.test/leak/{GOOGLE_TOKEN}?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}',
           'the sign-in in the relay dial path')
+    # encoded placements are NOT hiding places: the decoded components and
+    # every decoded query name/value are scanned (U1)
+    fails(f'wss://direct.e2e.test/pipe?host={quote_plus("BEGIN OPENSSH PRIVATE KEY zz")}&port=22&token={GOOGLE_TOKEN}',
+          'a +-encoded private-key marker in the relay host field')
+    fails(f'wss://direct.e2e.test/pipe?host={enc_first}&port=22&token={GOOGLE_TOKEN}',
+          'a percent-encoded SECOND sign-in in the relay host field')
+    fails(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}&c={enc_first}',
+          'a percent-encoded second sign-in in an extra relay field')
+    fails(f'https://attacker.e2e.test/x?c={quote_plus("BEGIN OPENSSH PRIVATE KEY zz")}',
+          'a +-encoded private-key marker in an attacker query')
+    fails(f'https://attacker.e2e.test/leak/{enc_first}',
+          'a percent-encoded sign-in in an attacker path')
+    fails(f'https://e2e:{enc_first}@attacker.e2e.test/',
+          'a percent-encoded sign-in in attacker userinfo')
+    fails(f'https://attacker.e2e.test/x#t={enc_first}',
+          'a percent-encoded sign-in in an attacker fragment')
     # the account surfaces are EXACT too: scheme, effective port, path, no query
     fails('http://sync.e2e.test/me', 'a plain-http scheme on a sync surface')
     fails('https://sync.e2e.test:444/me', 'an effective port other than 443 on a sync surface')
@@ -578,12 +671,17 @@ def url_custody_negative_control() -> None:
            'the relay dial with its fields in any order')
     passes(f'wss://direct.e2e.test:443/pipe?{relay_q}{GOOGLE_TOKEN}',
            'the relay dial on the explicit default port')
+    passes(f'wss://direct.e2e.test/pipe?host=127%2E0%2E0%2E1&port=22&token={GOOGLE_TOKEN}',
+           'an honestly percent-encoded relay host field (decodes to the same host)')
+    passes(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=%32%32&token={GOOGLE_TOKEN}',
+           'an honestly percent-encoded relay port field')
     passes('https://sync.e2e.test/me', 'a clean sync /me URL')
     passes('https://sync.e2e.test/settings', 'a clean sync /settings URL')
     passes('https://sync.e2e.test/settings/main', 'a clean account URL')
     passes('https://sync.e2e.test/settings/keys', 'a clean keys-slot URL')
     passes('https://gateway-broker.e2e.test/gateway/token', 'a clean broker URL')
     passes('wss://gateway.e2e.test/api/v1/hosts/dev-e2e/ssh', 'a clean gateway URL')
+    print(f'url custody control: {len(rejected)} rejects + {len(honored)} exact honest positives')
 
 
 def http_custody_negative_control() -> None:
@@ -591,22 +689,34 @@ def http_custody_negative_control() -> None:
     must refuse — method/scheme/port/path mismatches, wrong or missing
     Authorization, the sign-in outside the account surfaces, EVERY
     non-Google secret in the Authorization header and in ordinary headers
-    (on attacker origins AND on the account surfaces), and secrets in
-    bodies — plus the documented honest surface of every live request
-    builder, which must PASS."""
+    (on attacker origins AND on the account surfaces), secrets in bodies,
+    the +- / percent-encoded URL placements the raw scan cannot see, and a
+    second Authorization header entry beside the exact Bearer — plus the
+    documented honest surface of every live request builder (including one
+    carried by a duplicate-preserving header array), which must PASS."""
     bearer = f'Bearer {GOOGLE_TOKEN}'
+    rejected: list[str] = []
+    honored: list[str] = []
 
-    def fails(what: str, method: str, url: str, headers: dict, body: str = '') -> None:
-        _must_reject(what, lambda: assert_http_request_custody(method, url, headers, body, 'negative-control'))
+    def fails(what: str, method: str, url: str, headers: dict, body: str = '', entries: list | None = None) -> None:
+        rejected.append(what)
+        _must_reject(what, lambda: assert_http_request_custody(method, url, headers, body, 'negative-control',
+                                                               header_entries=entries))
 
-    def passes(what: str, method: str, url: str, headers: dict, body: str = '') -> None:
-        _must_accept(what, lambda: assert_http_request_custody(method, url, headers, body, 'negative-control'))
+    def passes(what: str, method: str, url: str, headers: dict, body: str = '', entries: list | None = None) -> None:
+        honored.append(what)
+        _must_accept(what, lambda: assert_http_request_custody(method, url, headers, body, 'negative-control',
+                                                               header_entries=entries))
 
     def bearer_headers(**extra):
         return {'authorization': bearer, **extra}
 
+    enc_first = '%' + GOOGLE_TOKEN[0].encode().hex() + GOOGLE_TOKEN[1:]
+
     # --- the documented honest surfaces (the live code's exact calls) -----
     passes('GET /me with the exact Bearer', 'GET', 'https://sync.e2e.test/me', bearer_headers(accept='application/json'))
+    passes('GET /me with the exact Bearer (duplicate-preserving array)', 'GET', 'https://sync.e2e.test/me',
+           bearer_headers(), entries=[('Authorization', bearer), ('accept', 'application/json')])
     passes('GET /settings/main with the exact Bearer', 'GET', 'https://sync.e2e.test/settings/main', bearer_headers())
     passes('PUT /settings/main envelope', 'PUT', 'https://sync.e2e.test/settings/main',
            bearer_headers(**{'content-type': 'application/json'}), '{"data":"<envelope>","version":1}')
@@ -646,14 +756,45 @@ def http_custody_negative_control() -> None:
     fails('the sign-in in a request body', 'POST', 'https://attacker.e2e.test/x', {}, f'token={GOOGLE_TOKEN}')
     fails('the key passphrase in a sync PUT body', 'PUT', 'https://sync.e2e.test/settings/main',
           bearer_headers(**{'content-type': 'application/json'}), f'{{"data":"{KEY_PASSPHRASE}"}}')
+    # --- encoded URL placements (U1) through the SAME policy ---------------
+    fails('a +-encoded private-key marker in an attacker query', 'GET',
+          f'https://attacker.e2e.test/x?c={quote_plus("BEGIN OPENSSH PRIVATE KEY zz")}', {})
+    fails('a percent-encoded sign-in in an attacker query value', 'GET',
+          f'https://attacker.e2e.test/x?c={enc_first}', {})
+    fails('a percent-encoded sign-in in an attacker path', 'GET',
+          f'https://attacker.e2e.test/leak/{enc_first}', {})
+    fails('a percent-encoded sign-in in attacker userinfo', 'GET',
+          f'https://e2e:{enc_first}@attacker.e2e.test/', {})
+    fails('a percent-encoded sign-in in an attacker fragment', 'GET',
+          f'https://attacker.e2e.test/x#t={enc_first}', {})
+    fails('a +-encoded private-key marker on the relay dial through the HTTP policy', 'GET',
+          f'wss://direct.e2e.test/pipe?host={quote_plus("BEGIN OPENSSH PRIVATE KEY zz")}&port=22&token={GOOGLE_TOKEN}',
+          {})
+    # --- duplicate Authorization entries in the capture array ---------------
+    fails('a second Authorization entry beside the exact Bearer', 'GET',
+          'https://sync.e2e.test/me', bearer_headers(),
+          entries=[('authorization', bearer), ('Authorization', f'Bearer {CANARY}')])
+    fails('a duplicated Authorization entry on a non-account origin', 'GET',
+          'https://attacker.e2e.test/x', {},
+          entries=[('authorization', f'Bearer {GOOGLE_TOKEN}'), ('authorization', 'x')])
+    print(f'captured-HTTP control: {len(rejected)} rejects + {len(honored)} documented honest surfaces')
 
 
-def diagnostics_negative_control() -> None:
-    """The failure DIAGNOSTICS must never repeat the rejected credential:
-    feed the policies inputs poisoned in every placement (path, userinfo,
-    fragment, query value, query NAME, host, Authorization) and scan the
-    raised messages — and the safe_url/describe_authorization renderings —
-    for EVERY declared secret."""
+async def diagnostics_negative_control() -> None:
+    """The failure DIAGNOSTICS must never repeat the rejected credential —
+    raw OR in its reversible encoded forms: feed the policies inputs
+    poisoned in every placement (path, userinfo, fragment, query value,
+    query NAME, host, Authorization — +-encoded and percent-encoded
+    included) and scan the raised messages — and the
+    safe_url/describe_authorization/describe_method renderings — for EVERY
+    declared secret (and the +-encoded marker form). The ACTUAL broker
+    handler and the ACTUAL live caller-context construction are driven too:
+    a rejected broker URL / unsupported method must surface with safe
+    diagnostics (the frozen faf4ac9 handler echoed the whole token-bearing
+    URL; the method rule and the live `where` prefix echoed a canary-bearing
+    method)."""
+    enc_first = '%' + GOOGLE_TOKEN[0].encode().hex() + GOOGLE_TOKEN[1:]
+    probes = tuple(s for s, _ in SECRET_LABELS) + ('BEGIN+OPENSSH+PRIVATE+KEY',)
     poisons = [
         f'https://attacker.e2e.test/leak/{GOOGLE_TOKEN}?x={CANARY}',
         f'https://e2e:{GOOGLE_TOKEN}@attacker.e2e.test/',
@@ -661,24 +802,33 @@ def diagnostics_negative_control() -> None:
         f'https://attacker.e2e.test/?{KEY_PASSPHRASE}=1',
         f'https://{GOOGLE_TOKEN}.attacker.io/',
         f'wss://e2e:{GOOGLE_TOKEN}@direct.e2e.test/leak/{CANARY}#{KEY_PASSPHRASE}',
+        f'https://attacker.e2e.test/x?c={quote_plus("BEGIN OPENSSH PRIVATE KEY zz")}',
+        f'https://attacker.e2e.test/leak/{enc_first}',
+        f'https://e2e:{enc_first}@attacker.e2e.test/',
+        f'https://attacker.e2e.test/?{enc_first}=1',
+        f'wss://direct.e2e.test/pipe?host={enc_first}&port=22&token={GOOGLE_TOKEN}',
     ]
     for url in poisons:
         rendered = safe_url(url)
-        for secret, label in SECRET_LABELS:
-            assert secret not in rendered, f'safe_url echoed {label} for a poisoned URL'
+        for probe in probes:
+            assert probe not in rendered, f'safe_url echoed a secret placement for a poisoned URL'
         threw = False
         try:
             assert_url_custody(url, 'diagnostics-probe')
         except AssertionError as exc:
             threw = True
             message = str(exc)
-            for secret, label in SECRET_LABELS:
-                assert secret not in message, f'the URL-policy failure message echoed {label}'
+            for probe in probes:
+                assert probe not in message, f'the URL-policy failure message echoed a secret placement'
         assert threw, 'the URL policy accepted a poisoned URL (diagnostics probe could not run)'
     for authz in (f'Bearer {CANARY}', f'Bearer {GOOGLE_TOKEN} extra {KEY_PASSPHRASE}', CANARY, f'token={GOOGLE_TOKEN}'):
         rendered = describe_authorization(authz)
         for secret, label in SECRET_LABELS:
             assert secret not in rendered, f'describe_authorization echoed {label}'
+    for method in ('GET-' + CANARY, CANARY, f'GET {CANARY}'):
+        rendered = describe_method(method)
+        assert CANARY not in rendered, 'describe_method echoed the canary-bearing method'
+        assert rendered in KNOWN_HTTP_METHODS or 'length' in rendered, rendered
     poisoned_requests = [
         ('GET', f'https://sync.e2e.test/me?x={GOOGLE_TOKEN}', {}, ''),
         ('GET', f'https://sync.e2e.test/leak/{KEY_PASSPHRASE}', {}, ''),
@@ -686,17 +836,194 @@ def diagnostics_negative_control() -> None:
         ('GET', 'https://attacker.e2e.test/x', {f'x-{CANARY}': KEY_PASSPHRASE}, ''),
         ('PUT', 'https://sync.e2e.test/settings/main', {'authorization': f'Bearer {GOOGLE_TOKEN}'}, CANARY),
         ('GET', f'wss://direct.e2e.test/wrong?token={GOOGLE_TOKEN}#{GOOGLE_TOKEN}', {}, ''),
+        ('GET-' + CANARY, 'https://sync.e2e.test/me', {'authorization': f'Bearer {GOOGLE_TOKEN}'}, ''),
+        ('GET', 'https://attacker.e2e.test/x', {}, f'body {GOOGLE_TOKEN}'),
     ]
     for method, url, headers, body in poisoned_requests:
         threw = False
         try:
-            assert_http_request_custody(method, url, headers, body, 'diagnostics-probe')
+            assert_http_request_custody(method, url, headers, body, f'HTTP {describe_method(method)}')
         except AssertionError as exc:
             threw = True
             message = str(exc)
-            for secret, label in SECRET_LABELS:
-                assert secret not in message, f'the captured-HTTP failure message echoed {label}'
+            for probe in probes:
+                assert probe not in message, 'the captured-HTTP failure message echoed a secret placement'
         assert threw, 'the captured-HTTP policy accepted a poisoned request (diagnostics probe could not run)'
+    # the ACTUAL broker handler: a rejected URL surfaces WITHOUT echoing the
+    # token (the handler's own assertions are the raise path), and the
+    # honest exchange still fulfills with the scoped token.
+    fulfilled: dict = {}
+
+    class _BrokerReq:
+        method = 'POST'
+        url = f'https://gateway-broker.e2e.test/gateway/token?c={GOOGLE_TOKEN}'
+        post_data = ''
+
+        async def header_value(self, name):
+            return f'Bearer {GOOGLE_TOKEN}'
+
+    class _HonestReq:
+        method = 'POST'
+        url = 'https://gateway-broker.e2e.test/gateway/token'
+        post_data = ''
+
+        async def header_value(self, name):
+            return f'Bearer {GOOGLE_TOKEN}'
+
+    class _BrokerRoute:
+        def __init__(self, req):
+            self.request = req
+
+        async def fulfill(self, **kw):
+            fulfilled.update(kw)
+
+    threw = False
+    try:
+        await handle_broker(_BrokerRoute(_BrokerReq()))
+    except AssertionError as exc:
+        threw = True
+        message = str(exc)
+        for probe in probes:
+            assert probe not in message, 'the broker handler echoed a secret placement'
+    assert threw, 'the broker handler accepted a token-bearing URL (diagnostics probe could not run)'
+    await handle_broker(_BrokerRoute(_HonestReq()))
+    assert json.loads(fulfilled['body'])['token'] == GW_TOKEN, 'the honest broker exchange did not fulfill'
+    print('diagnostics control: every rejection renders label-safe, the broker handler and the live '
+          'where= construction included')
+
+
+class _RequestShape:
+    """A request-shaped fixture for the offline capture controls: the OLD
+    `.headers` property view (documented incomplete — security/cookie-related
+    headers can be absent from it) is benign, while the COMPLETE async API —
+    `await all_headers()` (full merged map) and `await headers_array()`
+    (complete, duplicates preserved, original casing) — carries the real
+    material. Same shapes as the live Playwright Request object."""
+
+    def __init__(self, prop_headers: dict, full_headers: dict, entries: list | None = None,
+                 delay: float = 0.0, fail: bool = False):
+        self.method = 'GET'
+        self.url = 'https://attacker.e2e.test/x'
+        self.post_data = None
+        self._prop = prop_headers
+        self._full = full_headers
+        self._entries = entries
+        self._delay = delay
+        self._fail = fail
+
+    @property
+    def headers(self) -> dict:
+        return dict(self._prop)
+
+    async def all_headers(self) -> dict:
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._fail:
+            raise RuntimeError('the complete-header read failed (fixture)')
+        return dict(self._full)
+
+    async def headers_array(self) -> list:
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._fail:
+            raise RuntimeError('the complete-header read failed (fixture)')
+        return list(self._entries if self._entries is not None
+                    else [{'name': k, 'value': v} for k, v in self._full.items()])
+
+
+async def capture_request(req) -> dict:
+    """The ACTUAL capture path behind the page's 'request' event: the
+    COMPLETE header map — `req.headers` is the documented-incomplete
+    property view, so a secret riding a security/cookie header would be
+    invisible to it — plus the duplicate-preserving header array, both
+    AWAITED here. The returned record is the ONLY thing the custody verdict
+    scans; a capture that fails or never lands must fail the run through
+    gather_captures, never silently shrink the scan."""
+    full = await req.all_headers()
+    entries = await req.headers_array()
+    return {
+        'method': req.method,
+        'url': req.url,
+        'headers': dict(full),
+        'header_entries': [(e['name'], e['value']) for e in entries],
+        'body': req.post_data or '',
+    }
+
+
+async def gather_captures(tasks: list, timeout: float = 60.0) -> list:
+    """EVERY header capture must COMPLETE before the custody verdict or
+    browser teardown: the results are awaited (a slow complete-header read
+    is waited on, not skipped) and a failed read PROPAGATES — an unfinished
+    or failed capture can never green the run."""
+    results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout)
+    failed = [r for r in results if isinstance(r, BaseException)]
+    if failed:
+        raise failed[0]
+    return results
+
+
+async def capture_path_negative_control() -> None:
+    """The capture gap and its repair, through the ACTUAL capture function,
+    the ACTUAL gather and the ONE shared HTTP policy (no browser needed):
+      - the old property view is benign while the complete map carries a
+        forbidden Cookie value — the real capture must record it and the
+        same live policy must refuse it;
+      - a DELAYED complete-header read: the verdict waits for it via
+        gather_captures and the record lands complete;
+      - a FAILED read propagates — an unfinished or failed capture cannot
+        green the run;
+      - a SECOND Authorization entry in the duplicate-preserving array is
+        refused: the exact-Bearer exception must not broaden to an
+        unchecked occurrence, and the honest single-entry array still
+        passes."""
+    benign = {'user-agent': 'benign', 'accept': '*/*'}
+    poisoned_cookie = {**benign, 'cookie': f'sid={CANARY}'}
+    # calibration: the OLD shape is exactly what missed it
+    shape = _RequestShape(benign, poisoned_cookie)
+    old_view = dict(shape.headers)
+    assert 'cookie' not in old_view and CANARY not in json.dumps(old_view), \
+        'calibration broke: the old property view already shows the cookie header'
+    record = await capture_request(shape)
+    assert record['headers'].get('cookie') == f'sid={CANARY}', 'the complete capture missed the cookie header'
+    assert [(k, v) for k, v in record['header_entries'] if k == 'cookie'] == [('cookie', f'sid={CANARY}')], \
+        'the duplicate-preserving array missed the cookie header'
+    _must_reject(
+        'a canary riding a Cookie header only the COMPLETE capture sees',
+        lambda: assert_http_request_custody(record['method'], record['url'], record['headers'],
+                                            record['body'], 'negative-control',
+                                            header_entries=record['header_entries']),
+    )
+    # a delayed complete-header read: the verdict WAITS, the record lands
+    delayed = asyncio.ensure_future(capture_request(_RequestShape(benign, poisoned_cookie, delay=0.3)))
+    landed = await gather_captures([delayed])
+    assert delayed.done(), 'gather_captures returned before the delayed capture completed'
+    assert len(landed) == 1 and landed[0]['headers'].get('cookie') == f'sid={CANARY}', \
+        'the delayed capture was not awaited to completion'
+    # a failed read propagates: a failed capture cannot green the run
+    failing = asyncio.ensure_future(capture_request(_RequestShape(benign, poisoned_cookie, fail=True)))
+    failed = False
+    try:
+        await gather_captures([failing])
+    except RuntimeError:
+        failed = True
+    assert failed and failing.done(), 'a failed header capture did not propagate'
+    # duplicate Authorization entries: the exception must not broaden
+    dup = [('authorization', f'Bearer {GOOGLE_TOKEN}'),
+           ('Authorization', f'Bearer {CANARY}')]
+    _must_reject(
+        'a second Authorization header entry beside the exact Bearer',
+        lambda: assert_http_request_custody('GET', 'https://sync.e2e.test/me',
+                                            {'authorization': f'Bearer {GOOGLE_TOKEN}'}, '',
+                                            'negative-control', header_entries=dup),
+    )
+    _must_accept(
+        'the exact Bearer as the ONE duplicate-preserving array entry',
+        lambda: assert_http_request_custody('GET', 'https://sync.e2e.test/me',
+                                            {'authorization': f'Bearer {GOOGLE_TOKEN}'}, '',
+                                            'negative-control',
+                                            header_entries=[('Authorization', f'Bearer {GOOGLE_TOKEN}')]),
+    )
+    print('capture-path control: complete-header capture + gather + duplicate-Authorization refusal all bite')
 
 
 def clear_ack_reached(terminal_text: str, ack: str) -> bool:
@@ -961,7 +1288,10 @@ async def handle_broker(route):
     """POST /gateway/token under the real contract: EMPTY body, the Google
     sign-in ONLY as the Authorization bearer, a scoped short-lived token back."""
     req = route.request
-    assert req.method == 'POST' and req.url.endswith('/gateway/token'), (req.method, req.url)
+    assert req.method == 'POST' and req.url.endswith('/gateway/token'), (
+        f'the broker route is POST /gateway/token '
+        f'(method: {describe_method(req.method)}; {safe_url(req.url)})'
+    )
     assert (req.post_data or '') == '', 'the broker exchange must send an empty body'
     authz = (await req.header_value('authorization')) or ''
     assert authz == f'Bearer {GOOGLE_TOKEN}', (
@@ -1065,23 +1395,29 @@ async def main() -> int:
     gateway_auth_negative_control()
     url_custody_negative_control()
     http_custody_negative_control()
-    diagnostics_negative_control()
+    await diagnostics_negative_control()
+    await capture_path_negative_control()
     osc52_clear_ack_negative_control()
     print('negative controls: custody oracle, gateway auth-frame recorder, the exact-surface URL policy,'
-          ' the captured-HTTP policy, failure diagnostics and the OSC 52 ack matcher all bite')
+          ' the captured-HTTP policy, the complete-header capture path, failure diagnostics'
+          ' and the OSC 52 ack matcher all bite')
 
     sync = FakeSync()
     relay = FakeRelay(FIXTURE_PORT)
     host_key_line = open(os.path.join(WORK, 'host_key.pub')).read().strip()
     gateway = FakeGateway(FIXTURE_PORT, GW_DEVICE, host_key_line)
-    # EVERY HTTP request the page makes: method, URL, headers and body — the
-    # URL policy, the Authorization rule and the body scan below run on THIS
-    # capture, not just on the sync route's own log.
-    http_log: list[tuple[str, str, dict, str]] = []
+    # EVERY HTTP request the page makes: method, URL, COMPLETE headers and
+    # body — the URL policy, the Authorization rule and the body scan below
+    # run on THIS capture, not just on the sync route's own log. The
+    # complete-header read is ASYNC (the .headers property is documented
+    # incomplete — security/cookie headers can be absent), so every request
+    # event spawns a capture task; gather_captures below awaits them ALL
+    # before the verdict, and a failed read fails the run.
+    capture_tasks: list[asyncio.Task] = []
     console_errors: list[str] = []
 
     def on_request(req):
-        http_log.append((req.method, req.url, dict(req.headers), req.post_data or ''))
+        capture_tasks.append(asyncio.ensure_future(capture_request(req)))
 
     pw = await async_playwright().start()
     browser = await pw.chromium.launch()
@@ -1334,7 +1670,16 @@ async def main() -> int:
         await page.wait_for_selector('text=gwbox is paired')
 
         await connect_from_host_list(page, 'gwbox')
+
+        # EVERY header capture must land before teardown and the verdict: a
+        # slow complete-header read is awaited, a failed one fails the run.
+        await page.wait_for_timeout(1_000)  # let trailing request events land
+        http_records = await gather_captures(capture_tasks)
+        if any(not task.done() for task in capture_tasks):
+            http_records = await gather_captures(capture_tasks)
     except BaseException:
+        for task in capture_tasks:
+            task.cancel()
         await dump_diagnostics()
         raise
     finally:
@@ -1345,13 +1690,16 @@ async def main() -> int:
     # --- wire-level assertions ----------------------------------------------
     # 0. The custody oracle's surfaces, stated exactly as implemented:
     #      - EVERY HTTP request the page made (captured with method, URL,
-    #        headers and body) through ONE captured-HTTP policy
+    #        the COMPLETE header map + the duplicate-preserving header
+    #        array, and body — awaited to completion by gather_captures
+    #        before this verdict) through ONE captured-HTTP policy
     #        (assert_http_request_custody): the structured exact-surface URL
     #        rules (scheme/host/effective port/path/query — see
-    #        assert_url_custody), the method rule and the exact-Bearer
-    #        Authorization rule on the account surfaces only, a FULL
-    #        secret-set scan of every header value (the exact account bearer
-    #        is the single exempt value, pinned by equality), and a
+    #        assert_url_custody, raw AND decoded components), the method
+    #        rule and the exact-Bearer Authorization rule on the account
+    #        surfaces only, a FULL secret-set scan of every header value
+    #        (the exact account bearer is the single exempt value, pinned by
+    #        equality; a second Authorization entry refuses), and a
     #        full-set body scan (the sync envelopes are additionally
     #        shape-checked and decrypted below);
     #      - the direct-relay and gateway WebSocket dial URLs, through the
@@ -1361,10 +1709,20 @@ async def main() -> int:
     #        gateway's first/auth TEXT frame included — through the SAME
     #        oracle.
     #    The negative controls above proved the oracle, the gateway recorder,
-    #    the URL policy, the captured-HTTP policy and the failure diagnostics
-    #    bite; THIS run's coverage is the live recordings going through them.
-    for method, url, headers, body in http_log:
-        assert_http_request_custody(method, url, headers, body, f'HTTP {method}')
+    #    the URL policy, the captured-HTTP policy, the capture path and the
+    #    failure diagnostics bite; THIS run's coverage is the live recordings
+    #    going through them.
+    assert http_records, 'no HTTP request was captured for the custody verdict'
+    assert len(http_records) == len(capture_tasks), (
+        'a header capture never completed — the verdict refuses an incomplete recording '
+        f'({len(http_records)} record(s) for {len(capture_tasks)} request event(s))'
+    )
+    for record in http_records:
+        assert_http_request_custody(
+            record['method'], record['url'], record['headers'], record['body'],
+            f"HTTP {describe_method(record['method'])}",
+            header_entries=record['header_entries'],
+        )
     for url in relay.urls:
         assert_url_custody(url, 'the direct-relay dial')
     for url in gateway.urls:
