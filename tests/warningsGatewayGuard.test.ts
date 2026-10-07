@@ -249,6 +249,75 @@ describe('the warnings sweep never uploads custody-protected keys to the bridge'
   });
 });
 
+describe('linkHostBridgesOnlyItsRelayToken — never the stale SSH key on the record', () => {
+  /** A link host whose credential record still carries BOTH secrets: the
+   * shared relay token (password slot — the transport's real secret) and a
+   * stale SSH private key from its pre-link life. */
+  function seedStaleKeyLinkHost(secret: HostSecret): void {
+    const hosts = useHostsStore();
+    hosts.pulled = true;
+    hosts.passphrase = 'sync-pass';
+    const link = entry('link-box', { link: { relayUrl: 'wss://link-relay.example', hostId: 'host-1' } as never });
+    hosts.hosts = [link];
+    hosts.secrets = { 'link-box': secret };
+    hosts.secretHosts = Object.keys(hosts.secrets);
+  }
+
+  it('linkHostWithStalePrivateKeyBridgesExactlyTheToken — both secrets present, only the token moves', async () => {
+    seedStaleKeyLinkHost({ privateKeyPem: PLAIN_KEY, password: NORMAL_PASSWORD });
+    const warnings = useWarningsStore();
+    const { opens, open } = spyBridgeOpens();
+    try {
+      const link = await warnings.linkFor('link-box');
+      expect(link).not.toBeNull();
+      // EXACTLY the relay token — the key never appears in any shape.
+      expect(link!.auth).toEqual({ kind: 'password', password: NORMAL_PASSWORD });
+      await warnings.sweep();
+      expect(opens).toEqual([{ url: config.wsUrl, authKind: 'password' }]);
+      // Every actual warning action runs the same policy: ack and ack-all
+      // bridge the token, never the key.
+      warnings.byHost['link-box'] = [{ session: 's1', kind: 'oom', workspace: 'w', tag: 't', detail: 'd', created_at_ms: 1 }];
+      await warnings.ack('link-box', 's1');
+      await warnings.ackAll('link-box');
+      expect(opens.every((o) => o.authKind === 'password' && o.url === config.wsUrl)).toBe(true);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('linkHostWithoutTokenNeverBridgesItsKey — key alone is nothing to connect with', async () => {
+    seedStaleKeyLinkHost({ privateKeyPem: PLAIN_KEY });
+    const warnings = useWarningsStore();
+    const { opens, open } = spyBridgeOpens();
+    try {
+      // No token → no runner link at all: no key fallback, no upload.
+      expect(await warnings.linkFor('link-box')).toBeNull();
+      await warnings.sweep();
+      await warnings.ack('link-box', 'some-session');
+      await warnings.ackAll('link-box');
+      expect(opens).toEqual([]);
+      expect(warnings.byHost['link-box']).toBeUndefined();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('the legacy plain-host contract is untouched — key-or-password as ever', async () => {
+    const hosts = useHostsStore();
+    hosts.pulled = true;
+    hosts.passphrase = 'sync-pass';
+    hosts.hosts = [entry('plain-box')];
+    hosts.secrets = { 'plain-box': { privateKeyPem: PLAIN_KEY, password: NORMAL_PASSWORD } };
+    hosts.secretHosts = Object.keys(hosts.secrets);
+    config.directWsUrl = ''; // the legacy deployment chose the bridge
+    const warnings = useWarningsStore();
+    const link = await warnings.linkFor('plain-box');
+    // bridgeAuthOf's historical priority (key over password) preserved for
+    // the transport that actually authenticates with it.
+    expect(link!.auth).toEqual({ kind: 'key', privateKey: PLAIN_KEY });
+  });
+});
+
 describe('nullLinkDirectHostNeverUploadsCredentials — the sweep matches the DIAL, not the shape', () => {
   /** Extra host shapes the presence rules exist for: a materialized
    * `link: null` (the dial ignores it and goes DIRECT), a malformed gateway

@@ -33,7 +33,7 @@ export interface HostLink {
 }
 
 /**
- * The bridge auth frame for a host's stored secret (structurally the hosts
+ * The bridge auth for a host's stored secret (structurally the hosts
  * store's HostSecret), or null when this browser holds no usable credential
  * for the host — without a key or password there is nothing to connect with,
  * so a sweep skips it quietly, like the terminal view's "no key attached".
@@ -50,6 +50,24 @@ export function bridgeAuthOf(
   }
   if ((secret?.password ?? '') !== '') return { kind: 'password', password: secret!.password! };
   return null;
+}
+
+/**
+ * The bridge auth for a LINK host: exactly the documented shared relay
+ * token (the hosts store's password slot — the one secret the link dial
+ * itself carries), nothing else. {@link bridgeAuthOf} must never be used
+ * for a link host: it prioritizes the private key, so a host that switched
+ * to the link transport while keeping its stale SSH key would hand that raw
+ * key to the legacy bridge in the `connect` frame — and the bridge is not
+ * where a link host's key belongs (its dial never uses one). The token is
+ * also the ONLY fallback-free answer: a record without one has nothing to
+ * connect with — no key fallback, just the quiet skip.
+ */
+export function linkBridgeAuthOf(
+  secret: { privateKeyPem?: string; password?: string; keyPassphrase?: string } | undefined,
+): BridgeAuth | null {
+  if ((secret?.password ?? '') === '') return null;
+  return { kind: 'password', password: secret!.password! };
 }
 
 function shellWord(word: string): string {

@@ -43,7 +43,13 @@ configured uses the Lambda bridge, whose `connect` frame carries a host's
 key. The automatic warnings sweep no longer sends any host key to that
 bridge — keys move only on a dial you started, over the host's own
 transport. Gateway hosts are excluded from that sweep entirely (see
-maturity limits).
+maturity limits). Link hosts do sweep, but their bridge frame carries
+exactly the shared relay token — never the SSH private key a stale
+credential record may still hold, and nothing at all when the token is
+missing (no key fallback). The sweep and the dial resolve a host's
+transport with the same fail-closed rule: a malformed or conflicting
+transport marker on a synced host refuses the dial and excludes the host
+from the sweep, it never degrades into a direct dial.
 
 ## Setting up a new gateway host
 

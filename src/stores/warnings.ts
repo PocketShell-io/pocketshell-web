@@ -5,6 +5,7 @@ import {
   ackWarning,
   bridgeAuthOf,
   fetchWarnings,
+  linkBridgeAuthOf,
   type AplexerWarning,
   type HostLink,
 } from '../aplexer/warnings';
@@ -50,8 +51,15 @@ import { resolveTransportIntent } from '../platform/transportIntent';
  *    goes direct. Only a deployment with NO direct relay
  *    (`directWsUrl === ''`) has — by that same configuration — chosen the
  *    Lambda bridge as its host transport, and keeps the historical sweep
- *    for its non-gateway hosts. Link hosts are unchanged: their bridge-frame
- *    secret is the shared link token, not a private key.
+ *    for its non-gateway hosts.
+ *
+ *  And the frame secret follows the transport, not the record: a LINK
+ *  host's bridge auth is exactly its shared relay token
+ *  (`linkBridgeAuthOf`) — never the SSH private key a stale record may
+ *  still carry (its dial never uses a key, so the key has no business on
+ *  any bridge), and no key fallback when the token is missing. Only an
+ *  ordinary host on a legacy deployment keeps the historical
+ *  key-or-password contract (`bridgeAuthOf`).
  *
  * Nothing here ever falls back to another transport on failure: a sweep
  * miss stays a miss, and no code path in this store dials the gateway.
@@ -88,12 +96,19 @@ export const useWarningsStore = defineStore('host-warnings', {
       if (host === undefined) return null;
       // Credential custody — BEFORE the secret is loaded (see class doc):
       // the same validated transport policy the dial runs, presence-first, so
-      // a malformed gateway marker or a conflicting entry is excluded even
-      // though its value would look falsy — and a host whose dial would
-      // ignore a null link and go direct is never treated as a link host
-      // here either.
+      // a malformed gateway marker, a conflicting entry or an unreadable link
+      // target is excluded even though its value would look falsy — and a
+      // host whose dial would ignore a null link and go direct is never
+      // treated as a link host here either.
       if (!this.eligibleForBridge(host)) return null;
-      const bridgeAuth = bridgeAuthOf(await hosts.getHostSecret(name));
+      const secret = await hosts.getHostSecret(name);
+      // The frame secret follows the transport: a LINK host bridges exactly
+      // its shared relay token — never the SSH key a stale record may still
+      // carry, with no key fallback when the token is missing
+      // (linkBridgeAuthOf). Only an ordinary host on a legacy (no-direct-
+      // relay) deployment keeps the historical key-or-password contract.
+      const intent = resolveTransportIntent({ entry: host });
+      const bridgeAuth = intent.kind === 'link' ? linkBridgeAuthOf(secret) : bridgeAuthOf(secret);
       if (bridgeAuth === null) return null;
       return {
         wsUrl: config.wsUrl,
@@ -147,9 +162,10 @@ export const useWarningsStore = defineStore('host-warnings', {
      * (via linkFor) every ack. Static per host + config — no secret access.
      * The gate is the dial's own transport resolution: a GATEWAY marker
      * (by presence — null, malformed, even an own property holding
-     * `undefined`) and any REFUSED shape (conflict, unreadable target)
-     * exclude a host outright; a LINK host stays eligible because its
-     * bridge-frame secret is the shared relay token, never a private key;
+     * `undefined`) and any REFUSED shape (conflict, unreadable gateway or
+     * link target) exclude a host outright; a LINK host stays eligible
+     * because its bridge-frame secret is the shared relay token, never a
+     * private key (linkFor enforces exactly that via linkBridgeAuthOf);
      * an ordinary host is eligible ONLY when the deployment has no direct
      * relay — the configuration itself chose the Lambda bridge — and that
      * includes a materialized `link: null`, whose dial goes DIRECT and so
