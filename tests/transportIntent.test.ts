@@ -138,6 +138,28 @@ describe('link and direct intents keep their shapes', () => {
     expect(resolveTransportIntent({ entry: entry({ link: null as never }) }).kind).toBe('none');
   });
 
+  it('an own link property holding undefined stays the value shape — direct, not a marker', () => {
+    const e = entry();
+    (e as Record<string, unknown>)['link'] = undefined;
+    expect(resolveTransportIntent({ entry: e }).kind).toBe('none');
+  });
+
+  it('malformedSavedLinkRefusesNotDials — a truthy garbage link value is a claim that no longer reads', () => {
+    for (const bad of [
+      'wss://not-a-target',
+      1,
+      true,
+      { relayUrl: 'wss://link-relay.example' } as never, // missing hostId
+      { hostId: 'host-1' } as never, // missing relayUrl
+      { relayUrl: '   ', hostId: 'host-1' } as never, // blank fields
+      { relayUrl: 'wss://link-relay.example', hostId: '  ' } as never,
+    ]) {
+      const intent = resolveTransportIntent({ entry: entry({ link: bad as never }) });
+      expect(intent.kind).toBe('refuse');
+      if (intent.kind === 'refuse') expect(intent.reason).toMatch(/unreadable link target/);
+    }
+  });
+
   it('payload link intent on an entry without a link target refuses the downgrade', () => {
     expect(
       resolveTransportIntent({ entry: entry(), payload: { link: { whatever: 1 } } }).kind,
@@ -148,9 +170,40 @@ describe('link and direct intents keep their shapes', () => {
     ).toBe('refuse');
   });
 
-  it('payload link intent landing on a link entry stays link', () => {
+  it('a present-but-unreadable payload link marker refuses even on a valid link entry — never silently dropped', () => {
+    for (const marker of [null, undefined, 1, 'wss://x', { relayUrl: 'wss://link-relay.example' } as never]) {
+      const intent = resolveTransportIntent({
+        entry: entry({ link: LINK_TARGET }),
+        payload: { link: marker as never },
+      });
+      expect(intent.kind).toBe('refuse');
+      if (intent.kind === 'refuse') expect(intent.reason).toMatch(/unreadable link target/);
+    }
+  });
+
+  it('a well-formed payload link that DISAGREES with the saved one refuses — no silent adoption', () => {
+    for (const other of [
+      { relayUrl: 'wss://other-relay.example', hostId: LINK_TARGET.hostId },
+      { relayUrl: LINK_TARGET.relayUrl, hostId: 'host-OTHER' },
+    ]) {
+      const intent = resolveTransportIntent({
+        entry: entry({ link: LINK_TARGET }),
+        payload: { link: other },
+      });
+      expect(intent.kind).toBe('refuse');
+      if (intent.kind === 'refuse') expect(intent.reason).toMatch(/does not match/);
+    }
+  });
+
+  it('payload link intent landing on a link entry stays link ONLY when it agrees', () => {
+    // A structured target that agrees with the saved one: link.
+    expect(
+      resolveTransportIntent({ entry: entry({ link: LINK_TARGET }), payload: { link: { ...LINK_TARGET } } }).kind,
+    ).toBe('link');
+    // The old hole — any truthy garbage (`{link: 1}`) riding a valid link
+    // entry — now refuses like its gateway twin.
     expect(
       resolveTransportIntent({ entry: entry({ link: LINK_TARGET }), payload: { link: 1 } }).kind,
-    ).toBe('link');
+    ).toBe('refuse');
   });
 });

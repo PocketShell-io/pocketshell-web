@@ -107,7 +107,8 @@ function seed(): Harness {
   const ordinary = entry('plain');
   const gatewayOk = entry('gw-ok', { gateway: GATEWAY_TARGET });
   const linkOk = entry('link-ok', { link: LINK_TARGET });
-  hosts.hosts = [gatewayNull, gatewayUndefined, gatewayGarbage, conflicting, ordinary, gatewayOk, linkOk];
+  const linkGarbage = entry('link-garbage', { link: 'wss://garbage.example' as never });
+  hosts.hosts = [gatewayNull, gatewayUndefined, gatewayGarbage, conflicting, ordinary, gatewayOk, linkOk, linkGarbage];
   const secrets: Record<string, HostSecret> = {};
   for (const h of hosts.hosts) secrets[h.name] = { privateKeyPem: KEY, password: 'relay-token' };
   hosts.secrets = secrets;
@@ -187,6 +188,40 @@ describe('payloadGatewayIntentNotDropped — the shared payload’s raw markers 
     const result = await webApi.ssh.connect(payload as Parameters<typeof webApi.ssh.connect>[0]);
     expect(result.ok).toBe(false);
     expectNothingMoved(h);
+  });
+});
+
+describe('malformedSavedLinkRefusesBeforeSecretBrokerSocket — link shapes get the gateway guard too', () => {
+  it('a saved link that fails the shared guard refuses — never a direct-dial fallback', async () => {
+    const h = seed();
+    for (const link of ['wss://garbage.example', 1, { relayUrl: 'wss://link-relay.example' }]) {
+      const hosts = useHostsStore();
+      const victim = hosts.hosts.find((x) => x.name === 'link-garbage')!;
+      (victim as Record<string, unknown>)['link'] = link;
+      const result = await webApi.ssh.connect({ host: 'link-garbage.example', user: 'u' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatch(/unreadable link target/);
+      expectNothingMoved(h);
+    }
+  });
+
+  it('a payload link marker that is unreadable or DISAGREES with the saved target refuses', async () => {
+    const h = seed();
+    for (const link of [null, undefined, 1, { relayUrl: 'wss://other-relay.example', hostId: 'host-1' }]) {
+      const payload: Record<string, unknown> = { host: 'link-ok.example', user: 'u', link };
+      const result = await webApi.ssh.connect(payload as Parameters<typeof webApi.ssh.connect>[0]);
+      expect(result.ok).toBe(false);
+      expectNothingMoved(h);
+    }
+  });
+
+  it('a payload link target that AGREES with the saved one still dials the link transport', async () => {
+    seed();
+    const payload = { host: 'link-ok.example', user: 'u', link: { ...LINK_TARGET } };
+    const result = await webApi.ssh.connect(payload as Parameters<typeof webApi.ssh.connect>[0]);
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(LinkSshConnection.prototype.connect)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(SshConnection.prototype.connect)).not.toHaveBeenCalled();
   });
 });
 

@@ -18,14 +18,28 @@
  * Payload markers (the shared `ssh.connect` payload passes `gateway`/`link`
  * values verbatim as `unknown`) carry the caller's INTENT, detected the same
  * presence-first way: payload gateway intent must land on a gateway entry
- * whose saved target AGREES with the payload's — an ordinary, conflicting or
- * mismatched resolved entry refuses rather than downgrades through the fuzzy
- * host match. Producers therefore must not materialize `gateway: undefined`
- * on ordinary payloads/entries: a present property is a claim, and an
- * unreadable claim refuses instead of dialing.
+ * whose saved target AGREES with the payload's, and payload link intent must
+ * land on a link entry whose saved target agrees the same way — an ordinary,
+ * conflicting or mismatched resolved entry refuses rather than downgrades
+ * through the fuzzy host match. Producers therefore must not materialize
+ * `gateway: undefined` on ordinary payloads/entries: a present property is a
+ * claim, and an unreadable claim refuses instead of dialing.
+ *
+ * Saved targets are validated with the shared contract's own semantics, read
+ * only: a gateway marker must normalize (`normalizeGatewayTarget`) and a
+ * non-null link value must pass `isLinkTransportTarget`. A SAVED target that
+ * fails its guard is a host the user pointed at a transport whose shape no
+ * longer reads — it refuses, exactly like a malformed marker; it never
+ * degrades to a direct dial behind the user's back. (`link: null` — and an
+ * absent or undefined-valued `link` — remains the long-standing "no link"
+ * shape the direct dial has always honoured.)
  */
 import type { HostEntry } from '@pocketshell/core';
-import { normalizeGatewayTarget, type GatewayTransportTarget } from '@pocketshell/core';
+import {
+  isLinkTransportTarget,
+  normalizeGatewayTarget,
+  type GatewayTransportTarget,
+} from '@pocketshell/core';
 
 /** Own-property gateway marker on an object: ANY value counts — null,
  * malformed, even `undefined` (an own property holding undefined is
@@ -127,6 +141,36 @@ export function resolveTransportIntent(opts: {
         kind: 'refuse',
         reason: 'The request asks for a link dial, but the matched host has no link target — check which host was selected.',
       };
+    }
+    // The saved link must still READ as one under the shared contract's own
+    // guard: any other non-null value — a string, a number, a partial object —
+    // is a claim on the link transport whose shape no longer parses, and it
+    // refuses instead of degrading into a direct dial. Truthiness is never
+    // the test.
+    const savedLink = isLinkTransportTarget(entryLinkValue) ? entryLinkValue : null;
+    if (savedLink === null) {
+      return {
+        kind: 'refuse',
+        reason: `Host ${entry.name} has an unreadable link target — edit the host and re-enter its relay details.`,
+      };
+    }
+    if (payloadLinkPresent) {
+      // Same contract as the gateway payload marker: a present payload link
+      // must be a READABLE target that agrees with the saved one. Null,
+      // undefined or a non-target is a malformed marker, and a well-formed
+      // but different target is a mismatch. None of the three may be
+      // ignored, and none may fall through to the saved target silently.
+      const raw = payload !== undefined ? ownValue(payload, 'link') : undefined;
+      const payloadLink = isLinkTransportTarget(raw) ? raw : null;
+      if (payloadLink === null) {
+        return { kind: 'refuse', reason: `Host ${entry.name} was asked for with an unreadable link target.` };
+      }
+      if (payloadLink.relayUrl !== savedLink.relayUrl || payloadLink.hostId !== savedLink.hostId) {
+        return {
+          kind: 'refuse',
+          reason: `The request's link target does not match host ${entry.name}'s saved link target.`,
+        };
+      }
     }
     return { kind: 'link' };
   }
