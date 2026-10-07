@@ -34,8 +34,10 @@ Legs:
                the gateway's registry record is tampered to advertise a
                WRONG ssh_host_key — the ready advisory must be powerless:
                the out-of-band pin decides, and the dial must still succeed.
-  gw-ecdsaonly ECDSA-only host key: enrollment already refused before any
-               HTTP (asserted by the orchestrator); no device exists here.
+  gw-ecdsaonly ECDSA-only host key: enrollment already REFUSED — asserted
+               against the orchestrator's OWN fixtures (zero broker requests
+               on record, no registry device record, no agent state); no
+               device exists here.
 
 Negatives (each with its exact refusal surfaced and zero side effects):
   keyless gateway host        — refused before ANY socket (precondition).
@@ -58,10 +60,20 @@ Custody: EVERY WebSocket frame the browser puts on ANY transport — binary
 AND text, sent AND received — is captured read-only (page.on('websocket')
 events; no route interception anywhere) and scanned against the full owned
 secret set (three private keys, the key passphrase, the config canary, the
-fixture Google sign-in). The gateway auth frames are additionally verified
-to carry EXACTLY a broker-scoped RS256 token — never the Google sign-in. An
-offline negative control injects each secret into each surface and must see
-the oracle reject it.
+fixture Google sign-in). The final custody pass runs ONCE, after ALL THREE
+browser contexts are closed (main, broken-broker, tampered-advisory): every
+socket of every store, every late frame, every captured HTTP request of all
+three contexts — fail-closed (a failed request capture refuses the run).
+The gateway auth frames are additionally pinned to the transport's exact
+wire contract (the FIRST frame sent is ONE text auth — exactly
+type/v/token/device_id, its device the dialed URL's device; every other
+sent frame binary; at most the one ready advisory) and their tokens are
+RS256-SIGNATURE-VERIFIED against the fixture broker's OWNED key with the
+exact production claim contract — never the Google sign-in. An offline
+negative-control suite injects each secret into each surface and must see
+the oracle reject it: URL placements, captured HTTP shapes, wire frames,
+auth frames, token signatures, the live capture path, the CLEAR-ack
+matcher and the zero-auth oracle.
 
 Usage: e2e_gateway_prod.py <base-url> <workdir> <fixtures-json>
 """
@@ -101,6 +113,14 @@ SYNC_URL = FIX['syncUrl']
 # startup) — the harness adopts it so auth-frame tokens can be VERIFIED and
 # verifier-negative variants carry the live kid.
 load_signing_key(os.path.join(WORK, 'broker-signing-key.pem'))
+
+import gateway_fixture_broker as gateway_broker  # noqa: E402
+
+gateway_broker.ISSUER = BROKER_URL  # tokens minted in-process carry the live issuer
+
+# GW_E2E_OFFLINE_CONTROLS_ONLY=1 runs ONLY the offline controls (no browser,
+# no network, no Docker) and exits 0 — the static calibration surface.
+OFFLINE_ONLY = os.environ.get('GW_E2E_OFFLINE_CONTROLS_ONLY') == '1'
 
 SECRETS_AS_TEXT = [
     CANARY,
@@ -210,13 +230,15 @@ def _scan_material(parts, url: str, legacy: bool) -> list:
 
 def assert_url_custody_prod(url: str, where: str) -> None:
     """The ONE URL policy for the live HTTP request URLs and the recorded
-    WebSocket dial URLs: exact-surface rules above; the legacy relay's ONE
-    query-token placement; everywhere else the FULL secret set must appear in
-    NO part of the URL, raw or decoded."""
+    WebSocket dial URLs: EXACT scheme + host + effective-port + path/query
+    contracts per surface (a same-host wrong-scheme or wrong-port URL is NOT
+    the surface — it refuses); the legacy relay's ONE query-token placement;
+    everywhere else the FULL secret set must appear in NO part of the URL,
+    raw or decoded."""
     parts = urlsplit(url)
     host = (parts.hostname or '').lower()
-    legacy = host == (urlsplit(LEGACY_URL).hostname or '').lower() and effective_port(parts) == effective_port(urlsplit(LEGACY_URL))
-    gateway = host == (urlsplit(GATEWAY_URL).hostname or '').lower() and effective_port(parts) == effective_port(urlsplit(GATEWAY_URL))
+    legacy = _same_origin(parts, urlsplit(LEGACY_URL))
+    gateway = _same_origin(parts, urlsplit(GATEWAY_URL))
     account = next(((o, p, m) for o, p, m in ACCOUNT_HTTP_SURFACES
                     if (o.hostname or '').lower() == host and effective_port(o) == effective_port(parts)), None)
     app = _same_origin(parts, urlsplit(BASE))
@@ -253,8 +275,13 @@ def assert_url_custody_prod(url: str, where: str) -> None:
             raise AssertionError(f'{where}: account URL carries query/fragment/userinfo ({safe_url(url)})')
     elif app:
         pass  # the preview origin: no credential anywhere (scanned below)
-    elif host == 'accounts.google.com' and parts.path == '/gsi/client':
-        pass  # the stubbed GIS client script: a configured lab surface, credential-free
+    elif parts.scheme == 'https' and host == 'accounts.google.com' and effective_port(parts) == 443 \
+            and parts.path == '/gsi/client':
+        # the stubbed GIS client script: its EXACT https origin + path (any
+        # other scheme, port or path is a different surface and refuses
+        # below), credential-free
+        if parts.query or parts.fragment or parts.username is not None:
+            raise AssertionError(f'{where}: the GIS script URL carries query/fragment/userinfo ({safe_url(url)})')
     else:
         raise AssertionError(f'{where}: URL is not one of this run\'s configured surfaces ({safe_url(url)})')
 
@@ -323,6 +350,7 @@ def http_custody_negative_control_prod() -> None:
         ('PUT', f'{SYNC_URL}/settings/main', {'Authorization': f'Bearer {G}'}, '{"data":"<ciphertext>","version":1}'),
         ('POST', f'{BROKER_URL}/gateway/token', {'Authorization': f'Bearer {G}'}, ''),
         ('GET', f'http://{urlsplit(BASE).netloc}/', {}, ''),
+        ('GET', 'https://accounts.google.com/gsi/client', {}, ''),
         ('GET', f'{legacy_origin.scheme}://{legacy_origin.netloc}/pipe?host=127.0.0.1&port=22&token={G}', {}, ''),
         ('GET', f'{gw_origin.scheme}://{gw_origin.netloc}/api/v1/hosts/{device}/ssh', {}, ''),
     ]
@@ -332,6 +360,18 @@ def http_custody_negative_control_prod() -> None:
     rejected = [
         # wrong scheme / effective port / path on the legacy exception
         (f'http://{urlsplit(LEGACY_URL).hostname}:444/untrusted?token={G}',),
+        # the legacy relay origin on the WRONG SCHEME (plain http) with an
+        # otherwise exact dial: a same-host wrong-scheme URL is NOT the surface
+        (f'http://{urlsplit(LEGACY_URL).netloc}/pipe?host=127.0.0.1&port=22&token={G}',),
+        # the gateway origin on the WRONG SCHEME (http and wss), exact path
+        (f'http://{urlsplit(GATEWAY_URL).netloc}/api/v1/hosts/{device}/ssh',),
+        (f'wss://{urlsplit(GATEWAY_URL).netloc}/api/v1/hosts/{device}/ssh',),
+        # the GIS script on a wrong scheme/port, and with a query
+        ('http://accounts.google.com:444/gsi/client',),
+        ('https://accounts.google.com:8443/gsi/client',),
+        ('https://accounts.google.com/gsi/client?x=1',),
+        # the app origin on the wrong scheme
+        (f'https://{urlsplit(BASE).netloc}/',),
         # duplicate sign-in copy in the fragment beside the allowed query
         (f'{legacy_origin.scheme}://{legacy_origin.netloc}/pipe?host=127.0.0.1&port=22&token={G}#token={G}',),
         # the sign-in outside the ONE token field (host field)
@@ -388,6 +428,96 @@ def http_custody_negative_control_prod() -> None:
     assert threw, 'the policy FAILED to reject a duplicate Authorization entry'
     print(f'prod captured-HTTP policy control: {len(honest)} honest surfaces accepted, '
           f'{len(rejected)} URL placements + {len(poisoned_requests) + 1} request shapes rejected')
+
+
+class _ApiShapedRequest:
+    """A request shaped like the INSTALLED async Playwright API: `all_headers`
+    and `headers_array` are async METHODS; `post_data`, `method`, `url` are
+    properties. The live capture path must work against exactly this shape —
+    helper-only dicts prove nothing."""
+
+    def __init__(self, method: str, url: str, headers: dict, entries: list, body: str = '',
+                 delay: float = 0.0, fail_all_headers: bool = False, fail_array: bool = False):
+        self._method, self._url, self._headers, self._entries, self._body = method, url, headers, entries, body
+        self._delay, self._fail_all_headers, self._fail_array = delay, fail_all_headers, fail_array
+
+    async def all_headers(self) -> dict:
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._fail_all_headers:
+            raise RuntimeError('request destroyed')
+        return dict(self._headers)
+
+    async def headers_array(self) -> list:
+        if self._fail_array:
+            raise RuntimeError('request destroyed')
+        # the installed API returns NameValue dicts, duplicate entries preserved
+        return [{'name': n, 'value': v} for n, v in self._entries]
+
+    @property
+    def post_data(self):
+        return self._body or None
+
+    @property
+    def method(self):
+        return self._method
+
+    @property
+    def url(self):
+        return self._url
+
+
+async def http_capture_control_prod() -> None:
+    """The LIVE capture path against ACTUAL async-API-shaped requests: the
+    complete header capture (merged view + duplicate-preserving array) must
+    survive a delayed resolution, must PRESERVE duplicate header entries, and
+    must FAIL CLOSED (raise, never silently lose the merged view) when either
+    header view cannot be read — including the property-shaped request the
+    old executable bug assumed."""
+    bearer = f'Bearer {GOOGLE_TOKEN}'
+    entries = [('Authorization', bearer), ('Accept', 'application/json'),
+               ('X-Double', 'one'), ('X-Double', 'two')]
+
+    async def captured(req) -> dict:
+        return await capture_request(req)
+
+    # 1. honest capture, duplicates preserved end to end
+    cap = await captured(_ApiShapedRequest(
+        'GET', f'{SYNC_URL}/me', {'Authorization': bearer}, entries))
+    doubles = [v for k, v in cap['header_entries'] if k == 'X-Double']
+    assert doubles == ['one', 'two'], f'the capture lost duplicate header entries: {cap["header_entries"]}'
+    assert cap['headers'] == {'Authorization': bearer}
+    assert_http_request_custody_prod(cap['method'], cap['url'], cap['headers'], cap['body'],
+                                     'capture-control', header_entries=cap['header_entries'])
+    # 2. a DELAYED complete-header resolution still captures in full
+    cap = await captured(_ApiShapedRequest(
+        'GET', f'{SYNC_URL}/me', {'Authorization': bearer}, entries, delay=0.2))
+    assert cap['headers'] == {'Authorization': bearer}, 'the delayed capture lost the merged headers'
+    # 3. FAIL CLOSED: a destroyed request (either view) raises — it never
+    #    degrades into a headerless dict that would skip the merged scan
+    for broken in (
+        _ApiShapedRequest('GET', f'{SYNC_URL}/me', {}, entries, fail_all_headers=True),
+        _ApiShapedRequest('GET', f'{SYNC_URL}/me', {}, entries, fail_array=True),
+    ):
+        raised = False
+        try:
+            await captured(broken)
+        except RuntimeError as e:
+            raised = 'capture failed' in str(e)
+        assert raised, 'a failed complete-header capture did NOT fail closed'
+    # 4. the property-shaped request (the old bug's assumption) must NOT
+    #    capture — awaiting a non-awaitable fails the capture (fail closed,
+    #    naming the underlying TypeError), never a shrunken success
+    prop_req = _ApiShapedRequest('GET', f'{SYNC_URL}/me', {'Authorization': bearer}, entries)
+    prop_req.headers_array = entries  # a plain list attribute, not a method
+    raised = False
+    try:
+        await captured(prop_req)
+    except RuntimeError as e:
+        raised = 'TypeError' in str(e)
+    assert raised, 'the capture silently accepted a property-shaped headers_array'
+    print('prod capture-path control: async-method capture with duplicates + delayed resolution accepted; '
+          'destroyed/property-shaped captures fail closed')
 
 
 def key_body(name: str) -> str:
@@ -477,17 +607,213 @@ def decode_jwt(token: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(_b64_pad(token.split('.')[1])))
 
 
+def _verify_broker_rs256(token: str, where: str) -> None:
+    """ACTUAL signature verification of the auth-frame token against the
+    fixture broker's OWNED public key (the key whose RFC 7638 thumbprint the
+    running broker serves as kid): RS256 over the exact signing input.
+    Decoding claims alone proves nothing — this check bites."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+
+    try:
+        head_b64, payload_b64, sig_b64 = token.split('.')
+    except ValueError:
+        raise AssertionError(f'{where}: the auth token is not a three-part JWT')
+    signing_input = f'{head_b64}.{payload_b64}'.encode()
+    try:
+        signature = base64.urlsafe_b64decode(_b64_pad(sig_b64))
+    except Exception as e:  # noqa: BLE001
+        raise AssertionError(f'{where}: the auth token signature is not base64url: {e}')
+    try:
+        BROKER_KEY.private.public_key().verify(
+            signature, signing_input, asym_padding.PKCS1v15(), hashes.SHA256())
+    except InvalidSignature:
+        raise AssertionError(
+            f'{where}: the auth token RS256 signature does NOT verify against the fixture broker key '
+            f'(kid {BROKER_KEY.kid[:8]}…)')
+
+
 def assert_scoped_token(token: str, where: str) -> None:
-    """The auth frame's token must be a LIVE broker-scoped RS256 credential —
-    verified against the fixture key — and NEVER the Google sign-in."""
+    """The auth frame's token must be a LIVE broker-scoped credential whose
+    RS256 signature VERIFIES against the fixture broker's owned key (the
+    same key material the broker's JWKS serves — the header kid is that
+    key's RFC 7638 thumbprint, recomputed and pinned here), with the exact
+    production claim contract (issuer, audience, scope, email, bounded
+    lifetime) — and NEVER the Google sign-in."""
     assert token != GOOGLE_TOKEN, f'{where}: the auth frame carried the raw sign-in'
     header = json.loads(base64.urlsafe_b64decode(_b64_pad(token.split('.')[0])))
     assert header['alg'] == 'RS256' and header['kid'] == BROKER_KEY.kid, header
+    _verify_broker_rs256(token, where)
     claims = decode_jwt(token)
     assert claims['iss'] == BROKER_URL and claims['aud'] == 'pocketshell-gateway', claims
     assert claims['scope'] == 'pocketshell.gateway', claims
-    assert claims['exp'] > time.time(), claims
+    now = time.time()
+    assert claims['exp'] > now, claims
+    assert claims['exp'] - claims['iat'] <= 300, claims  # the production TTL cap
+    assert claims.get('nbf', 0) <= now + 60, claims
     assert claims['email'] == GOOGLE_EMAIL, claims
+    # kid binding: the verification key's thumbprint IS the token's kid —
+    # the key that verifies is exactly the key the broker publishes.
+    pub = BROKER_KEY.private.public_key().public_numbers()
+    n_b64 = base64.urlsafe_b64encode(pub.n.to_bytes((pub.n.bit_length() + 7) // 8, 'big')).rstrip(b'=').decode()
+    e_b64 = base64.urlsafe_b64encode(pub.e.to_bytes((pub.e.bit_length() + 7) // 8, 'big')).rstrip(b'=').decode()
+    jwk_canonical = json.dumps({'e': e_b64, 'kty': 'RSA', 'n': n_b64}, separators=(',', ':'), sort_keys=True)
+    import hashlib
+    thumb = base64.urlsafe_b64encode(hashlib.sha256(jwk_canonical.encode()).digest()).rstrip(b'=').decode()
+    assert thumb == header['kid'], 'the fixture broker key thumbprint does not match the token kid'
+
+
+def scoped_token_verification_control() -> None:
+    """The scoped-token verifier must REFUSE every dishonest token through
+    the SAME live path: matching claims with a corrupted or foreign-key
+    signature, a tampered payload, an expired lifetime, and the raw sign-in
+    — and ACCEPT the honest mint."""
+    import gateway_fixture_broker as broker_mod
+
+    broker_mod.ISSUER = BROKER_URL
+    where = 'token-control'
+    good = broker_mod.mint_scoped_token(BROKER_URL)['token']
+    assert_scoped_token(good, where)  # honest mint accepted
+
+    # corrupt a REAL signature byte (the last base64 char may be padding bits
+    # only — a flip there decodes to the same signature and rightly verifies)
+    _h, _p, _s = good.split('.')
+    _sig = bytearray(base64.urlsafe_b64decode(_b64_pad(_s)))
+    _sig[0] ^= 0xFF
+    corrupted = '.'.join([_h, _p, base64.urlsafe_b64encode(bytes(_sig)).rstrip(b'=').decode()])
+    foreign = broker_mod.BrokerKey()
+    foreign_token = foreign.sign_rs256(
+        {'alg': 'RS256', 'typ': 'JWT', 'kid': foreign.kid},
+        {**decode_jwt(good)})
+    poisoned = [
+        ('corrupted signature', corrupted),
+        ('tampered payload (claims edited under the honest signature)', '.'.join(
+            [good.split('.')[0],
+             base64.urlsafe_b64encode(json.dumps(
+                 {**decode_jwt(good), 'scope': 'pocketshell.admin'}).encode()).rstrip(b'=').decode(),
+             good.split('.')[2]])),
+        ('foreign-key signature (valid claims, wrong key)', foreign_token),
+        ('expired lifetime (honest signature)', broker_mod.mint_variant('expired')),
+        ('the raw Google sign-in', GOOGLE_TOKEN),
+    ]
+    for what, bad in poisoned:
+        threw = False
+        try:
+            assert_scoped_token(bad, where)
+        except AssertionError:
+            threw = True
+        assert threw, f'the scoped-token verifier FAILED to reject {what}'
+    print('prod scoped-token control: honest mint verified; corrupted/tampered/foreign-key/expired/sign-in refused')
+
+
+def assert_gateway_socket_frames(rec: SocketRecord, where: str) -> None:
+    """The COMPLETE wire contract for one recorded gateway socket, from the
+    shipping transport's own contract (src/terminal/gatewayDuplex.ts + core
+    gatewayTransport.ts): the FIRST frame the browser sends is ONE text auth
+    frame — exactly {type, v, token, device_id}, its device the dialed URL's
+    device, its token a signature-VERIFIED live scoped broker credential;
+    EVERY other sent frame is binary; at most ONE received text frame and it
+    is the ready advisory (any text after the handshake is a protocol
+    violation the transport itself tears down). Nothing about the scan
+    tolerates 'other text frames somewhere'."""
+    assert rec.sent, f'{where}: the gateway socket carried no sent frames'
+    assert rec.sent[0][0] and isinstance(rec.sent[0][1], str), (
+        f'{where}: the first sent frame is not the text auth frame')
+    auth = rec.sent[0][1]
+    assert auth.startswith('{"type":"auth"'), f'{where}: the first sent frame is not the auth frame'
+    sent_texts = [p for t, p in rec.sent if t]
+    assert len(sent_texts) == 1, (
+        f'{where}: {len(sent_texts)} sent TEXT frames (the contract is exactly the auth frame, binary SSH after)')
+    frame = json.loads(auth)
+    assert set(frame) == {'type', 'v', 'token', 'device_id'}, (
+        f'{where}: the auth frame keys are not exactly type/v/token/device_id: {sorted(frame)}')
+    assert frame['v'] == 1 and frame['device_id'], frame
+    url_device = urlsplit(rec.url).path.rstrip('/').split('/')[-2]
+    assert frame['device_id'] == url_device, (
+        f'{where}: the auth frame device {frame["device_id"]!r} is not the dialed device {url_device!r}')
+    assert_scoped_token(frame['token'], where)
+    readys = [p for t, p in rec.received if t]
+    assert len(readys) <= 1, (
+        f'{where}: {len(readys)} received TEXT frames (the contract is at most the one ready advisory)')
+    for p in readys:
+        parsed = json.loads(p)
+        assert parsed.get('type') == 'ready', (
+            f'{where}: a received TEXT frame is not the ready advisory: {sorted(parsed)}')
+
+
+def gateway_socket_frame_control() -> None:
+    """The SAME frame-contract path fed poisoned recorder contents (the
+    poisoned-auth-frame control for THIS fixture): a second otherwise-valid
+    auth frame, sign-in text after the auth, a binary frame before the
+    auth, a wrong device, an extra key, a corrupted signature and an
+    error-type received frame — every one must refuse; the honest shape
+    must pass."""
+    import gateway_fixture_broker as broker_mod
+
+    device = sorted(KNOWN_DEVICES)[0] if KNOWN_DEVICES else 'dev-e2e'
+    url = f'{GATEWAY_URL}/api/v1/hosts/{device}/ssh'
+    good_token = broker_mod.mint_scoped_token(BROKER_URL)['token']
+    auth = json.dumps({'type': 'auth', 'v': 1, 'token': good_token, 'device_id': device},
+                      separators=(',', ':'))
+    ready = json.dumps({'type': 'ready', 'v': 1, 'device_id': device,
+                        'ssh_host_key': 'ssh-ed25519 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY'}, separators=(',', ':'))
+
+    def honest_record() -> SocketRecord:
+        rec = SocketRecord(url)
+        rec.sent.append((True, auth))
+        rec.sent.append((False, b'\x16\x03\x01ssh-client-bytes'))
+        rec.received.append((True, ready))
+        rec.received.append((False, b'\x00\x0bssh-server-bytes'))
+        return rec
+
+    assert_gateway_socket_frames(honest_record(), 'frame-control')  # the honest shape accepted
+
+    def poisoned_record(build) -> SocketRecord:
+        rec = honest_record()
+        build(rec)
+        return rec
+
+    # a corrupted-SIGNATURE token: flip a real signature byte (the last base64
+    # char can be padding bits only — a flip there is the same signature)
+    _h, _p, _s = good_token.split('.')
+    _sig = bytearray(base64.urlsafe_b64decode(_b64_pad(_s)))
+    _sig[0] ^= 0xFF
+    bad_token = '.'.join([_h, _p, base64.urlsafe_b64encode(bytes(_sig)).rstrip(b'=').decode()])
+    wrong_device = json.dumps({'type': 'auth', 'v': 1, 'token': good_token, 'device_id': 'other-device'},
+                              separators=(',', ':'))
+    poisoned = [
+        ('a second otherwise-valid auth frame',
+         lambda r: r.sent.append((True, auth))),
+        ('sign-in text after the auth frame',
+         lambda r: r.sent.append((True, f'{{"type":"auth","token":"{GOOGLE_TOKEN}"}}'))),
+        ('a binary frame before the auth frame',
+         lambda r: r.sent.insert(0, (False, b'\x00\x00'))),
+        ('an auth frame naming the WRONG device',
+         lambda r: r.sent.__setitem__(0, (True, wrong_device))),
+        ('an auth frame with an extra key',
+         lambda r: r.sent.__setitem__(0, (True, json.dumps(
+             {'type': 'auth', 'v': 1, 'token': good_token, 'device_id': device, 'extra': 'x'},
+             separators=(',', ':'))))),
+        ('an auth frame whose token signature is corrupted',
+         lambda r: r.sent.__setitem__(0, (True, json.dumps(
+             {'type': 'auth', 'v': 1, 'token': bad_token, 'device_id': device},
+             separators=(',', ':'))))),
+        ('an error frame received where only the ready advisory may be',
+         lambda r: r.received.append((True, json.dumps(
+             {'type': 'error', 'v': 1, 'code': 'unauthorized', 'message': 'x'}, separators=(',', ':'))))),
+        ('a second ready advisory',
+         lambda r: r.received.append((True, ready))),
+    ]
+    for what, build in poisoned:
+        threw = False
+        try:
+            assert_gateway_socket_frames(poisoned_record(build), 'frame-control')
+        except AssertionError:
+            threw = True
+        assert threw, f'the gateway frame contract FAILED to reject {what}'
+    print('prod gateway frame-contract control: honest auth/ready shape accepted; '
+          'poisoned auth/text/order/device/key/signature frames refused')
 
 
 def step(msg: str) -> None:
@@ -501,16 +827,23 @@ HTTP_TASKS: list = []
 async def capture_request(req) -> dict:
     """Complete capture of one request: method, URL, ALL headers (the
     duplicate-preserving array too — the property view omits
-    security/cookie headers), body."""
+    security/cookie headers), body. The async Playwright Request exposes
+    BOTH header views as async METHODS (a property read is not the array and
+    must not silently shrink the capture). FAILS CLOSED: any capture error
+    propagates to the final gather, which refuses the whole run — a request
+    whose complete headers could not be read is a custody hole, never an
+    empty dict. Each protocol call is time-bounded so a wedged request
+    surfaces as a named failure instead of hanging the final scan."""
     try:
-        headers = await req.all_headers()
-    except Exception:  # noqa: BLE001 — a destroyed request still gets scanned on its array
-        headers = {}
+        headers = await asyncio.wait_for(req.all_headers(), 30)
+        header_entries = [(h['name'], h['value']) for h in await asyncio.wait_for(req.headers_array(), 30)]
+    except Exception as e:  # noqa: BLE001 — re-raised WITH context: fail closed
+        raise RuntimeError(f'complete header capture failed for {safe_url(req.url)}: {type(e).__name__}: {e}') from e
     return {
         'method': req.method,
         'url': req.url,
         'headers': headers,
-        'header_entries': [(h['name'], h['value']) for h in req.headers_array],
+        'header_entries': header_entries,
         'body': req.post_data or '',
     }
 
@@ -758,15 +1091,79 @@ def fp_for(mode: str, keytype: str) -> str:
 
 
 def sshd_accepted(container: str) -> list:
-    out = subprocess.run(
+    """The container's ACTUAL accepted-publickey log lines. An UNREADABLE log
+    raises — an empty read is only honest when the log was really read; a
+    silent [] must never stand in for zero accepted auth."""
+    probe = subprocess.run(
         ['docker', 'exec', container, 'sh', '-c',
          "grep 'Accepted publickey' /var/log/sshd.log 2>/dev/null || journalctl -u sshd 2>/dev/null || true"],
         capture_output=True, text=True,
     )
-    if out.stdout.strip():
-        return out.stdout.strip().splitlines()
+    if probe.returncode != 0:
+        raise AssertionError(
+            f'{container}: the sshd log is not readable (docker exec failed: {probe.stderr.strip()[:120]}) — '
+            f'the zero-auth oracle refuses an unreadable log')
+    if probe.stdout.strip():
+        return probe.stdout.strip().splitlines()
     logs = subprocess.run(['docker', 'logs', container], capture_output=True, text=True)
+    if logs.returncode != 0:
+        raise AssertionError(f'{container}: neither the in-container sshd log nor docker logs are readable')
     return [l for l in (logs.stdout + logs.stderr).splitlines() if 'Accepted publickey' in l]
+
+
+def zero_auth_snapshot_or_raise(run_id: str, watched: tuple) -> dict:
+    """Per-watched-fixture accepted-publickey counts, with a REAL positive
+    calibration: every watched server must ALREADY show at least one accepted
+    public-key auth (the fleet readiness probe's own SSH login) — proving the
+    log read is healthy and actually sees auth, so a broken read can never
+    masquerade as zero."""
+    snap = {}
+    for m in watched:
+        lines = sshd_accepted(f'{run_id}-{m}')
+        assert lines, (
+            f'{m}: the sshd log read is healthy but shows ZERO accepted public-key auth — the readiness '
+            f'probe login must already be visible; an empty read cannot stand in for zero')
+        snap[m] = len(lines)
+    return snap
+
+
+def assert_zero_added_auth(before: dict, after: dict, watched: tuple) -> None:
+    """The calibrated zero-auth oracle: for EVERY watched fixture server the
+    accepted-publickey count must be IDENTICAL across the negative legs
+    (server-side truth: the negatives die before userauth or before any
+    socket). Covers the whole watched set — a missing snapshot entry is a
+    failed oracle, not an unchecked server."""
+    assert set(before) == set(watched) and set(after) == set(watched), (
+        f'the zero-auth snapshots do not cover every watched fixture: before={sorted(before)} '
+        f'after={sorted(after)} watched={sorted(watched)}')
+    for m in watched:
+        assert before[m] == after[m], (
+            f'a negative leg produced accepted userauth on {m}: before={before[m]} after={after[m]}')
+
+
+def zero_auth_oracle_control() -> None:
+    """The zero-auth oracle is LOAD-BEARING: an added accepted auth on any
+    watched fixture — and a snapshot missing a watched fixture — must both
+    be caught."""
+    watched = ('multi', 'reverse')
+    before = {m: 3 for m in watched}
+    assert_zero_added_auth(before, dict(before), watched)  # unchanged accepted
+    for m in watched:
+        after = dict(before)
+        after[m] += 1
+        threw = False
+        try:
+            assert_zero_added_auth(before, after, watched)
+        except AssertionError:
+            threw = True
+        assert threw, f'the zero-auth oracle FAILED to catch an added accepted auth on {m}'
+    threw = False
+    try:
+        assert_zero_added_auth(before, dict(before), ('multi', 'reverse', 'edrsa'))
+    except AssertionError:
+        threw = True
+    assert threw, 'the zero-auth oracle FAILED to require coverage of every watched fixture'
+    print('prod zero-auth oracle control: added accepted auth and missing fixture coverage both caught')
 
 
 async def main() -> int:
@@ -774,8 +1171,15 @@ async def main() -> int:
     custody_negative_control()
     print('custody negative control: injected credentials are rejected by the oracle')
     http_custody_negative_control_prod()
+    await http_capture_control_prod()
     clear_ack_negative_control()
+    scoped_token_verification_control()
+    gateway_socket_frame_control()
+    zero_auth_oracle_control()
     print('prod captured-HTTP/URL policy control + CLEAR-ack matcher control: poisoned placements rejected, honest surfaces accepted')
+    if OFFLINE_ONLY:
+        print('offline controls complete (no browser, no network, no Docker)')
+        return 0
 
     # NOTE: the sync fake — a minimal per-slot opaque store (the vault is not
     # the transport under proof; its custody is the web harness's proven leg).
@@ -938,8 +1342,8 @@ window.google = { accounts: { id: {
     # the sshd logs' actual Accepted lines below (server-side truth, not
     # client-side inference).
     zero_auth_watch = ('edrsa', 'sshrsa', 'multi', 'reverse')
-    zero_auth_snapshot = {m: len(sshd_accepted(f"{FIX['runId']}-{m}")) for m in zero_auth_watch}
-    print(f'zero-auth oracle snapshot (accepted userauth lines): {zero_auth_snapshot}')
+    zero_auth_snapshot = zero_auth_snapshot_or_raise(FIX['runId'], zero_auth_watch)
+    print(f'zero-auth oracle snapshot (accepted userauth lines, all reads healthy): {zero_auth_snapshot}')
 
     # --- the negative legs (same context) -----------------------------------
     step('gateway mode dials complete; starting the in-browser negatives')
@@ -1073,8 +1477,11 @@ window.google = { accounts: { id: {
     print(f'broken-broker refusal surfaced (zero gateway sockets): {broker_error[:80]}')
     await ctx2.close()
 
-    # --- wire-level assertions ---------------------------------------------
-    step('broken-broker leg complete; running the wire-level assertions')
+    # --- wire assertions I: socket counts + the calibrated zero-auth oracle -
+    # The tampered-advisory leg below re-dials gw-edrsa SUCCESSFULLY (a
+    # positive — it adds one accepted userauth on that server), so the
+    # NEGATIVES' zero-added-auth proof must close here, before that leg.
+    step('broken-broker leg complete; running the pre-tamper wire assertions')
     gw_recs = gateway_sockets(main_store)
     legacy_recs = legacy_sockets(main_store)
     # 5 positive gateway dials + 1 wrong-pin attempt = exactly 6 sockets; the
@@ -1085,86 +1492,12 @@ window.google = { accounts: { id: {
     # The calibrated zero-auth oracle: the keyless, wrong-pin, ECDSA-key,
     # ssh-rsa-kex and broken-broker legs must have added ZERO accepted
     # userauth lines on ANY watched server (the negatives die before
-    # userauth or before any socket at all — server-side truth).
-    zero_auth_after = {m: len(sshd_accepted(f"{FIX['runId']}-{m}")) for m in zero_auth_watch}
-    assert zero_auth_after == zero_auth_snapshot, (
-        f'a negative leg produced accepted userauth server-side: '
-        f'before={zero_auth_snapshot} after={zero_auth_after}'
-    )
+    # userauth or before any socket at all — server-side truth, every read
+    # proven healthy by the snapshot's positive calibration).
+    zero_auth_after = zero_auth_snapshot_or_raise(FIX['runId'], zero_auth_watch)
+    assert_zero_added_auth(zero_auth_snapshot, zero_auth_after, zero_auth_watch)
     print(f'zero-auth oracle: negatives added no accepted userauth on {sorted(zero_auth_watch)} '
           f'({zero_auth_after})')
-
-    # Custody across EVERY surface the browser touched.
-    assert_wire_custody(legacy_recs[0].all_binary(), legacy_recs[0].all_text(), 'direct-relay')
-    for rec in gw_recs:
-        assert_wire_custody(rec.all_binary(), rec.all_text(), f'gateway {safe_url(rec.url)}')
-    for store, label in ((main_store, 'main'), (store2, 'broken-broker')):
-        for rec in store:
-            # The recorded dial URLs through the ONE structured URL policy:
-            # exact surfaces, the legacy relay's exact query shape with the
-            # sign-in as the ONE token field value, no credential anywhere
-            # else (raw or decoded), unknown origins refused.
-            assert_url_custody_prod(rec.url, f'{label} socket')
-
-    # Auth frames: exactly one TEXT auth frame per gateway socket; it carries
-    # a live broker-scoped RS256 token, never the sign-in. No text frame
-    # after it (binary-only SSH stream).
-    for rec in gw_recs:
-        auths = [p for t, p in rec.sent if t and p.startswith('{"type":"auth"')]
-        assert len(auths) == 1, f'{safe_url(rec.url)}: auth frames {len(auths)}'
-        frame = json.loads(auths[0])
-        assert frame['device_id'] and frame['v'] == 1
-        assert_scoped_token(frame['token'], rec.url)
-        readys = [p for t, p in rec.received if t]
-        assert all(json.loads(p).get('type') == 'ready' for p in readys), readys
-        assert len(readys) <= 1
-    # The wrong-pin socket got ready (advisory) but never a session: its SSH
-    # stream died at the pin refusal — it carries NO exec/shell data beyond
-    # the kex. Positive sockets DID carry real traffic both ways.
-    # Socket order: the four positive dials, then wrong-pin (opened, ready,
-    # died at the pin), then the ssh-rsa finding (opened, ready, died at the
-    # kex signature verification).
-    for rec in gw_recs[:4]:
-        assert len(rec.all_binary()) > 200 and rec.received, f'{safe_url(rec.url)}: no real SSH traffic'
-    wrongpin_rec = gw_recs[4]
-    assert wrongpin_rec.all_text() or wrongpin_rec.all_binary()
-    sshrsa_rec = gw_recs[5]
-    assert sshrsa_rec.all_binary(), 'the ssh-rsa dial died before any SSH bytes flowed'
-
-    # HTTP surfaces through the ONE captured-HTTP policy: every request the
-    # browser issued (all three contexts) is awaited and scanned — URL rules,
-    # methods, the EXACT Bearer only on the exact account surfaces, every
-    # header value and body against the full secret set. The capture must
-    # really have SEEN the account surfaces (a positive calibration — a
-    # capture that silently missed the broker exchange would prove nothing).
-    http_capture_results = list(await asyncio.gather(*HTTP_TASKS, return_exceptions=True))
-    http_captures = [t for t in http_capture_results if isinstance(t, dict)]
-    failed_captures = [t for t in http_capture_results if not isinstance(t, dict)]
-    assert not failed_captures, f'{len(failed_captures)} request captures failed: {failed_captures[:2]}'
-    for cap in http_captures:
-        assert_http_request_custody_prod(cap['method'], cap['url'], cap['headers'], cap['body'],
-                                         'captured HTTP', header_entries=cap['header_entries'])
-    brokers = [c for c in http_captures if c['url'].startswith(BROKER_URL) and c['url'].endswith('/gateway/token')]
-    assert brokers and all(c['method'] == 'POST' for c in brokers), (
-        f'the broker exchange was never captured: {[c["url"] for c in http_captures][:5]}'
-    )
-    assert any(c['method'] == 'PUT' and '/settings/keys' in c['url'] for c in http_captures), \
-        'the keys-slot sync PUT was never captured'
-    print(f'captured-HTTP policy: {len(http_captures)} requests scanned '
-          f'(broker POSTs: {len(brokers)}); zero raw or decoded credential placements')
-
-    # Exec markers documented from the HOST side: the sshd logs' actual
-    # Accepted-publickey lines (per mode, incl. the RSA SHA2 negotiation).
-    receipt_sshd = {}
-    for mode, spec in FIX['modes'].items():
-        lines = sshd_accepted(f"{FIX['runId']}-{mode}")
-        receipt_sshd[mode] = lines
-        assert lines, f'{mode}: the sshd log shows no accepted public-key auth'
-    assert any('rsa-sha2-512' in l or 'rsa-sha2-256' in l for l in receipt_sshd['rsaonly']), (
-        f"rsaonly: the browser did not negotiate an RSA SHA2 userauth: {receipt_sshd['rsaonly']}"
-    )
-    with open(os.path.join(WORK, 'sshd-accepted.json'), 'w') as fh:
-        json.dump(receipt_sshd, fh, indent=1)
 
     # --- production verifier negatives (server side, real WS route) --------
     step('wire assertions complete; probing the production verifier negatives')
@@ -1279,15 +1612,97 @@ window.google = { accounts: { id: {
     print('tampered-advisory leg: ready advertised the WRONG (rsa) key — the pin held, the dial succeeded')
     await tamper_ctx.close()
 
+    # --- FINAL custody scan: ALL THREE contexts, post-quiescence ------------
+    # Every context is now closed, so no late frame, no late HTTP task and no
+    # third-context traffic can escape: this ONE pass scans every socket of
+    # every store (dial URL policy; binary AND text, sent AND received),
+    # every auth frame, and every captured HTTP request of all three
+    # contexts (joined fail-closed).
+    step('tampered-advisory leg complete; final custody scan over ALL THREE browser contexts (post-quiescence)')
+    tampered_recs = [s for s in store3 if urlsplit(GATEWAY_URL).netloc in s.url]
+    assert len(tampered_recs) == 1, f'expected exactly 1 tampered-advisory gateway socket, saw {len(tampered_recs)}'
+    for store, label in ((main_store, 'main'), (store2, 'broken-broker'), (store3, 'tampered-advisory')):
+        for rec in store:
+            # The recorded dial URL through the ONE structured URL policy:
+            # exact scheme/host/effective-port/path/query contracts, the
+            # legacy relay's exact query shape with the sign-in as the ONE
+            # token field value, no credential anywhere else (raw or
+            # decoded), unknown origins refused.
+            assert_url_custody_prod(rec.url, f'{label} socket')
+            assert_wire_custody(rec.all_binary(), rec.all_text(), f'{label} {safe_url(rec.url)}')
+
+    # Auth frames: exactly one TEXT auth frame per gateway socket (the FIRST
+    # frame sent), exact shape, its device the dialed URL's device, its token
+    # a signature-VERIFIED live broker-scoped RS256 credential; every other
+    # sent frame binary; at most the one ready advisory back. Includes the
+    # tampered-advisory context's socket.
+    for rec in gw_recs + tampered_recs:
+        assert_gateway_socket_frames(rec, f'gateway {safe_url(rec.url)}')
+    # The wrong-pin socket got ready (advisory) but never a session: its SSH
+    # stream died at the pin refusal — it carries NO exec/shell data beyond
+    # the kex. Positive sockets DID carry real traffic both ways. Socket
+    # order: the four positive dials, then wrong-pin (opened, ready, died at
+    # the pin), then the ssh-rsa finding (opened, ready, died at the kex
+    # signature verification).
+    for rec in gw_recs[:4]:
+        assert len(rec.all_binary()) > 200 and rec.received, f'{safe_url(rec.url)}: no real SSH traffic'
+    wrongpin_rec = gw_recs[4]
+    assert wrongpin_rec.all_text() or wrongpin_rec.all_binary()
+    sshrsa_rec = gw_recs[5]
+    assert sshrsa_rec.all_binary(), 'the ssh-rsa dial died before any SSH bytes flowed'
+    assert len(tampered_recs[0].all_binary()) > 200 and tampered_recs[0].received, \
+        'the tampered-advisory redial carried no real SSH traffic'
+
+    # HTTP surfaces through the ONE captured-HTTP policy: every request ALL
+    # THREE contexts issued is awaited and scanned — URL rules, methods, the
+    # EXACT Bearer only on the exact account surfaces, every header value
+    # (merged view + duplicate-preserving array) and body against the full
+    # secret set. A capture failure FAILS the run here (never a silently
+    # shrunken capture). The positive calibrations prove the capture really
+    # SAW the account surfaces (a capture that silently missed the broker
+    # exchange would prove nothing).
+    http_capture_results = list(await asyncio.gather(*HTTP_TASKS, return_exceptions=True))
+    http_captures = [t for t in http_capture_results if isinstance(t, dict)]
+    failed_captures = [t for t in http_capture_results if not isinstance(t, dict)]
+    assert not failed_captures, (
+        f'{len(failed_captures)} request captures FAILED (fail-closed): {failed_captures[:2]}')
+    for cap in http_captures:
+        assert_http_request_custody_prod(cap['method'], cap['url'], cap['headers'], cap['body'],
+                                         'captured HTTP', header_entries=cap['header_entries'])
+    brokers = [c for c in http_captures if c['url'].startswith(BROKER_URL) and c['url'].endswith('/gateway/token')]
+    assert brokers and all(c['method'] == 'POST' for c in brokers), (
+        f'the broker exchange was never captured: {[c["url"] for c in http_captures][:5]}'
+    )
+    assert any(c['method'] == 'PUT' and '/settings/keys' in c['url'] for c in http_captures), \
+        'the keys-slot sync PUT was never captured'
+    print(f'captured-HTTP policy: {len(http_captures)} requests across ALL THREE contexts scanned '
+          f'(broker POSTs: {len(brokers)}); zero raw or decoded credential placements')
+
+    # Exec markers documented from the HOST side: the sshd logs' actual
+    # Accepted-publickey lines (per mode, incl. the RSA SHA2 negotiation).
+    receipt_sshd = {}
+    for mode, spec in FIX['modes'].items():
+        lines = sshd_accepted(f"{FIX['runId']}-{mode}")
+        receipt_sshd[mode] = lines
+        assert lines, f'{mode}: the sshd log shows no accepted public-key auth'
+    assert any('rsa-sha2-512' in l or 'rsa-sha2-256' in l for l in receipt_sshd['rsaonly']), (
+        f"rsaonly: the browser did not negotiate an RSA SHA2 userauth: {receipt_sshd['rsaonly']}"
+    )
+    with open(os.path.join(WORK, 'sshd-accepted.json'), 'w') as fh:
+        json.dump(receipt_sshd, fh, indent=1)
 
     # sanity: no console errors accumulated in the main flow
     assert CONSOLE_ERRORS == [], CONSOLE_ERRORS
 
     print('COMBINED GATEWAY PROOF PASS')
-    print(f"  gateway sockets: {len(gw_recs)} (5 dial modes + wrong-pin refusal); direct sockets: {len(legacy_recs)}")
+    print(f"  gateway sockets: {len(gw_recs)} (4 dial modes + wrong-pin refusal) + 1 tampered-advisory redial; "
+          f"direct sockets: {len(legacy_recs)}")
     print(f"  dial results: {sorted(dial_results)}")
-    print(f"  custody: every frame of every socket scanned (binary+text) against {len(SECRETS_AS_TEXT)} secret forms + full key bodies")
-    print('  auth frames: exactly one per gateway socket, each a live scoped RS256 broker token (verified), never the sign-in')
+    print(f"  custody: ALL THREE contexts (main, broken-broker, tampered-advisory), post-quiescence — every socket "
+          f"scanned (dial URLs through the exact-surface policy; binary+text, sent+received) against "
+          f"{len(SECRETS_AS_TEXT)} secret forms + full key bodies; {len(http_captures)} captured requests scanned")
+    print('  auth frames: exactly one per gateway socket (incl. the tampered redial), each the FIRST frame, '
+          'exact-shape, RS256-SIGNATURE-VERIFIED against the fixture broker key, never the sign-in')
     return 0
 
 

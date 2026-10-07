@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
 # Combined shipping-contract proof: the REAL production Vite browser bundle
 # (normal UI/config paths — connection.ts / webApi / pin store, no transport
-# adapters, no fallbacks) against the REAL Go gateway built from the pinned
-# accepted pocketshell-gateway source (registry-enabled: production routingauth
-# JWT verification through the local broker fixture's JWKS), the REAL
-# pocketshell-link home agent bridging its LOOPBACK sshd, and a multi-key
-# OpenSSH fixture fleet (six host-key modes matching the browser host-key
-# algorithm contract: ssh-ed25519 > rsa-sha2-512 > rsa-sha2-256 > ssh-rsa).
+# adapters, no fallbacks) against the REAL Go gateway built from the ROOT
+# ACCEPTED pocketshell-gateway revision (registry-enabled: production
+# routingauth JWT verification through the local broker fixture's JWKS), the
+# REAL pocketshell-link home agent bridging its LOOPBACK sshd, and a
+# multi-key OpenSSH fixture fleet (six host-key modes matching the browser
+# host-key algorithm contract: ssh-ed25519 > rsa-sha2-512 > rsa-sha2-256 >
+# ssh-rsa).
+#
+# ACCEPTED-REVISION PROTOCOL (fail-closed, enforced HERE — not merely
+# logged): the run starts by reading the ROOT ACCEPTANCE MARKER
+# (go-opus-followup-root-accepted.txt), taking the EXACT 40-hex SHA from its
+# FIRST LINE. Missing marker => the composed run is PENDING (exit 3, no
+# old-runtime substitution, no hybrid). The gateway repo's HEAD must EQUAL
+# the marker SHA. The binaries are built from a FRESH DETACHED CHECKOUT of
+# exactly that committed revision (never from a mutable working tree), and
+# BOTH binaries must carry the EMBEDDED VCS stamps of that revision
+# (vcs.revision == marker SHA, vcs.modified == false, vcs.time == the
+# commit's time) — `go build -buildvcs=true` refuses to build unstamped.
+# The pinned core checkout must be exactly the accepted published revision,
+# clean, and be the checkout the production web build ACTUALLY resolves
+# (node_modules/@pocketshell/core), and the web worktree must be clean.
 #
 # What runs, concretely:
 #   1. the broker fixture (tests/e2e/gateway_fixture_broker.py): a LOCAL
@@ -15,29 +30,42 @@
 #      the live Cloud authorizer; the tokens it mints are verified by the
 #      gateway's PRODUCTION routingauth verifier (RS256, exact issuer,
 #      aud/scope/exp claims, JWKS).
-#   2. gateway instance A from the pinned gateway source WITH -registry
-#      (identity + tunnel enabled, zero dev-auth flags — the shipping auth
-#      posture, plain-HTTP listener for the lab only) and instance B serving
-#      the legacy browser-direct relay under its DOCUMENTED dev posture
+#   2. gateway instance A from the ACCEPTED source WITH -registry (identity
+#      + tunnel enabled, zero dev-auth flags — the shipping auth posture,
+#      plain-HTTP listener for the lab only) and instance B serving the
+#      legacy browser-direct relay under its DOCUMENTED dev posture
 #      (-dev-allow-any-token -dev-allow-private-hosts, no registry — the
 #      legacy direct transport cannot verify a fixture sign-in without a
 #      live Google JWKS, so the direct leg's authorization is explicitly a
 #      dev posture, not a production claim).
 #   3. pocketshell-link enroll (broker token on stdin, --expect-host-key
 #      pinned out of band) + run per dial-able host-key mode; the ECDSA-only
-#      mode's enrollment must REFUSE honestly before any HTTP.
+#      mode's enrollment must REFUSE honestly — asserted against the run's
+#      OWN fixtures: zero broker requests on record, no registry device
+#      record, no agent state.
 #   4. the production browser bundle served by vite preview, driven by
 #      Playwright with READ-ONLY WebSocket observation (page.on('websocket')
 #      frame events — no route interception on any transport) through
 #      tests/e2e/e2e_gateway_prod.py.
 #
 # Everything is run-scoped: uniquely named containers, freshly allocated
-# ports, a run-scoped registry state file under
+# ports (reservation sockets are closed before the listeners start — this is
+# ALLOCATION INTENT, never held ownership; a lost race fails the bind health
+# check and nothing ever kills another actor's process — cleanup touches
+# only this run's exact PIDs), a run-scoped registry state file under
 # /var/lib/pocketshell-relay/ (the production default base dir), an
 # ephemeral broker signing key, ephemeral SSH keys. Peer containers, ports
-# and daemons are never touched; cleanup removes only this run's objects.
+# and daemons are never touched. CLEANUP IS VERIFIED AND HONEST: each owned
+# process is killed by its exact PID (including the restarted gateway A via
+# its pid file) and awaited to absence, containers are confirmed removed,
+# the registry file and the build worktree are confirmed gone, and every
+# cleanup failure is reported — a run whose own objects survive cannot exit
+# 0.
 #
 # Usage: tests/e2e/run-gateway-e2e.sh
+#        GATEWAY_E2E_PREFLIGHT_ONLY=1 ... (validate marker/revision/builds,
+#        then stop before any fixture starts — a plumbing rehearsal, NOT a
+#        run and not an acceptance)
 # Requires: docker, go (for the gateway build), /usr/bin/python3 with
 # playwright + cryptography + websockets, ELECTRON_REPO pointing at the
 # desktop checkout that owns tests-docker/ (default: $HOME/git/pocketshell-desktop).
@@ -46,33 +74,128 @@ cd "$(dirname "$0")/../.."
 
 DESKTOP_REPO="${ELECTRON_REPO:-$HOME/git/pocketshell-desktop}"
 GATEWAY_REPO="${GATEWAY_REPO:-$HOME/git/pocketshell-gateway}"
-WEB_COMMIT="$(git rev-parse HEAD)"
+CORE_DIR="${CORE_DIR:-$HOME/git/gateway-browser-integrated-workspace/pocketshell-core}"
+CORE_PIN='4096fc569e207cb2b245e84b3a1a8acf2c30894b'
+MARKER_FILE="${GATEWAY_ACCEPT_MARKER:-/home/alexey/tmp/pocketshell-gateway/go-opus-followup-root-accepted.txt}"
+
+# --- 0. the root-accepted gateway revision (FIRST — everything below is
+#        unreachable without it; no old runtime, no hybrid substitution) ----
+if [[ ! -r "$MARKER_FILE" ]]; then
+  echo "PENDING: root acceptance marker $MARKER_FILE does not exist — the composed browser+Go run stays pending; refusing to substitute any other gateway revision" >&2
+  exit 3
+fi
+MARKER_LINE="$(head -n 1 "$MARKER_FILE")"
+MARKER_SHA="$(printf '%s\n' "$MARKER_LINE" | grep -oE '[0-9a-f]{40}' | head -n 1 || true)"
+[[ -n "$MARKER_SHA" ]] || {
+  echo "REFUSING: the root acceptance marker's FIRST LINE carries no exact 40-hex SHA: $(head -c 120 "$MARKER_FILE")" >&2
+  exit 1
+}
+git -C "$GATEWAY_REPO" cat-file -e "$MARKER_SHA^{commit}" 2>/dev/null || {
+  echo "REFUSING: marker SHA $MARKER_SHA is not a commit of $GATEWAY_REPO" >&2
+  exit 1
+}
 GW_COMMIT="$(git -C "$GATEWAY_REPO" rev-parse HEAD)"
-CORE_COMMIT="$(git -C "$HOME/git/gateway-browser-integrated-workspace/pocketshell-core" rev-parse HEAD)"
+[[ "$GW_COMMIT" == "$MARKER_SHA" ]] || {
+  echo "REFUSING: gateway repo HEAD $GW_COMMIT != root-accepted marker SHA $MARKER_SHA — check out the accepted revision first" >&2
+  exit 1
+}
+
+WEB_COMMIT="$(git rev-parse HEAD)"
+# The shipping bundle is built from the COMMITTED tree: no tracked dirt, and
+# no untracked build inputs — the one tolerated untracked path is the python
+# bytecode cache the fixture harness itself generates under tests/e2e/.
+[[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
+  echo "REFUSING: the web worktree has uncommitted tracked changes — the shipping bundle must be built from the committed accepted tree" >&2
+  exit 1
+}
+WEB_UNTRACKED="$(git ls-files --others --exclude-standard | grep -v '^tests/e2e/__pycache__/' || true)"
+[[ -z "$WEB_UNTRACKED" ]] || {
+  echo "REFUSING: untracked build inputs are present in the web tree:" >&2
+  echo "$WEB_UNTRACKED" | head -10 >&2
+  exit 1
+}
+
+# The pinned core dependency: exact accepted revision, clean, and the
+# checkout the production web build ACTUALLY resolves.
+CORE_COMMIT="$(git -C "$CORE_DIR" rev-parse HEAD)"
+[[ "$CORE_COMMIT" == "$CORE_PIN" ]] || {
+  echo "REFUSING: core checkout $CORE_DIR is at $CORE_COMMIT, the accepted published pin is $CORE_PIN" >&2
+  exit 1
+}
+[[ -z "$(git -C "$CORE_DIR" status --porcelain)" ]] || {
+  echo "REFUSING: core checkout $CORE_DIR is dirty" >&2
+  exit 1
+}
+RESOLVED_CORE="$(/usr/bin/python3 -c "import os; print(os.path.realpath('node_modules/@pocketshell/core'))")"
+[[ "$RESOLVED_CORE" == "$(readlink -f "$CORE_DIR")" ]] || {
+  echo "REFUSING: the web build resolves @pocketshell/core from $RESOLVED_CORE, not the pinned checkout $CORE_DIR" >&2
+  exit 1
+}
 
 WORK="$(mktemp -d /tmp/ps-gw-e2e.XXXXXX)"
 echo "e2e workdir: $WORK"
 RUNID="psgwe2e-$$"
 FAIL_MARKER="$WORK/FAILED"
+CLEANUP_FAILURES=()
+GW_WORKTREE=""
+
+kill_and_wait() { # pid name — EXACT owned process, awaited to absence
+  local pid="$1" name="$2" i
+  [[ -n "$pid" ]] || return 0
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    for i in $(seq 1 20); do
+      kill -0 "$pid" 2>/dev/null || return 0
+      sleep 0.25
+    done
+    kill -9 "$pid" 2>/dev/null || true
+    sleep 0.5
+    kill -0 "$pid" 2>/dev/null && CLEANUP_FAILURES+=("$name pid $pid still alive after SIGKILL")
+  fi
+}
 
 cleanup() {
   local code=$?
   if [[ $code -ne 0 ]]; then echo "FAILED" > "$FAIL_MARKER"; fi
-  [[ -n "${PREVIEW_PID:-}" ]] && kill "$PREVIEW_PID" 2>/dev/null || true
-  [[ -n "${BROKER_PID:-}" ]] && kill "$BROKER_PID" 2>/dev/null || true
-  [[ -n "${GWA_PID:-}" ]] && kill "$GWA_PID" 2>/dev/null || true
-  [[ -n "${GWB_PID:-}" ]] && kill "$GWB_PID" 2>/dev/null || true
-  for agentpid in "${AGENT_PIDS[@]:-}"; do kill "$agentpid" 2>/dev/null || true; done
-  # The advisory-tamper leg may have restarted gateway A under a new PID —
-  # its command line carries this run's registry path.
-  [[ -n "${REGISTRY_FILE:-}" ]] && pkill -f "$REGISTRY_FILE" 2>/dev/null || true
+  # The advisory-tamper leg may have restarted gateway A — its EXACT new PID
+  # is in this run's pid file (never a command-line regex sweep).
+  if [[ -n "${GWA_PIDFILE:-}" && -f "$GWA_PIDFILE" ]]; then
+    kill_and_wait "$(cat "$GWA_PIDFILE" 2>/dev/null || true)" "restarted gateway A"
+  fi
+  kill_and_wait "${PREVIEW_PID:-}" "vite preview"
+  kill_and_wait "${BROKER_PID:-}" "broker fixture"
+  kill_and_wait "${GWA_PID:-}" "gateway A"
+  kill_and_wait "${GWB_PID:-}" "gateway B"
+  local agentpid
+  for agentpid in "${AGENT_PIDS[@]:-}"; do kill_and_wait "$agentpid" "home agent"; done
   # Preserve the sshd fleet's view (accepted/failed userauth lines) BEFORE
   # the containers go away — userauth failures are diagnosed from these.
+  local cname
   for cname in "${CONTAINERS[@]:-}"; do
-    docker logs "$cname" > "${WORK:-/tmp}/sshd-${cname}.log" 2>&1 || true
+    docker logs "$cname" > "${WORK:-/tmp}/sshd-${cname}.log" 2>&1 \
+      || CLEANUP_FAILURES+=("could not save sshd logs of $cname")
   done
-  for cname in "${CONTAINERS[@]:-}"; do docker rm -f "$cname" >/dev/null 2>&1 || true; done
-  [[ -n "${REGISTRY_FILE:-}" ]] && rm -f "$REGISTRY_FILE" || true
+  for cname in "${CONTAINERS[@]:-}"; do
+    docker rm -f "$cname" > /dev/null 2>&1 || CLEANUP_FAILURES+=("could not remove container $cname")
+  done
+  for cname in "${CONTAINERS[@]:-}"; do
+    docker inspect "$cname" > /dev/null 2>&1 && CLEANUP_FAILURES+=("container $cname still present after removal")
+  done
+  if [[ -n "${REGISTRY_FILE:-}" ]]; then
+    rm -f "$REGISTRY_FILE" 2>/dev/null || true
+    [[ -e "$REGISTRY_FILE" ]] && CLEANUP_FAILURES+=("registry file $REGISTRY_FILE still present")
+  fi
+  if [[ -n "$GW_WORKTREE" ]]; then
+    git -C "$GATEWAY_REPO" worktree remove --force "$GW_WORKTREE" > /dev/null 2>&1 || true
+    git -C "$GATEWAY_REPO" worktree list --porcelain 2>/dev/null | grep -q "$GW_WORKTREE" \
+      && CLEANUP_FAILURES+=("gateway build worktree $GW_WORKTREE still registered")
+  fi
+  if [[ ${#CLEANUP_FAILURES[@]} -gt 0 ]]; then
+    local f
+    echo "CLEANUP FAILURES (${#CLEANUP_FAILURES[@]}) — the run's own objects did not all go away:" >&2
+    for f in "${CLEANUP_FAILURES[@]}"; do echo "  - $f" >&2; done
+    [[ $code -eq 0 ]] && code=1
+  fi
   exit "$code"
 }
 trap cleanup EXIT
@@ -91,21 +214,63 @@ read -r BROKER_PORT BROKER_HTTPS_PORT GW_PORT GWB_PORT BASE_PORT SSH_MULTI SSH_R
   < <(free_ports 11)
 CONTAINERS=()
 AGENT_PIDS=()
+GWA_PIDFILE="$WORK/gateway-a.pid"
 
 # --- receipts: exactly what is under test -----------------------------------
+GW_SUBJECT="$(git -C "$GATEWAY_REPO" log -1 --format=%s "$MARKER_SHA" | head -c 80)"
 {
   echo "run: $RUNID"
-  echo "web commit: $WEB_COMMIT (branch gateway-browser-integrated; includes crypto eb9a6c8 series)"
-  echo "core pin commit: $CORE_COMMIT (pinned sibling; published-core check documented in the progress file)"
-  echo "gateway commit: $GW_COMMIT ($(git -C "$GATEWAY_REPO" log -1 --format=%s | head -c 80)...)"
+  echo "web commit: $WEB_COMMIT (branch gateway-browser-integrated; includes crypto eb9a6c8 series; worktree clean)"
+  echo "core pin commit: $CORE_COMMIT at $CORE_DIR (clean; web build resolves node_modules/@pocketshell/core -> $RESOLVED_CORE)"
+  echo "gateway ACCEPTED revision: $MARKER_SHA (root marker: $MARKER_FILE, first-line SHA; == HEAD at start: yes)"
+  echo "gateway accepted revision subject: $GW_SUBJECT"
   echo "ports: broker-http=$BROKER_PORT broker-https=$BROKER_HTTPS_PORT gateway=$GW_PORT legacy=$GWB_PORT preview=$BASE_PORT sshd=$SSH_MULTI,$SSH_REVERSE,$SSH_RSAONLY,$SSH_SSHRSA,$SSH_ECDSAONLY,$SSH_EDRSA"
 } > "$WORK/receipt.env"
 /usr/local/go/bin/go version > "$WORK/go-version.txt" 2>&1
 
-# --- 1. the Go gateway archive + home agent from the PINNED source ----------
+# --- 1. the Go gateway archive + home agent from the ACCEPTED revision ------
+# A fresh DETACHED checkout of exactly the marker's committed bytes — never
+# the mutable worktree. `go build -buildvcs=true` fails the build if the
+# embedded VCS stamps cannot be produced; the validation below pins them.
 mkdir -p "$WORK/bin"
-(cd "$GATEWAY_REPO" && /usr/local/go/bin/go build -trimpath -o "$WORK/bin/relay" . && /usr/local/go/bin/go build -trimpath -o "$WORK/bin/pocketshell-link" ./cmd/pocketshell-link)
+GW_WORKTREE="$WORK/gateway-src"
+git -C "$GATEWAY_REPO" worktree add --detach "$GW_WORKTREE" "$MARKER_SHA" > "$WORK/gateway-worktree.log" 2>&1 || {
+  echo "could not materialize the accepted gateway revision $MARKER_SHA:"; tail -5 "$WORK/gateway-worktree.log"; exit 1
+}
+[[ -z "$(git -C "$GW_WORKTREE" status --porcelain)" ]] || {
+  echo "REFUSING: the detached accepted-source checkout at $GW_WORKTREE is dirty"; exit 1
+}
+GW_VCS_TIME="$(date -u -d "$(git -C "$GATEWAY_REPO" show -s --format=%cI "$MARKER_SHA")" +%Y-%m-%dT%H:%M:%SZ)"
+validate_vcs_stamp() { # binary
+  local bin="$1" meta
+  meta="$(/usr/local/go/bin/go version -m "$bin")"
+  grep -Eq "vcs.revision=$MARKER_SHA$" <<< "$meta" || {
+    echo "REFUSING: $bin embedded vcs.revision != accepted $MARKER_SHA:"; grep -E 'vcs' <<< "$meta"; exit 1
+  }
+  grep -Eq 'vcs.modified=false$' <<< "$meta" || {
+    echo "REFUSING: $bin embedded vcs.modified is not false (built from dirty source?):"; grep -E 'vcs' <<< "$meta"; exit 1
+  }
+  grep -Eq "vcs.time=$GW_VCS_TIME$" <<< "$meta" || {
+    echo "REFUSING: $bin embedded vcs.time != the accepted commit time ($GW_VCS_TIME):"; grep -E 'vcs' <<< "$meta"; exit 1
+  }
+}
+(cd "$GW_WORKTREE" \
+  && /usr/local/go/bin/go build -trimpath -buildvcs=true -o "$WORK/bin/relay" . \
+  && /usr/local/go/bin/go build -trimpath -buildvcs=true -o "$WORK/bin/pocketshell-link" ./cmd/pocketshell-link) \
+  || { echo "gateway build from the accepted revision FAILED"; exit 1; }
+validate_vcs_stamp "$WORK/bin/relay"
+validate_vcs_stamp "$WORK/bin/pocketshell-link"
 sha256sum "$WORK/bin/relay" "$WORK/bin/pocketshell-link" > "$WORK/gateway-binaries.sha256"
+{
+  echo "gateway binaries: embedded vcs.revision=$MARKER_SHA vcs.modified=false vcs.time=$GW_VCS_TIME (both validated)"
+} >> "$WORK/receipt.env"
+
+if [[ "${GATEWAY_E2E_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+  echo "PREFLIGHT OK: marker first-line SHA parsed ($MARKER_SHA), HEAD equality, web/core cleanliness, core resolution, "
+  echo "detached committed accepted-source checkout, both binaries' embedded VCS stamps — all validated."
+  echo "This was the plumbing rehearsal ONLY — NOT the composed acceptance run."
+  exit 0
+fi
 
 # --- 2. the broker fixture (owned, local; the authorizer stand-in) ----------
 # Plain-http listener for the GATEWAY's JWKS fetch (its shipped
@@ -124,8 +289,22 @@ grep -q '"kty": "RSA"' "$WORK/jwks.json" || { echo "broker JWKS never came up"; 
 
 # --- 3. the sshd fixture fleet (six host-key modes, helper image) -----------
 COMPOSE="docker compose -f $DESKTOP_REPO/tests-docker/docker-compose.yml"
-$COMPOSE build ssh tmux helper >/dev/null 2>&1 || true
-docker image inspect pocketshell-test:helper >/dev/null || { echo "helper image missing"; exit 1; }
+# The shared image is a FIXTURE PREREQUISITE: the build must succeed (it is
+# never papered over with a stale image), and the receipt records whether
+# this run's build produced a new image id or reused the existing one.
+HELPER_IMAGE_BEFORE="$(docker images --format '{{.ID}}' pocketshell-test:helper 2>/dev/null || true)"
+$COMPOSE build ssh tmux helper > "$WORK/compose-build.log" 2>&1 || {
+  echo "fixture image build FAILED (a prerequisite, not optional):"; tail -20 "$WORK/compose-build.log"; exit 1
+}
+docker image inspect pocketshell-test:helper > /dev/null || { echo "helper image missing after build"; exit 1; }
+HELPER_IMAGE_AFTER="$(docker images --format '{{.ID}}' pocketshell-test:helper)"
+{
+  if [[ -n "$HELPER_IMAGE_BEFORE" && "$HELPER_IMAGE_BEFORE" == "$HELPER_IMAGE_AFTER" ]]; then
+    echo "helper image: $HELPER_IMAGE_AFTER (unchanged by this run's build)"
+  else
+    echo "helper image: $HELPER_IMAGE_AFTER (built by this run; before: ${HELPER_IMAGE_BEFORE:-absent})"
+  fi
+} >> "$WORK/receipt.env"
 
 # The run's SSH user keys (all owned, ephemeral): plain Ed25519, RSA (SHA2),
 # passphrase-encrypted Ed25519 — plus the fleet's committed plain key.
@@ -256,9 +435,13 @@ curl -sf "http://127.0.0.1:$GWB_PORT/healthz" | grep -q '"registry":"disabled"' 
 
 # --- 5. enroll + run the home agents per dial-able mode ----------------------
 mint_token() {
-  curl -sf -X POST "http://127.0.0.1:$BROKER_PORT/gateway/token" \
+  local token
+  token="$(curl -sf -X POST "http://127.0.0.1:$BROKER_PORT/gateway/token" \
     -H "Authorization: Bearer $(/usr/bin/python3 -c "import sys; sys.path.insert(0, 'tests/e2e'); from gateway_fixture_broker import GOOGLE_TOKEN; print(GOOGLE_TOKEN)")" |
-    /usr/bin/python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])'
+    /usr/bin/python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])')" \
+    || { echo "broker token mint failed"; exit 1; }
+  [[ -n "$token" ]] || { echo "broker token mint returned nothing"; exit 1; }
+  printf '%s' "$token"
 }
 
 expect_enroll() { # device sshhost expectkeyfile  — enrollment MUST succeed
@@ -270,9 +453,15 @@ expect_enroll() { # device sshhost expectkeyfile  — enrollment MUST succeed
     --server "http://127.0.0.1:$GW_PORT" --insecure-dev \
     --dev-broker-issuer "$BROKER_ISSUER" \
     --device-id "$device" --ssh-host "$sshhost" --config-dir "$dir" \
-    --expect-host-key "$(fp_of "$keyfile")" <<< "$token" > "$WORK/enroll-$device.log" 2>&1
-  grep -q "host key matches --expect-host-key" "$WORK/enroll-$device.log"
-  grep -q "^enrolled" "$WORK/enroll-$device.log"
+    --expect-host-key "$(fp_of "$keyfile")" <<< "$token" > "$WORK/enroll-$device.log" 2>&1 || {
+    echo "enroll $device FAILED (it must succeed):"; cat "$WORK/enroll-$device.log"; exit 1
+  }
+  grep -q "host key matches --expect-host-key" "$WORK/enroll-$device.log" || {
+    echo "enroll $device did not pin the out-of-band host key:"; cat "$WORK/enroll-$device.log"; exit 1
+  }
+  grep -q "^enrolled" "$WORK/enroll-$device.log" || {
+    echo "enroll $device did not report success:"; cat "$WORK/enroll-$device.log"; exit 1
+  }
   "$WORK/bin/pocketshell-link" run --server "http://127.0.0.1:$GW_PORT" --insecure-dev --config-dir "$dir" \
     > "$WORK/agent-$device.log" 2>&1 &
   local pid=$!
@@ -290,26 +479,34 @@ expect_enroll gwrsa "127.0.0.1:$SSH_RSAONLY" "$WORK/mode/rsaonly/ssh_host_rsa_ke
 expect_enroll gwsshrsa "127.0.0.1:$SSH_SSHRSA" "$WORK/mode/sshrsa/ssh_host_rsa_key.pub"
 expect_enroll gwedrsa "127.0.0.1:$SSH_EDRSA" "$WORK/mode/edrsa/ssh_host_ed25519_key.pub"
 
-# The ECDSA-only mode must REFUSE enrollment honestly, BEFORE any HTTP
-# request, pinning nothing (negative mode 5).
+# The ECDSA-only mode must REFUSE enrollment honestly — asserted against the
+# run's OWN fixtures: zero broker requests on record from the attempt, no
+# registry device record, no agent state (negative mode 5).
 mkdir -p "$WORK/agent-gwecdsa"
+ECDSA_TOKEN="$(mint_token)"
+BROKER_LINES_BEFORE="$(wc -l < "$WORK/broker.jsonl")"
 if "$WORK/bin/pocketshell-link" enroll --token-stdin \
     --server "http://127.0.0.1:$GW_PORT" --insecure-dev \
     --dev-broker-issuer "$BROKER_ISSUER" \
     --device-id gwecdsa --ssh-host "127.0.0.1:$SSH_ECDSAONLY" --config-dir "$WORK/agent-gwecdsa" \
-    <<< "$(mint_token)" > "$WORK/enroll-gwecdsa.log" 2>&1; then
+    <<< "$ECDSA_TOKEN" > "$WORK/enroll-gwecdsa.log" 2>&1; then
   echo "ECDSA-only enrollment unexpectedly SUCCEEDED"; exit 1
 fi
 grep -q "offers none of the enrollment host key algorithms" "$WORK/enroll-gwecdsa.log" || {
   echo "ECDSA-only enrollment failed for the wrong reason:"; cat "$WORK/enroll-gwecdsa.log"; exit 1
 }
-# The refusal is pre-HTTP: the probe runs before any request, so the ONLY
-# broker request on record from this leg is nothing — the enroll refused
-# before its token would have been validated... the token IS validated
-# locally first; assert the refusal left no enrolled device behind.
+BROKER_LINES_AFTER="$(wc -l < "$WORK/broker.jsonl")"
+[[ "$BROKER_LINES_AFTER" == "$BROKER_LINES_BEFORE" ]] || {
+  echo "ECDSA-only enrollment refusal hit the BROKER ($((BROKER_LINES_AFTER - BROKER_LINES_BEFORE)) new request records):"
+  tail -n +"$((BROKER_LINES_BEFORE + 1))" "$WORK/broker.jsonl"; exit 1
+}
+if [[ -f "$REGISTRY_FILE" ]] && grep -q 'gwecdsa' "$REGISTRY_FILE"; then
+  echo "ECDSA-only refusal left a device record in the registry"; exit 1
+fi
 if [[ -f "$WORK/agent-gwecdsa/config.json" || -f "$WORK/agent-gwecdsa/device.key" ]]; then
   echo "ECDSA-only refusal wrote agent state anyway"; ls -la "$WORK/agent-gwecdsa"; exit 1
 fi
+echo "ecdsa-only refusal: zero broker requests on record, no registry device record, no agent state" >> "$WORK/receipt.env"
 
 # --- 6. the production browser bundle ----------------------------------------
 npx vue-tsc --noEmit
@@ -345,7 +542,10 @@ cat > "$WORK/fixtures.json" << EOF
 }
 EOF
 # The advisory-tamper leg restarts gateway A over the SAME registry state
-# after the harness edits the device record's advertised ssh_host_key.
+# after the harness edits the device record's advertised ssh_host_key. It
+# kills ONLY this run's exact gateway PID and records the EXACT new PID for
+# the cleanup (no command-line pattern sweeps — another actor's process is
+# never a match target).
 cat > "$WORK/gateway-restart.sh" << EOF
 #!/bin/bash
 kill -9 "$GWA_PID" 2>/dev/null
@@ -356,7 +556,7 @@ nohup "$WORK/bin/relay" -listen "127.0.0.1:$GW_PORT" -registry "$REGISTRY_FILE" 
   -broker-allow-insecure-dev \
   -allow e2e-gateway@pocketshell.test \
   -origins "http://127.0.0.1:$BASE_PORT" >> "$WORK/gateway-a.log" 2>&1 &
-echo \$! > "$WORK/gateway-a.pid"
+echo \$! > "$GWA_PIDFILE"
 for _ in \$(seq 1 40); do
   curl -sf "http://127.0.0.1:$GW_PORT/healthz" | grep -q '"registry":"enabled"' && exit 0
   sleep 0.25
