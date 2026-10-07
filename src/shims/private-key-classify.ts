@@ -470,8 +470,10 @@ function validateOpenSshKeyFields(
       );
     }
     case 'ssh-ed25519': {
-      // pub [A]; priv [A, secret] — canonical OpenSSH sizes, and the
-      // private A must be THE public A, not just some 32 bytes.
+      // pub [A]; priv [A, secret] — canonical OpenSSH sizes, the private A
+      // must BE the public A, and OpenSSH serializes the 64-byte secret as
+      // seed||public, so the secret's LAST 32 bytes must equal A too (the
+      // first 32 are the seed — no seed→keypair math is claimed or checked).
       if (pub.length !== 1 || priv.length !== 2) return false;
       const [pubA] = pub as [Uint8Array];
       const [privA, secret] = priv as Uint8Array[];
@@ -479,7 +481,8 @@ function validateOpenSshKeyFields(
         pubA.length === 32 &&
         privA.length === 32 &&
         secret.length === 64 &&
-        bytesEqual(privA, pubA)
+        bytesEqual(privA, pubA) &&
+        bytesEqual(secret.subarray(32), pubA)
       );
     }
     default: {
@@ -578,8 +581,10 @@ function classifyOpenSSHPrivateSection(
 /** openssh-key-v1 container. For encrypted containers the cipher/KDF names
  * classify as "encrypted" — the ciphertext body cannot be checked without
  * the passphrase, so the header is ADVISORY there and the signing boundary
- * re-classifies whatever ssh2 produces after decryption. For cipher=none
- * containers the actual private section is parsed and validated. */
+ * re-classifies whatever ssh2 produces after decryption. The cipher=none
+ * path additionally demands a none KDF and empty KDF options (any other
+ * header combination is inconsistent, not classifiable); those containers
+ * have their actual private section parsed and validated. */
 function classifyOpenSSHContainer(inner: string): PrivateKeyKind {
   const lines = inner
     .split(/\r?\n/)
@@ -606,9 +611,14 @@ function classifyOpenSSHContainer(inner: string): PrivateKeyKind {
   const kdf = sshString(u8, at);
   if (kdf === null) return 'unknown';
   at = kdf.next;
-  if (utf8(kdf.data) !== 'none') return 'encrypted';
+  // cipher=none claims NO KDF: a container pairing the none cipher with a
+  // KDF name — or with non-empty KDF options — has inconsistent headers,
+  // which is not a form this module classifies as either a plain key or an
+  // encrypted one (only cipher !== none is the advisory encrypted verdict).
+  if (utf8(kdf.data) !== 'none') return 'unknown';
   const kdfOpts = sshString(u8, at);
   if (kdfOpts === null) return 'unknown';
+  if (kdfOpts.data.length !== 0) return 'unknown';
   at = kdfOpts.next;
   if (at + 4 > u8.length) return 'unknown';
   const keyCount = readU32be(u8, at);
@@ -634,14 +644,26 @@ function classifyOpenSSHContainer(inner: string): PrivateKeyKind {
  * an ambiguous input classifies as unknown instead of as whichever block
  * a "find BEGIN anywhere, then the first END" scan happened to pick. The
  * non-greedy body binds to the FIRST matching END marker; the end anchors
- * make any further marker part of the match failure. */
+ * fail any marker that sits AFTER a complete envelope, and extractPemEnvelope
+ * rejects any marker the backtracking body could swallow — before any
+ * encrypted/legacy-header shortcut can treat the outer label as enough. */
 const PEM_ENVELOPE_RE =
   /^[ \t\r\n]*-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----[ \t\r\n]*$/;
 
 function extractPemEnvelope(text: string): { label: string; inner: string } | null {
   const match = PEM_ENVELOPE_RE.exec(text);
   if (match === null) return null;
-  return { label: match[1] ?? '', inner: match[2] ?? '' };
+  const inner = match[2] ?? '';
+  // Exactly-one-envelope enforcement: the end anchors only catch markers
+  // that FOLLOW the first same-label END — when that END fails the final
+  // anchor, the non-greedy body expands and a further same-label envelope
+  // (or a nested/split one) is swallowed INTO the match. Any BEGIN/END
+  // marker line inside the body is therefore a second or split envelope:
+  // reject before the OPENSSH/ENCRYPTED/legacy-header shortcuts can read
+  // the outer label alone. Base64 bodies and RFC 1423 header lines never
+  // contain five consecutive dashes, so this trips only on real markers.
+  if (inner.includes('-----BEGIN') || inner.includes('-----END')) return null;
+  return { label: match[1] ?? '', inner };
 }
 
 /** Classify a private key from its PEM text (or the UTF-8 bytes of one).

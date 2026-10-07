@@ -20,6 +20,17 @@
  * a real dial stay honest about which layer refused (parser vs guard), and
  * the host-pin negative supplies a DIFFERENT VALID fingerprint to the same
  * comparator the positives pass through.
+ *
+ * Guard ATTRIBUTION oracle (lab-only): the shared prototype `sign` of every
+ * ssh2-parsed key is wrapped once, before any dial, so each real userauth
+ * signing invocation on the actual dial records what the parsed-key signer
+ * returned — the stable guard error code, or a real signature length. The
+ * original method runs exactly once per call (no double sign, no trial
+ * sign) and observations never carry key, data or signature bytes — only
+ * key TYPE, hash algorithm name, error code and signature byte count. A
+ * dial refusal record is green only when the wrapped signer itself
+ * observed the expected guard code: zero server signatures plus a generic
+ * "authentication methods failed" text proves nothing on its own.
  */
 import { Client } from 'ssh2';
 import { Duplex } from 'node:stream';
@@ -236,9 +247,82 @@ async function sha256Base64(text: string): Promise<string> {
   return createHash('sha256').update(text).digest('base64');
 }
 
+/* --- guard-attribution oracle (lab-only, no shipping surface) --------------- */
+
+/** What one real parsed-key sign invocation did. Deliberately tiny: key
+ * TYPE, hash algorithm NAME, and either the refusal CODE the guard
+ * produced or the signature byte count — never key, data or signature
+ * bytes. */
+interface SignObservation {
+  keyType: string;
+  hashAlgo: string | null;
+  outcome:
+    | { kind: 'signature'; bytes: number }
+    | { kind: 'error'; code: string | null }
+    | { kind: 'throw'; code: string | null };
+}
+
+const signObservations: SignObservation[] = [];
+
+function describeObservations(observations: SignObservation[]): string {
+  return JSON.stringify(
+    observations.map((o) => ({ type: o.keyType, algo: o.hashAlgo, ...o.outcome })),
+  );
+}
+
+function observedGuardCode(observations: SignObservation[]): string | null {
+  for (const o of observations) {
+    if (o.outcome.kind === 'signature') return null;
+    if (o.outcome.code !== null) return o.outcome.code;
+  }
+  return null;
+}
+
+/** Wrap the SHARED prototype `sign` of ssh2-parsed keys once, before any
+ * dial. client.js signs userauth data through `parsedKey.sign`, which lives
+ * on the common BaseKey prototype of every key class keyParser builds —
+ * reachable here via any parsed fixture key. The original method still does
+ * all the real work exactly once; the wrap only records its result. */
+function installSignObserver(fixture: Fixture): void {
+  const errCode = (err: unknown): string | null => {
+    const code = (err as { code?: unknown } | null)?.code;
+    return typeof code === 'string' ? code : null;
+  };
+  const parsed = (ssh2Utils.parseKey as (pem: string) => unknown)(fixture.keys.ed.pem);
+  const first = Array.isArray(parsed) ? parsed[0] : parsed;
+  const proto = Object.getPrototypeOf(first) as { sign?: (...args: unknown[]) => unknown };
+  if (!proto || typeof proto.sign !== 'function') {
+    throw new Error('lab: ssh2 parsed-key prototype has no sign method to observe');
+  }
+  const realSign = proto.sign;
+  proto.sign = function (this: { type?: string }, data: Uint8Array, algo?: string) {
+    const observation: SignObservation = {
+      keyType: this.type ?? 'unknown',
+      hashAlgo: typeof algo === 'string' ? algo : null,
+      outcome: { kind: 'error', code: null }, // replaced below
+    };
+    signObservations.push(observation);
+    try {
+      const result = realSign.call(this, data, algo);
+      observation.outcome = result instanceof Error
+        ? { kind: 'error', code: errCode(result) }
+        : { kind: 'signature', bytes: (result as Uint8Array).length };
+      return result;
+    } catch (err) {
+      observation.outcome = { kind: 'throw', code: errCode(err) };
+      throw err;
+    }
+  };
+}
+
+/** ssh2's exported parseKey — same keyParser module the Client uses; only
+ * needed here to reach the shared parsed-key prototype above. */
+let ssh2Utils: { parseKey: (pem: string) => unknown };
+
 async function runFlows(): Promise<{
   results: FlowResult[];
   probe: typeof probe;
+  signObservations: SignObservation[];
 }> {
   const fixture = (await (await fetch('/fixture.json')).json()) as Fixture;
   const results: FlowResult[] = [];
@@ -247,6 +331,10 @@ async function runFlows(): Promise<{
     const out = document.getElementById('lab-out');
     if (out) out.textContent += `${ok ? 'PASS' : 'FAIL'} ${name}: ${detail}\n`;
   };
+
+  // lab-only guard-attribution oracle, installed before any dial
+  ssh2Utils = (await import('ssh2') as unknown as { utils: { parseKey: (pem: string) => unknown } }).utils;
+  installSignObserver(fixture);
 
   const handshake = async (name: string, keyName: string, username: string, extra: Partial<DialOptions> = {}) => {
     const key = fixture.keys[keyName];
@@ -275,24 +363,40 @@ async function runFlows(): Promise<{
   await handshake('positive: encrypted Ed25519 handshake', 'edEnc', 'lab-pos-ed-enc');
 
   // -- ECDSA refusals, plaintext and encrypted-with-correct-passphrase.
-  // The elliptic counter is captured BEFORE each dial; the delta after the
-  // refusal must be exactly zero (not a value compared with itself).
+  //    Zero server signatures alone prove nothing (any auth failure shows
+  //    that): the wrapped parsed-key signer must have OBSERVED the stable
+  //    guard code on this actual dial, the dial's rejection error must
+  //    carry the same code, and the elliptic counter — captured BEFORE the
+  //    dial — must show a real zero delta.
+  const ECDSA_GUARD_CODE = 'ERR_BROWSER_ECDSA_UNSUPPORTED';
   for (const [name, keyName] of [
     ['refusal: plaintext ECDSA user key', 'ecdsa'],
     ['refusal: encrypted ECDSA user key (correct passphrase)', 'ecdsaEnc'],
   ] as const) {
     const key = fixture.keys[keyName];
     const ecBefore = probe.ecSignCalls;
+    const obsStart = signObservations.length;
     try {
       await dial({ fixture, pem: key.pem, passphrase: key.passphrase, username: 'lab-ecdsa' });
       record(name, false, 'dial unexpectedly succeeded');
       record(`${name} — elliptic never signed`, false, 'flow did not refuse');
     } catch (err) {
-      const message = (err as Error).message;
-      const refused = /ECDSA|authentication methods/i.test(message);
+      const dialErr = err as Error & { code?: string };
       const delta = probe.ecSignCalls - ecBefore;
-      record(name, refused, message);
-      record(`${name} — elliptic never signed`, refused && delta === 0, `ecSignCalls delta=${delta}`);
+      const observations = signObservations.slice(obsStart);
+      const guardCode = observedGuardCode(observations);
+      const ok =
+        observations.length > 0 &&
+        observations.every((o) => o.outcome.kind !== 'signature') &&
+        observations.every((o) => o.outcome.code === ECDSA_GUARD_CODE) &&
+        dialErr.code === ECDSA_GUARD_CODE &&
+        delta === 0;
+      record(
+        name,
+        ok,
+        `dialError.code=${dialErr.code ?? 'none'} signObservations=${describeObservations(observations)} ecSignCalls delta=${delta}`,
+      );
+      record(`${name} — elliptic never signed`, ok, `ecSignCalls delta=${delta}`);
     }
   }
 
@@ -339,13 +443,17 @@ async function runFlows(): Promise<{
     `ecSignCalls=${probe.ecSignCalls}, loop start=${ecAtLoopStart}`,
   );
 
-  // -- parser-first malformed flows through a REAL dial. ssh2's parser gets
-  //    the key FIRST; the assertions stay honest about which layer refused:
-  //    a key the parser ACCEPTS but the guard refuses must end as an
-  //    authentication failure with zero elliptic deltas (the runner pins
-  //    zero SIGNED auth requests server-side), and a key the parser rejects
-  //    must fail with a key-parse error, also with zero deltas.
+  // -- parser-first malformed flows through a REAL dial, with honest layer
+  //    attribution. A key the parser ACCEPTS but the guard refuses must
+  //    show the guard's coded refusal on the wrapped signer of the actual
+  //    dial (a generic "authentication methods failed" text is NOT
+  //    accepted — zero server signatures alone prove nothing). A key the
+  //    parser REJECTS throws synchronously inside connect, before any
+  //    signing exists: that is a PARSER event, not a guard event, so the
+  //    record requires the parse error AND zero sign invocations.
+  const FORMAT_GUARD_CODE = 'ERR_BROWSER_KEY_FORMAT_UNSUPPORTED';
   const beforeParserAccepted = probe.ecSignCalls;
+  const acceptedObsStart = signObservations.length;
   try {
     await dial({
       fixture,
@@ -354,19 +462,24 @@ async function runFlows(): Promise<{
     });
     record('parser-first: parsed-but-guarded key dial refused', false, 'dial unexpectedly succeeded');
   } catch (err) {
-    const message = (err as Error).message;
+    const dialErr = err as Error & { code?: string };
     const delta = probe.ecSignCalls - beforeParserAccepted;
-    // the guard's refusal surfaces either verbatim or wrapped by ssh2 as
-    // "Error signing data with key: …", which aborts userauth — either way
-    // the dial must fail, name the guard, and leave elliptic untouched
+    const observations = signObservations.slice(acceptedObsStart);
+    const ok =
+      observations.length > 0 &&
+      observations.every((o) => o.outcome.kind !== 'signature') &&
+      observations.every((o) => o.outcome.code === FORMAT_GUARD_CODE) &&
+      dialErr.code === FORMAT_GUARD_CODE &&
+      delta === 0;
     record(
       'parser-first: parsed-but-guarded key dial refused',
-      /refuses to sign|authentication methods failed/i.test(message) && delta === 0,
-      `${message}; ecSignCalls delta=${delta}`,
+      ok,
+      `dialError.code=${dialErr.code ?? 'none'} signObservations=${describeObservations(observations)} ecSignCalls delta=${delta}`,
     );
   }
 
   const beforeParserRejected = probe.ecSignCalls;
+  const rejectedObsStart = signObservations.length;
   try {
     await dial({
       fixture,
@@ -377,65 +490,84 @@ async function runFlows(): Promise<{
   } catch (err) {
     const message = (err as Error).message;
     const delta = probe.ecSignCalls - beforeParserRejected;
+    const observations = signObservations.slice(rejectedObsStart);
+    // parser layer refused: ssh2 threw synchronously while PARSING — the
+    // record must prove no signing was ever attempted (no observation at
+    // all), which is what makes this "not a guard event" honest
     record(
       'parser-first: unparseable key dial rejected before auth',
-      /key/i.test(message) && delta === 0,
-      `${message}; ecSignCalls delta=${delta}`,
+      observations.length === 0 &&
+        /Cannot parse privateKey|key/i.test(message) &&
+        delta === 0,
+      `PARSER refusal (not a guard event; ${observations.length} sign invocations): ${message}; ecSignCalls delta=${delta}`,
     );
   }
 
   // -- host-pin refusal through the REAL comparator: the pin supplied is a
   //    DIFFERENT VALID host key's fingerprint; the same `digest === pin`
   //    equality that authenticates the positives now mismatches. The server
-  //    must see zero auth attempts (runner-side), and the error is the host
-  //    key verification failure.
+  //    must see zero auth attempts (runner-side) and the signer must see
+  //    zero sign invocations (refusal happens before userauth).
   const beforePin = probe.ecSignCalls;
+  const pinObsStart = signObservations.length;
   try {
     await dial({ fixture, pem: fixture.keys.rsa.pem, pin: fixture.wrongHostPin, username: 'lab-pin-wrong' });
     record('hostpin: wrong-fingerprint pin refuses the dial', false, 'dial unexpectedly succeeded');
   } catch (err) {
     const message = (err as Error).message;
     const delta = probe.ecSignCalls - beforePin;
+    const observations = signObservations.slice(pinObsStart);
     record(
       'hostpin: wrong-fingerprint pin refuses the dial',
-      /host denied|host key|verification failed/i.test(message) && delta === 0,
-      `${message}; ecSignCalls delta=${delta}`,
+      observations.length === 0 &&
+        /host denied|host key|verification failed/i.test(message) &&
+        delta === 0,
+      `${message}; ${observations.length} sign invocations; ecSignCalls delta=${delta}`,
     );
   }
 
   // -- public-key verification residual (public half only, documented scope):
   // sign through the real ssh2 key objects (the same shape userauth uses),
   // then verify with the shim — RSA via named digest, Ed25519 via null.
+  // These signs run through the SAME wrapped parsed-key prototype the dials
+  // use, so two 'signature' observations here also prove the attribution
+  // oracle was live on real signing work all along.
+  const signaturesBeforeResidual = signObservations.filter(
+    (o) => o.outcome.kind === 'signature',
+  ).length;
   try {
-    const ssh2 = await import('ssh2');
     const { verify } = (await import('crypto')) as {
       verify: (a: string | null, d: Uint8Array, k: string, s: Buffer) => boolean | Error;
     };
-    const parseKey = (ssh2 as unknown as {
-      utils: { parseKey: (pem: string) => unknown };
-    }).utils.parseKey;
+    const parseKey = ssh2Utils.parseKey as unknown as (pem: string) => {
+      sign: (d: Uint8Array, a?: string) => Buffer;
+      getPublicPEM: () => string;
+      type: string;
+    };
     const data = new TextEncoder().encode('verify probe');
     const signAndVerify = (keyName: string, algo: string | null) => {
-      const parsed = parseKey(fixture.keys[keyName].pem) as {
-        sign: (d: Uint8Array, a?: string) => Buffer;
-        getPublicPEM: () => string;
-        type: string;
-      };
+      const parsed = parseKey(fixture.keys[keyName].pem);
       const signature = parsed.sign(data, algo ?? undefined);
       return verify(algo, data, parsed.getPublicPEM(), signature);
     };
     const rsaOk = signAndVerify('rsa', 'sha256');
     const edOk = signAndVerify('ed', null);
+    // parsed keys carry the SSH WIRE type string ('ssh-rsa', 'ssh-ed25519')
+    const signableWireTypes = new Set(['ssh-rsa', 'ssh-ed25519', 'rsa', 'ed25519']);
+    const signaturesSeen = signObservations.filter((o) => o.outcome.kind === 'signature');
     record(
       'residual: public-key verification still works (RSA + Ed25519)',
-      rsaOk === true && edOk === true,
-      `rsaVerify=${String(rsaOk)} edVerify=${String(edOk)}`,
+      rsaOk === true &&
+        edOk === true &&
+        signaturesSeen.length >= signaturesBeforeResidual + 2 &&
+        signaturesSeen.every((o) => signableWireTypes.has(o.keyType)),
+      `rsaVerify=${String(rsaOk)} edVerify=${String(edOk)} observedSignatures=${describeObservations(signaturesSeen.slice(signaturesBeforeResidual))}`,
     );
   } catch (err) {
     record('residual: public-key verification still works (RSA + Ed25519)', false, (err as Error).message);
   }
 
-  return { results, probe };
+  return { results, probe, signObservations };
 }
 
 installProbe();
@@ -444,7 +576,11 @@ probe.ecSignCalls = 0; // the self-check does not count against the flows
 
 interface ShippingLabWindow {
   __shippingLabReady: boolean;
-  __shippingLabRun: () => Promise<{ results: FlowResult[]; probe: typeof probe }>;
+  __shippingLabRun: () => Promise<{
+    results: FlowResult[];
+    probe: typeof probe;
+    signObservations: SignObservation[];
+  }>;
 }
 (window as unknown as ShippingLabWindow).__shippingLabRun = runFlows;
 (window as unknown as ShippingLabWindow).__shippingLabReady = true;
