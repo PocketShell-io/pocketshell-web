@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import type { HostEntry } from '@pocketshell/core';
 import {
   ackAllWarnings,
   ackWarning,
@@ -21,19 +22,32 @@ import { useHostsStore } from './hosts';
  * host's `a` is the source of truth: an ack re-runs the command, and the
  * refetched list (not the ack's exit status) decides what remains visible.
  *
- * ## The gateway exclusion (credential custody)
+ * ## The credential-custody guard
  *
- * The only transport this store has is the LEGACY bridge (`config.wsUrl` —
- * the Lambda that receives a host's key in its `connect` frame). A gateway
- * host's key exists to authenticate end-to-end against the host's own sshd
- * THROUGH the gateway, and must never be handed to any other infrastructure:
- * this store explicitly excludes every `entry.gateway` host — in the sweep
- * queue AND in `linkFor`, the one gate every bridge run passes — BEFORE the
- * secret is so much as decrypted. There is no fallback: a gateway host
- * without a live workspace connection has no warnings sweep at all (see
- * docs/gateway-client.md, maturity limits). The guard is structural, not
- * incidental: it does not depend on which URLs happen to be configured, on
- * the order of unlock/refresh, or on the sweep being manual or automatic.
+ * The only transport this store has is the LEGACY Lambda bridge
+ * (`config.wsUrl` — the one endpoint that receives a host's SSH key in its
+ * `connect` frame). A host whose dial does not go through that bridge must
+ * never have its key handed to it, no matter which URLs happen to be
+ * configured, whether the sweep is automatic (unlock, auto-recall,
+ * navigation) or a manual ack. Two exclusions, both checked BEFORE the
+ * secret is so much as decrypted (`linkFor` is the one gate every bridge
+ * run passes; the sweep queue filters too):
+ *
+ *  - GATEWAY hosts (`entry.gateway`): the key exists to authenticate
+ *    end-to-end THROUGH the gateway; it never travels to any other
+ *    infrastructure. There is no fallback — a gateway host simply has no
+ *    bridge sweep (docs/gateway-client.md, maturity limits).
+ *  - ORDINARY browser-direct hosts: when a direct relay is configured
+ *    (`config.directWsUrl`), every plain host dials end-to-end from the
+ *    browser and its key must stay out of the Lambda. Only a deployment
+ *    with NO direct relay (`directWsUrl === ''`) has — by that same
+ *    configuration — chosen the Lambda bridge as its host transport, and
+ *    keeps the historical sweep for its non-gateway hosts. Link hosts are
+ *    unchanged: their bridge-frame secret is the shared link token, not a
+ *    private key.
+ *
+ * Nothing here ever falls back to another transport on failure: a sweep
+ * miss stays a miss, and no code path in this store dials the gateway.
  */
 export const useWarningsStore = defineStore('host-warnings', {
   state: () => ({
@@ -55,11 +69,9 @@ export const useWarningsStore = defineStore('host-warnings', {
     /**
      * The runner link for one host from this browser's stored credential,
      * or null when there is nothing to connect with (no sign-in, no bridge
-     * URL, no secret — each a quiet skip, never an error surface).
-     *
-     * A GATEWAY host is always null here, checked before `getHostSecret`
-     * touches the vault: the key must stay clear of the legacy bridge no
-     * matter what this browser has stored or which URLs are set.
+     * URL, no eligible transport, no secret — each a quiet skip, never an
+     * error surface). The custody exclusions run before `getHostSecret`
+     * touches the vault.
      */
     async linkFor(name: string): Promise<HostLink | null> {
       const auth = useAuthStore();
@@ -67,8 +79,11 @@ export const useWarningsStore = defineStore('host-warnings', {
       if (auth.idToken === '' || config.wsUrl === '') return null;
       const host = hosts.hosts.find((h) => h.name === name);
       if (host === undefined) return null;
-      // Gateway exclusion — BEFORE the credential is loaded (see class doc).
+      // Credential custody — BEFORE the secret is loaded (see class doc):
+      // gateway hosts never; plain hosts only when this deployment has no
+      // direct relay and the bridge is their actual transport.
       if (host.gateway !== undefined) return null;
+      if (host.link === undefined && config.directWsUrl !== '') return null;
       const bridgeAuth = bridgeAuthOf(await hosts.getHostSecret(name));
       if (bridgeAuth === null) return null;
       return {
@@ -84,10 +99,10 @@ export const useWarningsStore = defineStore('host-warnings', {
     /**
      * Refresh every host that has a credential in this browser (only those
      * can answer `a`), two connections at a time so a dozen hosts don't
-     * stampede the bridge. Gateway hosts are out of the queue entirely — the
-     * bridge sweep never considers them, automatically or otherwise. Hosts
-     * dropped from the synced list lose their entry even though nothing
-     * queries them anymore.
+     * stampede the bridge. Custody-excluded hosts are out of the queue
+     * entirely — the bridge sweep never considers them, automatically or
+     * otherwise. Hosts dropped from the synced list lose their entry even
+     * though nothing queries them anymore.
      */
     async sweep(): Promise<void> {
       if (this.sweeping) return;
@@ -97,13 +112,14 @@ export const useWarningsStore = defineStore('host-warnings', {
         const known = new Set(hosts.hosts.map((h) => h.name));
         for (const name of Object.keys(this.byHost)) {
           const host = hosts.hosts.find((h) => h.name === name);
-          // Left the list, or became a gateway host: a bridge-sourced row
-          // could then never refresh or ack again — drop it rather than
+          // Left the list, or became custody-excluded (gateway host, or a
+          // plain host while a direct relay is configured): a bridge-sourced
+          // row could then never refresh or ack again — drop it rather than
           // show a half-truth.
-          if (!known.has(name) || host?.gateway !== undefined) delete this.byHost[name];
+          if (!known.has(name) || !this.eligibleForBridge(host)) delete this.byHost[name];
         }
         const queue = hosts.hosts
-          .filter((h) => h.gateway === undefined && hosts.secretHosts.includes(h.name))
+          .filter((h) => this.eligibleForBridge(h) && hosts.secretHosts.includes(h.name))
           .map((h) => h.name);
         const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
           for (;;) {
@@ -116,6 +132,14 @@ export const useWarningsStore = defineStore('host-warnings', {
       } finally {
         this.sweeping = false;
       }
+    },
+
+    /** The custody rule in one place, shared by the queue, the prune, and
+     * (via linkFor) every ack. Static per host + config — no secret access. */
+    eligibleForBridge(host: HostEntry | undefined): boolean {
+      if (host === undefined) return false;
+      if (host.gateway !== undefined) return false;
+      return host.link !== undefined || config.directWsUrl === '';
     },
 
     /** One host's list, quiet on any failure: null (no `a`, timeout, bridge
