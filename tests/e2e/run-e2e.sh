@@ -8,11 +8,18 @@
 #   dumb WebSocket<->TCP relay pipe → real sessions on the container → the
 #   folder-first workspace's "Start a session here" → Shell → the shipping
 #   TerminalView xterm answering a remote OSC 52 yank in the browser
-#   clipboard (and refusing a remote "clear") → a full gateway-protocol dial
+#   clipboard (and refusing a remote "clear", acknowledged by the same
+#   command's real output) → a full gateway-protocol dial
 #   (broker exchange, auth frame with only the scoped token, ready, real SSH
 #   behind it) against a protocol-shaped WS fixture with the real sshd
 #   behind IT. The fixture is protocol-shaped, NOT the Go production
 #   gateway; no production-gateway evidence is claimed from this run.
+# Every wire surface the browser touches is custody-scanned — HTTP requests
+# (parsed-URL policy, Authorization headers, bodies), the direct-relay and
+# gateway WebSocket dial URLs, and EVERY recorded relay/gateway frame
+# (binary AND text, the gateway's first/auth TEXT frame included) — with
+# offline negative controls proving the oracle, the recorder and the URL
+# policy bite.
 #
 # Usage: tests/e2e/run-e2e.sh
 # Requires: docker, /usr/bin/python3 with playwright + cryptography,

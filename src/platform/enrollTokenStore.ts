@@ -4,7 +4,9 @@
  *
  * The token is MEMORY-ONLY: it lives in this state object, is never logged,
  * saved, or synced, and every exit path — close, unmount, regenerate
- * failure, expiry — erases it. Custody is enforced along two independent
+ * failure, expiry — erases it together with any manual-copy hint left over
+ * from a blocked clipboard (a hint over an empty field is a stale lie).
+ * Custody is enforced along two independent
  * axes, and every asynchronous completion is bound to BOTH:
  *
  *  - GENERATION: `open`, `close` and `generate` each bump the counter; a
@@ -99,6 +101,13 @@ export function createEnrollTokenController(opts: {
     state.expiresAtMs = null;
     state.expired = false;
     state.copied = false;
+    // The manual-copy hint is only meaningful over a token still in the
+    // field, and the UI renders the error independently of that field —
+    // retirement (expiry by timer or clock, close, a failed regeneration)
+    // must take the stale hint with it, or the dialog keeps advising a
+    // hand-copy of a credential that no longer exists. Callers that set a
+    // REAL error (the failed regeneration) do so right after erasing.
+    state.error = '';
   }
 
   /** The clock, not the timer flag, decides whether the token is dead: a

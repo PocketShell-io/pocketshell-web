@@ -6,7 +6,8 @@ real (see run-e2e.sh):
   /config.js + GIS    stubbed exactly like .tmp/auth-review-capture.py does
                       for visual captures — a fake button that signs in via
                       the app's own callback.
-  sync.e2e.test       a fake settings store: it records every body and only
+  sync.e2e.test       a fake settings store: every body is captured by the
+                      harness's HTTP log (and scanned there); the fake only
                       ever accepts/re-serves opaque envelopes. The test then
                       decrypts the captured envelopes with the sync passphrase
                       (cryptography is a test-side dependency, like the
@@ -36,8 +37,14 @@ real (see run-e2e.sh):
                        is the wire contract the browser must speak, enough to
                        run a real browser dial (broker exchange -> auth frame
                        with ONLY the scoped token -> ready -> real SSH
-                       session) end to end. Production-gateway claims are
-                       made elsewhere or not at all.
+                       session) end to end. EVERY original text frame the
+                       browser puts on this wire — the first/auth frame
+                       included — is preserved verbatim by the fixture's
+                       recorder and fed through the SAME wire-custody oracle
+                       as the binary bytes and the HTTP captures (URLs,
+                       Authorization headers, bodies — see assert_url_custody
+                       and the wire-level assertions). Production-gateway
+                       claims are made elsewhere or not at all.
 
 The OSC 52 clipboard leg rides a REAL terminal: the folder-first workspace's
 "Start a session here" -> Shell -> the shipping TerminalView xterm with its
@@ -59,6 +66,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from playwright.async_api import async_playwright
+from urllib.parse import urlsplit, urlunsplit
 
 BASE = sys.argv[1].rstrip('/')
 WORK = sys.argv[2]
@@ -108,12 +116,18 @@ def fake_jwt() -> str:
 GOOGLE_TOKEN = fake_jwt()
 
 # The credential/canary set the wire-custody oracle scans for — the SAME set
-# on BOTH surfaces (a private key riding a text frame is exactly the leak a
-# binary-only scan misses). The OSC 52 marker is deliberately NOT in it: that
-# string is terminal payload the test itself puts on the wire (typed into the
-# PTY), not a credential.
-SECRETS_AS_TEXT = [CANARY, KEY_PASSPHRASE, GOOGLE_TOKEN, 'BEGIN OPENSSH PRIVATE KEY']
-SECRETS_AS_BYTES = [s.encode() for s in SECRETS_AS_TEXT]
+# on EVERY surface (a private key riding a text frame is exactly the leak a
+# binary-only scan misses; the gateway's first/auth TEXT frame is no
+# exception). Each secret carries a LABEL for failure messages, so no
+# receipt or assertion ever prints credential material itself. The OSC 52
+# marker is deliberately NOT in it: that string is terminal payload the test
+# itself puts on the wire (typed into the PTY), not a credential.
+SECRET_LABELS = [
+    (CANARY, 'the config canary'),
+    (KEY_PASSPHRASE, 'the key passphrase'),
+    (GOOGLE_TOKEN, 'the Google sign-in'),
+    ('BEGIN OPENSSH PRIVATE KEY', 'a private-key marker'),
+]
 
 
 def decrypt_envelope(envelope: str, passphrase: str) -> str:
@@ -136,30 +150,167 @@ def assert_wire_custody(binary: bytes, texts: list[str], where: str) -> None:
     binary or text, scanned against the SAME full set. Text frames are the
     point: an SSH transport speaks binary, so a credential riding a text
     frame is a protocol anomaly the old binary-only scan would have recorded
-    and ignored."""
+    and ignored. Failure messages name the secret's LABEL, never the
+    material itself."""
     joined = '\n'.join(texts)
-    for secret in SECRETS_AS_TEXT:
-        assert secret not in joined, f'{where}: {secret[:24]}… reached a TEXT frame'
-    for secret in SECRETS_AS_BYTES:
-        assert secret not in binary, f'{where}: {secret[:24]!r} reached the binary wire'
+    for secret, label in SECRET_LABELS:
+        assert secret not in joined, f'{where}: {label} reached a TEXT frame'
+    for secret, label in SECRET_LABELS:
+        assert secret.encode() not in binary, f'{where}: {label} reached the binary wire'
 
 
 def custody_negative_control() -> None:
     """Offline selftest: the oracle must REJECT a deliberately injected
     credential in every surface it claims to scan. If this ever stops
-    failing-on-poison, the live custody assertions are decoration."""
-    for poisoned in (
-        {'binary': b'', 'texts': [f'{"x" * 40}BEGIN OPENSSH PRIVATE KEY{"y" * 40}']},
-        {'binary': b'\x00\x01' + KEY_PASSPHRASE.encode(), 'texts': []},
-        {'binary': b'', 'texts': [f'auth token {GOOGLE_TOKEN}']},
-        {'binary': CANARY.encode(), 'texts': []},
+    failing-on-poison, the live custody assertions are decoration. This
+    helper proves the oracle BITES — it is not itself the coverage; the live
+    coverage is each real recording being fed through the same oracle."""
+    for label, poisoned in (
+        ('a private-key marker in a TEXT frame', {'binary': b'', 'texts': [f'{"x" * 40}BEGIN OPENSSH PRIVATE KEY{"y" * 40}']}),
+        ('the key passphrase in the binary wire', {'binary': b'\x00\x01' + KEY_PASSPHRASE.encode(), 'texts': []}),
+        ('the Google sign-in in a TEXT frame', {'binary': b'', 'texts': [f'auth token {GOOGLE_TOKEN}']}),
+        ('the config canary in the binary wire', {'binary': CANARY.encode(), 'texts': []}),
     ):
         threw = False
         try:
             assert_wire_custody(poisoned['binary'], poisoned['texts'], 'negative-control')
         except AssertionError:
             threw = True
-        assert threw, f'custody oracle FAILED to reject an injected credential: {poisoned}'
+        assert threw, f'custody oracle FAILED to reject an injected credential ({label})'
+
+
+def gateway_auth_negative_control() -> None:
+    """Negative control through the REAL gateway recorder and extractor: the
+    exact shape that once slipped past the parsed type/token assertions — a
+    well-formed auth frame (correct type, device id, scoped token) carrying
+    ONE extra field with forbidden material — must be preserved verbatim by
+    the recorder and REJECTED by the custody scan. The scoped token itself
+    stays allowed: the honest frame passes the same scan."""
+    honest = {'type': 'auth', 'v': 1, 'device_id': GW_DEVICE, 'token': GW_TOKEN}
+    passing = FakeGateway(0, GW_DEVICE, '')
+    passing.record_text(json.dumps(honest))
+    assert passing.every_text_frame() == [json.dumps(honest)], 'the recorder did not preserve the auth frame'
+    assert_wire_custody(b'', passing.every_text_frame(), 'negative-control')  # the honest frame passes
+    for secret, label in SECRET_LABELS:
+        gw = FakeGateway(0, GW_DEVICE, '')
+        poisoned = dict(honest, note=f'carry {secret}')
+        gw.record_text(json.dumps(poisoned))
+        assert gw.every_text_frame() == [json.dumps(poisoned)], 'the recorder did not preserve the poisoned frame'
+        frame = json.loads(gw.every_text_frame()[0])
+        # The poisoned frame IS a valid auth frame — type, device and token
+        # all satisfy the contract assertions. Only the custody scan, fed
+        # the recording, sees what the extra field carries.
+        assert frame['type'] == 'auth' and frame['device_id'] == GW_DEVICE and frame['token'] == GW_TOKEN, frame
+        threw = False
+        try:
+            assert_wire_custody(b'', gw.every_text_frame(), 'negative-control')
+        except AssertionError:
+            threw = True
+        assert threw, f'gateway custody FAILED to reject a poisoned auth frame ({label} in an extra field)'
+
+
+# The Google sign-in's accepted surfaces, per the documented credential
+# boundary (docs/gateway-client.md): the Authorization header to the account
+# surfaces (sync + broker) and — legacy, until that transport migrates — the
+# DIRECT relay's QUERY STRING, which that relay itself authorizes. The
+# GATEWAY carries none of it (its admission is the broker-scoped routing
+# token, asserted at the auth frame), and no key/canary material rides ANY
+# surface. The policy decides on the PARSED hostname and query component: a
+# URL that merely CONTAINS an account hostname in its path or query, or a
+# suffix-spoofed hostname, is not an account surface.
+DIRECT_RELAY_HOST = 'direct.e2e.test'
+ACCOUNT_HOSTS = ('sync.e2e.test', 'gateway-broker.e2e.test')
+
+
+def redacted_url(url: str) -> str:
+    """The URL with its query and fragment replaced — failure messages name
+    the surface without echoing whatever a hostile query carried."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, '<redacted>', ''))
+
+
+def assert_url_custody(url: str, where: str) -> None:
+    """The per-surface URL custody policy — the ONE policy the live HTTP
+    request URLs, the direct-relay dial URLs and the gateway dial URLs all
+    run through, and the negative controls with them:
+      - no credential/canary may ride ANY request URL, with exactly one
+        exception: the Google sign-in in the LEGACY direct relay's QUERY
+        string (never its path, never anywhere else);
+      - an account hostname appearing in a path or query is NOT an account
+        surface — the parsed origin decides."""
+    parts = urlsplit(url)
+    host = (parts.hostname or '').lower()
+    for secret, label in SECRET_LABELS:
+        if (
+            secret == GOOGLE_TOKEN
+            and host == DIRECT_RELAY_HOST
+            and secret in parts.query
+            and secret not in parts.path
+        ):
+            continue  # the documented legacy boundary: this relay authorizes its own query token
+        assert secret not in url, f'{where}: {label} rode the URL {redacted_url(url)}'
+
+
+def url_custody_negative_control() -> None:
+    """The SAME live policy, fed the shapes the old substring allowlist
+    accepted: attacker URLs carrying an account hostname in their path or
+    query, a suffix-spoofed hostname, and account/gateway URLs carrying the
+    sign-in in their query (the account surfaces take the sign-in from the
+    Authorization header only). Each must FAIL; the documented legacy
+    direct-relay query token and clean account/gateway URLs must PASS."""
+    def fails(url: str, what: str) -> None:
+        threw = False
+        try:
+            assert_url_custody(url, 'negative-control')
+        except AssertionError:
+            threw = True
+        assert threw, f'URL custody FAILED to reject {what}'
+
+    def passes(url: str, what: str) -> None:
+        assert_url_custody(url, 'negative-control')  # must not raise
+
+    fails(f'https://attacker.e2e.test/sync.e2e.test?c={GOOGLE_TOKEN}',
+          'an attacker URL with an account hostname in its path')
+    fails(f'https://attacker.e2e.test/?upstream=sync.e2e.test&c={GOOGLE_TOKEN}',
+          'an attacker URL with an account hostname in its query')
+    fails(f'https://sync.e2e.test.attacker.io/?c={GOOGLE_TOKEN}', 'a suffix-spoofed account hostname')
+    fails(f'https://sync.e2e.test/me?token={GOOGLE_TOKEN}',
+          'a sign-in token in an account URL query (Authorization-only surface)')
+    fails(f'wss://gateway.e2e.test/api/v1/hosts/dev-e2e/ssh?token={GOOGLE_TOKEN}',
+          'a sign-in token on the gateway surface')
+    fails(f'wss://direct.e2e.test/pipe?host=127.0.0.1&key={CANARY}',
+          'a canary on the legacy relay (the exception covers the sign-in only)')
+    fails(f'https://sync.e2e.test/me?x={"x" * 20}BEGIN OPENSSH PRIVATE KEY',
+          'a private-key marker in an account URL')
+    passes(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}',
+           'the documented legacy direct-relay query token')
+    passes('https://sync.e2e.test/settings/main', 'a clean account URL')
+    passes('wss://gateway.e2e.test/api/v1/hosts/dev-e2e/ssh', 'a clean gateway URL')
+
+
+def clear_ack_reached(terminal_text: str, ack: str) -> bool:
+    """True only when the ack appears as a STANDALONE terminal line — the
+    command's OUTPUT. The typed command's echo carries the ack token only
+    inside shell quotes (`echo 'e2e-clear''-ack-…'`), so no echoed row can
+    equal the token, and the whole-line comparison rejects any row that
+    merely CONTAINS it (a wrapped prompt line, a mention in other output)."""
+    lines = terminal_text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    return any(line.strip() == ack for line in lines)
+
+
+def osc52_clear_ack_negative_control() -> None:
+    """The CLEAR leg's acknowledgment matcher, fed the shapes that must NOT
+    satisfy it: a prompt/echo row carrying the token mid-line (what a wrapped
+    echo would look like), a row merely mentioning it, and unrelated output.
+    Only the command's own output line satisfies it."""
+    ack = f'e2e-clear-ack-{os.urandom(4).hex()}'
+    for text, what in (
+        (f'testuser@fixture:~$ printf ..; echo {ack}\n', 'the echoed command line'),
+        (f'earlier output mentioning {ack} mid-sentence\n', 'a row merely containing the token'),
+        ('unrelated output\n', 'an unrelated terminal'),
+    ):
+        assert not clear_ack_reached(text, ack), f'the ack matcher was satisfied by {what}'
+    assert clear_ack_reached(f'$ prompt\r\n{ack}\r\nnext', ack), 'the ack matcher missed real command output'
 
 
 class FakeSync:
@@ -172,7 +323,6 @@ class FakeSync:
         self.versions = {'main': 0, 'keys': 0}
         self.data = {'main': None, 'keys': None}
         self.put_bodies: list[dict] = []
-        self.all_bodies: list[tuple[str, str, str]] = []
 
     def _slot(self, url: str) -> str | None:
         for name in ('main', 'keys'):
@@ -183,7 +333,6 @@ class FakeSync:
     async def handle(self, route):
         req = route.request
         body = req.post_data or ''
-        self.all_bodies.append((req.method, req.url, body))
         if req.url.endswith('/me'):
             await route.fulfill(content_type='application/json', body='{"sub":"e2e","email":"e2e@pocketshell.test"}')
             return
@@ -313,9 +462,13 @@ class FakeGateway:
     gatewayDuplex dials /api/v1/hosts/{device}/ssh, sends ONE TEXT auth frame
     (the scoped BROKER token — never the raw Google sign-in, never key
     material), and after this side answers `ready` the socket is ordered
-    binary only, ferried to the fixture's real sshd. Everything recorded is
-    fed to the custody oracle; the auth frame is additionally asserted to
-    carry EXACTLY the expected routing token."""
+    binary only, ferried to the fixture's real sshd. EVERY original text
+    frame — the first/auth frame included — is preserved verbatim by the
+    recorder and fed through the SAME custody oracle as the binary bytes
+    (the old recording lost the auth frame into the handshake future, so a
+    credential smuggled in an extra auth field was recorded and ignored);
+    the auth frame is additionally asserted to carry EXACTLY the expected
+    routing token."""
 
     def __init__(self, fixture_port: int, device_id: str, host_key_line: str):
         self.fixture_port = fixture_port
@@ -324,9 +477,16 @@ class FakeGateway:
         self.dials = 0
         self.urls: list[str] = []
         self.auth_frames: list[dict] = []
+        self.text_frames: list[str] = []
         self.text_after_ready: list[str] = []
         self.pipes: list[_TcpPipe] = []
         self.ready_sent = 0
+
+    def record_text(self, payload: str) -> None:
+        """The recorder, shared by the live socket handler and the negative
+        control: EVERY original text frame is preserved verbatim, in arrival
+        order — the first/auth frame included."""
+        self.text_frames.append(payload)
 
     async def handle(self, ws):
         # Playwright dispatches WebSocket message events only AFTER this
@@ -342,6 +502,7 @@ class FakeGateway:
 
         def on_message(payload) -> None:
             if isinstance(payload, str):
+                self.record_text(payload)
                 if first_text.done() or first_text.cancelled():
                     self.text_after_ready.append(payload)
                     return
@@ -380,7 +541,9 @@ class FakeGateway:
         return b"".join(p.relayed for p in self.pipes)
 
     def every_text_frame(self) -> list[str]:
-        return [t for p in self.pipes for t in p.browser_text] + [json.dumps(f) for f in self.text_after_ready]
+        """The EXACT recording the custody oracle scans — every original
+        text frame as received, the auth frame included."""
+        return list(self.text_frames)
 
 
 async def handle_broker(route):
@@ -390,7 +553,10 @@ async def handle_broker(route):
     assert req.method == 'POST' and req.url.endswith('/gateway/token'), (req.method, req.url)
     assert (req.post_data or '') == '', 'the broker exchange must send an empty body'
     authz = (await req.header_value('authorization')) or ''
-    assert authz == f'Bearer {GOOGLE_TOKEN}', f'broker saw an unexpected Authorization: {authz[:40]}…'
+    assert authz == f'Bearer {GOOGLE_TOKEN}', (
+        f'broker saw an unexpected Authorization header '
+        f'(shape: {authz.split(" ")[0] if authz else "empty"}, length {len(authz)})'
+    )
     await route.fulfill(
         content_type='application/json',
         body=json.dumps({'token': GW_TOKEN, 'token_type': 'Bearer', 'expires_in': 240, 'expires_at': int(time.time()) + 240}),
@@ -419,6 +585,18 @@ async def clipboard_equals(page, expected: str, timeout: float = 12.0) -> None:
         return await page.evaluate('navigator.clipboard.readText()') == expected
 
     await wait_for(read, timeout, f'clipboard to become {expected!r}')
+
+
+async def wait_for_terminal_line(page, ack: str, timeout: float = 15.0) -> None:
+    """Wait for the ack to appear as a STANDALONE line in the real xterm
+    buffer — the command's output, not the echoed typed input (see
+    clear_ack_reached). The xterm DOM renderer keeps the viewport rows in
+    .xterm-rows under .xterm-screen."""
+    async def read() -> bool:
+        text = await page.locator('.xterm-screen').inner_text()
+        return clear_ack_reached(text, ack)
+
+    await wait_for(read, timeout, f'the clear-attempt acknowledgment {ack!r} to appear as real terminal output')
 
 
 # Failure diagnostics: the flow's page + console errors, dumped when the run
@@ -473,17 +651,23 @@ async def connection_state(page) -> dict:
 async def main() -> int:
     global PAGE
     custody_negative_control()
-    print('custody negative control: injected credentials are rejected by the oracle')
+    gateway_auth_negative_control()
+    url_custody_negative_control()
+    osc52_clear_ack_negative_control()
+    print('negative controls: custody oracle, gateway auth-frame recorder, URL policy and OSC 52 ack matcher all bite')
 
     sync = FakeSync()
     relay = FakeRelay(FIXTURE_PORT)
     host_key_line = open(os.path.join(WORK, 'host_key.pub')).read().strip()
     gateway = FakeGateway(FIXTURE_PORT, GW_DEVICE, host_key_line)
-    http_surfaces: list[tuple[str, str]] = []
+    # EVERY HTTP request the page makes: method, URL, headers and body — the
+    # URL policy, the Authorization rule and the body scan below run on THIS
+    # capture, not just on the sync route's own log.
+    http_log: list[tuple[str, str, dict, str]] = []
     console_errors: list[str] = []
 
     def on_request(req):
-        http_surfaces.append((req.method, req.url))
+        http_log.append((req.method, req.url, dict(req.headers), req.post_data or ''))
 
     pw = await async_playwright().start()
     browser = await pw.chromium.launch()
@@ -643,12 +827,21 @@ async def main() -> int:
         print('OSC 52 SET: remote yank reached the browser clipboard through the real terminal')
 
         # A remote must not be able to BLANK the clipboard: the empty-payload
-        # sequence is refused by the shipping handler.
-        await page.keyboard.type("printf '\\033]52;c;\\a'")
+        # sequence is refused by the shipping handler. The refusal is silent,
+        # so the SAME PTY command emits a unique harmless output ack AFTER
+        # the empty OSC; the harness waits for that ack as a REAL terminal
+        # line — the typed echo carries the token only inside shell quotes,
+        # so the wait cannot be satisfied by the echo. Reaching the output
+        # proves ordered parsing has processed the clear attempt before the
+        # clipboard is checked; a stalled or dropped command fails the wait
+        # instead of passing on the already-present marker.
+        ack_suffix = os.urandom(4).hex()
+        ack = f'e2e-clear-ack-{ack_suffix}'
+        await page.keyboard.type(f"printf '\\033]52;c;\\a'; echo 'e2e-clear''-ack-{ack_suffix}'")
         await page.keyboard.press('Enter')
-        await page.wait_for_timeout(2_000)
+        await wait_for_terminal_line(page, ack)
         await clipboard_equals(page, OSC52_MARKER)
-        print('OSC 52 CLEAR: empty-payload refusal kept the yanked marker')
+        print('OSC 52 CLEAR: empty-payload refusal kept the yanked marker (acknowledged by real output)')
 
         # --- kill the sibling key, reload, redial ---------------------------
         # With key_plain (manualbox's credential) deleted from authorized_keys,
@@ -736,45 +929,50 @@ async def main() -> int:
         await pw.stop()
 
     # --- wire-level assertions ----------------------------------------------
-    # 0. The custody oracle's surfaces: HTTP requests (all of them), relay
-    #    frames (binary AND text), gateway frames (binary AND text), socket
-    #    URLs. The negative control above proved the oracle bites.
-    #
-    # The Google sign-in's accepted surfaces, per the documented credential
-    # boundary: the Authorization header to the account surfaces (sync +
-    # broker) and — legacy, until that transport migrates — the DIRECT
-    # relay's query string, which that relay itself authorizes. The GATEWAY
-    # carries none of it (its admission is the broker-scoped routing token,
-    # asserted at the auth frame below), and no key/canary material rides
-    # ANY surface.
-    allow_google_in_url = ('direct.e2e.test', 'sync.e2e.test', 'gateway-broker.e2e.test')
-    for method, url in http_surfaces:
-        for secret in SECRETS_AS_TEXT:
-            if secret == GOOGLE_TOKEN:
-                continue  # token-bearing URLs are checked per-host below
-            assert secret not in url, f'{secret[:24]}… appeared in a request URL: {method} {url}'
-        if GOOGLE_TOKEN in url:
-            assert any(host in url for host in allow_google_in_url), (
-                f'the Google sign-in reached a non-account surface: {method} {url}'
+    # 0. The custody oracle's surfaces, stated exactly as implemented:
+    #      - EVERY HTTP request the page made (captured with method, URL,
+    #        headers and body): the parsed-origin URL policy, the
+    #        Authorization rule (the sign-in may ride that header ONLY to
+    #        the account surfaces, and there as the exact bearer), and a
+    #        full-set body scan (the sync envelopes are additionally
+    #        shape-checked and decrypted below);
+    #      - the direct-relay and gateway WebSocket dial URLs, through the
+    #        same per-surface policy;
+    #      - EVERY recorded relay/gateway frame — binary AND text, the
+    #        gateway's first/auth TEXT frame included — through the SAME
+    #        oracle.
+    #    The negative controls above proved the oracle, the gateway recorder
+    #    and the URL policy bite; THIS run's coverage is the live recordings
+    #    going through them.
+    for method, url, headers, body in http_log:
+        assert_url_custody(url, f'HTTP {method}')
+        host = (urlsplit(url).hostname or '').lower()
+        authz = headers.get('authorization', '')
+        if host in ACCOUNT_HOSTS:
+            assert authz == f'Bearer {GOOGLE_TOKEN}', (
+                f'{method} {redacted_url(url)} carried an unexpected Authorization header '
+                f'(shape: {authz.split(" ")[0] if authz else "empty"}, length {len(authz)})'
             )
+        else:
+            assert GOOGLE_TOKEN not in authz, (
+                f'the Google sign-in rode the Authorization header of {method} {redacted_url(url)}'
+            )
+        assert all(GOOGLE_TOKEN not in v for k, v in headers.items() if k != 'authorization'), (
+            f'the Google sign-in rode a non-Authorization header of {method} {redacted_url(url)}'
+        )
+        for secret, label in SECRET_LABELS:
+            assert secret not in body, f'{label} left the browser in the body of {method} {redacted_url(url)}'
+    for url in relay.urls:
+        assert_url_custody(url, 'the direct-relay dial')
+    for url in gateway.urls:
+        assert_url_custody(url, 'the gateway dial')
     assert_wire_custody(relay.every_relayed_byte(), relay.every_text_frame(), 'direct-relay')
     assert_wire_custody(gateway.every_relayed_byte(), gateway.every_text_frame(), 'gateway')
-    for url in gateway.urls:
-        for secret in SECRETS_AS_TEXT:
-            assert secret not in url, f'{secret[:24]}… appeared in a gateway WebSocket URL'
-    for url in relay.urls:
-        for secret in SECRETS_AS_TEXT:
-            if secret == GOOGLE_TOKEN:
-                continue  # the documented legacy boundary: this relay authorizes the query token
-            assert secret not in url, f'{secret[:24]}… appeared in a relay WebSocket URL'
 
-    # 1. The canary comment and all key material never rode ANY HTTP request.
-    for method, url, body in sync.all_bodies:
-        assert CANARY not in body, f'config text left the browser via {method} {url}'
-        assert 'BEGIN OPENSSH PRIVATE KEY' not in body, f'key material left via {method} {url}'
-        assert KEY_PASSPHRASE not in body, f'key passphrase left via {method} {url}'
-        assert GOOGLE_TOKEN not in body, f'the Google sign-in left in a body via {method} {url}'
-    # 2. Every sync PUT carried exactly the envelope fields — ciphertext only.
+    # 1. Sync request custody: the global body scan above already covers
+    #    every sync body against the full secret set; what remains here is
+    #    sync-STRUCTURE: every PUT carried exactly the envelope fields —
+    #    ciphertext only.
     for put in sync.put_bodies:
         assert set(put.keys()) == {'data', 'version'}
         envelope = json.loads(put['data'])
@@ -801,9 +999,12 @@ async def main() -> int:
         len(p.relayed) > 0 and len(p.from_server) > 0 for p in relay.pipes
     ), 'a relay pipe saw no real SSH traffic'
     # 5. Gateway dial: exactly one, admitted by the broker exchange, carrying
-    #    ONLY the scoped routing token in its auth frame — the Google sign-in
-    #    appears on no gateway surface (already asserted globally, restated at
-    #    the frame level), and a real SSH session ran behind `ready`.
+    #    ONLY the scoped routing token in its auth frame. That frame is part
+    #    of the custody recording now (the auth frame is inside
+    #    every_text_frame, scanned with the full secret set — the scoped
+    #    token itself stays allowed), the Google sign-in appears on no
+    #    gateway surface (asserted globally on URLs and headers), and a real
+    #    SSH session ran behind `ready`.
     assert gateway.dials == 1, f'expected exactly one gateway dial, saw {gateway.dials}'
     assert any('/api/v1/hosts/dev-e2e/ssh' in u for u in gateway.urls), gateway.urls
     assert len(gateway.auth_frames) == 1 and gateway.auth_frames[0].get('type') == 'auth', gateway.auth_frames
@@ -819,7 +1020,8 @@ async def main() -> int:
     print(
         f'  sync PUTs: {len(sync.put_bodies)} envelopes; direct dials: {relay.dials}'
         f' (browser-direct, custody-scanned: binary + text + URLs);'
-        f' gateway dials: {gateway.dials} (protocol fixture, real sshd behind it)'
+        f' gateway dials: {gateway.dials} (protocol fixture, real sshd behind it,'
+        f' auth TEXT frame custody-scanned: {len(gateway.every_text_frame())} text frame(s))'
     )
     return 0
 
