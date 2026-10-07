@@ -16,7 +16,9 @@ What the gateway is and is not:
   sign-in also authorizes your account's sync storage (reads, writes,
   deletes), so before a gateway dial the browser exchanges it — at the
   trusted account service, never at the gateway — for a **gateway-scoped
-  token**: valid only for gateway routing, only for your account, and only
+  management token**: it authorizes the gateway's management surface only
+  (session routing and the enrollment actions — enroll / list / revoke),
+  only for your account, and only
   for five minutes. A failed exchange fails the dial; there is no fallback
   to the raw token.
 - The thing that logs you into the host is your **SSH private key**, which
@@ -50,7 +52,8 @@ maturity limits).
    run your own gateway.
 2. **On the host**: enroll the gateway agent (see the pocketshell-gateway
    repo's agent docs). Enrollment needs a token: use the host's row
-   **Enroll token…** action here — it mints a gateway-scoped token, copies it
+   **Enroll token…** action here — it mints a gateway-scoped management
+   token, copies it
    to your clipboard, and expires within five minutes. Paste it into the
    enrollment command on the host (it reads the token from stdin). Your
    actual sign-in is never used on the host. Enrollment confirms the host's

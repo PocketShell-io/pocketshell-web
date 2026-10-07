@@ -20,10 +20,12 @@ vi.hoisted(() => {
 /**
  * The gateway credential exchange, against the ACTUAL broker contract
  * (aws-infra sandbox/pocketshell-sync lambda: POST /gateway/token behind the
- * Google JWT authorizer — empty body, {token, token_type, expires_in}, with
- * `expires_at` unix seconds arriving in broker round two; TTL ≤ 300s capped
- * by the Google exp). Fail closed on every config, shape, and bound
- * violation; the Google token and the minted token never touch storage or
+ * Google JWT authorizer — empty body, `redirect: 'error'`, and a 200 body of
+ * {token, token_type:'Bearer', expires_in, expires_at unix seconds} with BOTH
+ * expiry spellings stamped from one clock, TTL ≤ 300s capped by the Google
+ * exp). Fail closed on every config, shape, and bound violation — including
+ * a stalled body (the deadline spans headers AND body) and a redirecting
+ * responder; the Google token and the minted token never touch storage or
  * logs; the exchange URL derives ONLY from the frontend-owned trusted base.
  */
 
@@ -33,6 +35,12 @@ const BASE = 'https://account.example';
 const URL_TRUSTED = 'https://account.example/gateway/token';
 
 const NOW = 1_700_000_000_000;
+const NOW_SEC = Math.floor(NOW / 1000);
+
+/** The broker's contract response: BOTH expiry fields, agreeing. */
+function brokerBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { token: BROKER, token_type: 'Bearer', expires_in: 300, expires_at: NOW_SEC + 300, ...overrides };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -54,7 +62,7 @@ function fetchMock(responder: (call: FetchCall) => Response): { calls: FetchCall
 }
 
 function exchange(overrides: Record<string, unknown> = {}, responder?: (call: FetchCall) => Response) {
-  const mock = fetchMock(responder ?? (() => jsonResponse({ token: BROKER, token_type: 'Bearer', expires_in: 300 })));
+  const mock = fetchMock(responder ?? (() => jsonResponse(brokerBody())));
   const promise = getGatewayToken({
     googleIdToken: GOOGLE,
     syncApiBase: BASE,
@@ -101,25 +109,57 @@ describe('gateway token exchange', () => {
     }
   });
 
-  it('round-one shape ({token, expires_in}) yields now+expires_in', async () => {
-    const { promise } = exchange({}, () => jsonResponse({ token: BROKER, token_type: 'Bearer', expires_in: 300 }));
-    const out = await promise;
-    expect(out.expiresAtMs).toBe(NOW + 300_000);
+  it('the request refuses redirects by contract — a 3xx answer is never followed', async () => {
+    const { calls } = exchange();
+    await exchange().promise;
+    for (const call of calls) {
+      expect(call.init?.redirect).toBe('error');
+    }
   });
 
-  it('prefers expires_at (unix seconds) when the broker round-two field is present', async () => {
-    const abs = Math.floor(NOW / 1000) + 120;
-    const { promise } = exchange({}, () => jsonResponse({ token: BROKER, expires_in: 300, expires_at: abs }));
-    const out = await promise;
-    expect(out.expiresAtMs).toBe(abs * 1000);
+  it('brokerExpiryFieldsMustAgree — both fields, one clock, bounded allowance', async () => {
+    // The absolute field wins for display, and agreement admits small skew.
+    for (const skewSec of [0, 3, 5]) {
+      const out = await getGatewayToken({
+        googleIdToken: GOOGLE,
+        syncApiBase: BASE,
+        nowMs: () => NOW,
+        fetchImpl: fetchMock(() =>
+          jsonResponse(brokerBody({ expires_at: NOW_SEC + 300 - skewSec })),
+        ).fetch,
+      });
+      expect(out.expiresAtMs).toBe((NOW_SEC + 300 - skewSec) * 1000);
+    }
+    // Wider than the allowance: the responder's two clocks disagree — broken
+    // or lying, and there is NO fallback to a one-field answer.
+    for (const skewSec of [6, 30, 300]) {
+      await expect(
+        getGatewayToken({
+          googleIdToken: GOOGLE,
+          syncApiBase: BASE,
+          nowMs: () => NOW,
+          fetchImpl: fetchMock(() =>
+            jsonResponse(brokerBody({ expires_at: NOW_SEC + 300 - skewSec })),
+          ).fetch,
+        }),
+      ).rejects.toThrow(/disagree/);
+    }
+  });
 
-    const asString = await getGatewayToken({
-      googleIdToken: GOOGLE,
-      syncApiBase: BASE,
-      nowMs: () => NOW,
-      fetchImpl: fetchMock(() => jsonResponse({ token: BROKER, expires_at: String(abs) })).fetch,
-    });
-    expect(asString.expiresAtMs).toBe(abs * 1000);
+  it.each([
+    ['missing expires_at', () => jsonResponse(brokerBody({ expires_at: undefined })), /malformed absolute/],
+    ['string expires_at', () => jsonResponse(brokerBody({ expires_at: String(NOW_SEC + 300) })), /malformed absolute/],
+    ['float expires_at', () => jsonResponse(brokerBody({ expires_at: NOW_SEC + 300.5 })), /malformed absolute/],
+    ['zero expires_at', () => jsonResponse(brokerBody({ expires_at: 0 })), /malformed absolute/],
+    ['missing expires_in', () => jsonResponse(brokerBody({ expires_in: undefined })), /malformed relative/],
+    ['zero expires_in', () => jsonResponse(brokerBody({ expires_in: 0 })), /malformed relative/],
+    ['float expires_in', () => jsonResponse(brokerBody({ expires_in: 299.5 })), /malformed relative/],
+    ['expires_in beyond the broker bound', () => jsonResponse(brokerBody({ expires_in: 301 })), /malformed relative/],
+    ['lowercase token_type', () => jsonResponse(brokerBody({ token_type: 'bearer' })), /malformed gateway credential/],
+    ['wrong token_type', () => jsonResponse(brokerBody({ token_type: 'MAC' })), /malformed gateway credential/],
+  ])('%s is refused with no fallback', async (_name, respond, pattern) => {
+    const { promise } = exchange({}, respond as (call: FetchCall) => Response);
+    await expect(promise).rejects.toThrow(pattern as RegExp);
   });
 
   it.each([
@@ -142,13 +182,10 @@ describe('gateway token exchange', () => {
 
   it.each([
     ['non-JSON 200', () => new Response('not json', { status: 200 }), /unreadable/],
-    ['missing token', () => jsonResponse({ token_type: 'Bearer', expires_in: 300 }), /malformed gateway credential/],
-    ['garbage token', () => jsonResponse({ token: 'hello world', expires_in: 300 }), /malformed/],
-    ['google token echoed back', () => jsonResponse({ token: GOOGLE, expires_in: 300 }), /malformed/],
-    ['no expiry fields', () => jsonResponse({ token: BROKER }), /without a usable expiry/],
-    ['expired on arrival', () => jsonResponse({ token: BROKER, expires_in: 0 }), /without a usable expiry|already expired/],
-    ['lifetime beyond the broker bound', () => jsonResponse({ token: BROKER, expires_in: 400 }), /outlives the broker contract/],
-    ['absurd absolute expiry', () => jsonResponse({ token: BROKER, expires_at: Math.floor(NOW / 1000) + 100_000 }), /outlives/],
+    ['missing token', () => jsonResponse({ token_type: 'Bearer', expires_in: 300, expires_at: NOW_SEC + 300 }), /malformed gateway credential/],
+    ['garbage token', () => jsonResponse(brokerBody({ token: 'hello world' })), /malformed/],
+    ['google token echoed back', () => jsonResponse(brokerBody({ token: GOOGLE })), /malformed/],
+    ['no expiry fields', () => jsonResponse({ token: BROKER, token_type: 'Bearer' }), /malformed absolute/],
   ])('%s is refused', async (_name, respond, pattern) => {
     const { promise } = exchange({}, respond as (call: FetchCall) => Response);
     await expect(promise).rejects.toThrow(pattern as RegExp);
@@ -156,7 +193,7 @@ describe('gateway token exchange', () => {
 
   it('oversized responses are cut off, not parsed', async () => {
     const pad = 'x'.repeat(20 * 1024);
-    const { promise } = exchange({}, () => jsonResponse({ token: BROKER, expires_in: 300, pad }));
+    const { promise } = exchange({}, () => jsonResponse(brokerBody({ pad })));
     await expect(promise).rejects.toThrow(/unreadable/);
   });
 
@@ -200,9 +237,80 @@ describe('gateway token exchange', () => {
     expect(controllerHold[0]!.aborted).toBe(true);
   });
 
+  describe('brokerRedirectAndStalledBodyFailClosed', () => {
+    it('a body that stalls AFTER the headers dies by the SAME deadline, not an unbounded read', async () => {
+      vi.useFakeTimers();
+      const encoder = new TextEncoder();
+      // A 200 whose headers arrived but whose body never completes — the
+      // exact unbounded-window hole: a fetch that resolves on headers while
+      // the stream trickles (or never). The abort must tear the read down.
+      const stalledBody = ((_input: RequestInfo | URL, init?: RequestInit) => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"token":"half-a-token"'));
+            init!.signal!.addEventListener('abort', () => {
+              controller.error(new DOMException('aborted', 'AbortError'));
+            });
+          },
+        });
+        return Promise.resolve(
+          new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } }),
+        );
+      }) as typeof fetch;
+      const promise = getGatewayToken({
+        googleIdToken: GOOGLE,
+        syncApiBase: BASE,
+        nowMs: () => NOW,
+        fetchImpl: stalledBody,
+        timeoutMs: 250,
+      });
+      const assertion = expect(promise).rejects.toThrow(/did not answer/);
+      await vi.advanceTimersByTimeAsync(400);
+      await assertion;
+    });
+
+    it('an error body counts against the same deadline — no separate slow lane', async () => {
+      vi.useFakeTimers();
+      const encoder = new TextEncoder();
+      const stalledError = ((_input: RequestInfo | URL, init?: RequestInit) => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"error":"gateway_sign'));
+            init!.signal!.addEventListener('abort', () => {
+              controller.error(new DOMException('aborted', 'AbortError'));
+            });
+          },
+        });
+        return Promise.resolve(new Response(stream, { status: 503 }));
+      }) as typeof fetch;
+      const promise = getGatewayToken({
+        googleIdToken: GOOGLE,
+        syncApiBase: BASE,
+        nowMs: () => NOW,
+        fetchImpl: stalledError,
+        timeoutMs: 250,
+      });
+      const assertion = expect(promise).rejects.toThrow(/did not answer/);
+      await vi.advanceTimersByTimeAsync(400);
+      await assertion;
+    });
+
+    it('a redirecting responder fails closed — the exchange follows no 3xx', async () => {
+      const { promise } = exchange(
+        {},
+        () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://evil.example/gateway/token' },
+          }),
+      );
+      await expect(promise).rejects.toThrow(/could not mint/);
+    });
+  });
+
   it('nothing token-shaped reaches storage or the console', async () => {
     const setItem = vi.spyOn(localStorage, 'setItem');
-    const { promise } = exchange({}, () => jsonResponse({ token: BROKER, token_type: 'Bearer', expires_in: 300 }));
+    const { promise } = exchange({}, () => jsonResponse(brokerBody()));
     await promise;
     expect(setItem).not.toHaveBeenCalled();
     for (const spy of [console.log, console.info, console.warn, console.error]) {

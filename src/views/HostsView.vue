@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, type Ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useConnectionStore } from '@ui/app/stores/connection';
@@ -12,7 +12,8 @@ import { claimsOf } from '../auth/google';
 import { forgetPassphrase, recallPassphrase, rememberPassphrase } from '../shared/passphraseVault';
 import { GATEWAY_DEFAULT_SERVER_URL } from '@pocketshell/core';
 import { useHostPinsStore } from '../stores/hostPins';
-import { getGatewayToken, GatewayTokenError } from '../api/gatewayToken';
+import { getGatewayToken } from '../api/gatewayToken';
+import { createEnrollTokenController, emptyEnrollTokenView } from '../platform/enrollTokenStore';
 import type { HostEntry } from '@pocketshell/core';
 
 const auth = useAuthStore();
@@ -57,15 +58,20 @@ const pairSaved = ref('');
 const pairError = ref('');
 const pairPinned = ref('');
 
-/* Gateway enrollment: a short-lived token for registering the HOST AGENT on
-   the host itself. It is minted by the account service from the sign-in and
-   works only for gateway enrollment — the raw sign-in never goes to the
-   host, the gateway, or the clipboard twice. */
+/* Gateway enrollment: a short-lived MANAGEMENT token for registering the
+   HOST AGENT on the host itself (enroll/list/revoke + session routing). It
+   is minted by the account service from the sign-in and works only on the
+   gateway — the raw sign-in never goes to the
+   host, the gateway, or the clipboard twice. The lifecycle (memory-only
+   token, generation guard, expiry, close/unmount erase) lives in
+   enrollTokenStore, mirrored into one reactive view object here. */
 const enrollHost = ref<HostEntry | null>(null);
-const enrollToken = ref('');
-const enrollError = ref('');
-const enrollBusy = ref(false);
-const enrollCopied = ref(false);
+const enrollView = reactive(emptyEnrollTokenView());
+const enrollCtrl = createEnrollTokenController({
+  mint: () => getGatewayToken({ googleIdToken: auth.idToken }),
+  copy: (token) => navigator.clipboard.writeText(token),
+  onState: (view) => Object.assign(enrollView, view),
+});
 
 const importOpen = ref(false);
 const importStep = ref<'choose' | 'select' | 'missing'>('choose');
@@ -268,51 +274,26 @@ async function removePair(host: HostEntry) {
 
 /* --- Gateway enrollment token --------------------------------------------- */
 
+/** The clock the dialog shows; empty until a token is in hand. */
+const enrollExpiresLabel = computed(() =>
+  enrollView.expiresAtMs === null ? '' : new Date(enrollView.expiresAtMs).toLocaleTimeString(),
+);
+
 function openEnroll(host: HostEntry) {
+  enrollCtrl.open();
   enrollHost.value = host;
-  enrollToken.value = '';
-  enrollError.value = '';
-  enrollCopied.value = false;
   formOpen.value = false;
   keyHost.value = null;
   pairHost.value = null;
   importOpen.value = false;
 }
 
-/** Mint a gateway-scoped token and put it on the clipboard. The exchange
-   happens at the trusted account service; the token works only for gateway
-   enrollment/routing and expires within five minutes. */
-async function generateEnrollToken() {
-  if (enrollHost.value === null) return;
-  enrollBusy.value = true;
-  enrollError.value = '';
-  enrollCopied.value = false;
-  try {
-    const minted = await getGatewayToken({ googleIdToken: auth.idToken });
-    enrollToken.value = minted.token;
-    try {
-      await navigator.clipboard.writeText(minted.token);
-      enrollCopied.value = true;
-    } catch {
-      // Clipboard blocked (permissions/insecure context): the token stays in
-      // the field below for a manual copy.
-    }
-  } catch (e) {
-    enrollError.value = e instanceof GatewayTokenError ? e.message : String(e instanceof Error ? e.message : e);
-  } finally {
-    enrollBusy.value = false;
-  }
+function closeEnroll() {
+  enrollCtrl.close();
+  enrollHost.value = null;
 }
 
-async function copyEnrollToken() {
-  if (enrollToken.value === '') return;
-  try {
-    await navigator.clipboard.writeText(enrollToken.value);
-    enrollCopied.value = true;
-  } catch {
-    enrollError.value = 'Copying was blocked — select the token and copy it by hand.';
-  }
-}
+onBeforeUnmount(closeEnroll);
 
 /* --- Private key per host ------------------------------------------------ */
 
@@ -787,31 +768,34 @@ async function open(host: HostEntry) {
           </div>
         </details>
 
-        <!-- Gateway enrollment: a scoped, five-minute token for registering
-             the host's agent. The raw sign-in never leaves for the host or
-             the gateway — this token works for the gateway only. -->
+        <!-- Gateway enrollment: a scoped, five-minute MANAGEMENT token for
+             registering the host's agent (enroll/list/revoke + session
+             routing). The raw sign-in never leaves for the host or the
+             gateway — this token works for the gateway only, and it is not
+             an SSH password. -->
         <details v-if="enrollHost" class="keybox" open>
           <summary><span class="sumtitle">Enrollment token for {{ enrollHost.name }}</span></summary>
           <div class="cardbox-body">
             <p class="card-lede">
               Register the host's agent by giving the enrollment command on the host a gateway token. It is minted by
-              your account service, works only for the gateway, and stops working after five minutes — your actual
-              sign-in is never used on the host.
+              your account service, carries the gateway's management scope only — enroll, list, revoke and session
+              routing — and stops working after five minutes. It is not an SSH password and never your sign-in.
             </p>
             <div class="form-actions">
-              <button class="primary" :disabled="enrollBusy" @click="generateEnrollToken">
-                {{ enrollBusy ? 'Generating…' : 'Generate token' }}
+              <button class="primary" :disabled="enrollView.busy" @click="enrollCtrl.generate()">
+                {{ enrollView.busy ? 'Generating…' : 'Generate token' }}
               </button>
-              <button v-if="enrollToken !== ''" @click="copyEnrollToken">Copy again</button>
-              <button @click="enrollHost = null">Close</button>
+              <button v-if="enrollView.token !== ''" :disabled="enrollView.expired" @click="enrollCtrl.copyAgain()">Copy again</button>
+              <button @click="closeEnroll">Close</button>
             </div>
-            <div v-if="enrollToken !== ''" class="field">
-              <label class="flabel" for="ef-token">Gateway token (expires in 5 minutes)</label>
-              <input id="ef-token" :value="enrollToken" readonly spellcheck="false" aria-label="Gateway enrollment token" />
-              <p v-if="enrollCopied" class="muted" role="status">Copied. On the host, run its enrollment command and paste this token when asked for one — within five minutes.</p>
-              <p v-else class="muted">Select the token and copy it by hand, then paste it into the enrollment command on the host — within five minutes.</p>
+            <div v-if="enrollView.token !== ''" class="field">
+              <label class="flabel" for="ef-token">Gateway management token — expires {{ enrollExpiresLabel }}</label>
+              <input id="ef-token" :value="enrollView.token" readonly spellcheck="false" aria-label="Gateway enrollment token" />
+              <p v-if="enrollView.copied" class="muted" role="status">Copied. On the host, run its enrollment command and paste this token when asked for one — it stops working at {{ enrollExpiresLabel }}.</p>
+              <p v-else class="muted">Select the token and copy it by hand, then paste it into the enrollment command on the host — it stops working at {{ enrollExpiresLabel }}.</p>
             </div>
-            <p v-if="enrollError" class="error" role="alert">{{ enrollError }}</p>
+            <p v-if="enrollView.expired" class="muted" role="status">The token expired. Generate a fresh one — the host was never given anything.</p>
+            <p v-if="enrollView.error" class="error" role="alert">{{ enrollView.error }}</p>
           </div>
         </details>
       </div>
