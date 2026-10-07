@@ -58,6 +58,8 @@ Usage: /usr/bin/python3 tests/e2e/e2e_hosts_keys.py <base-url> <workdir> <fixtur
 
 import asyncio
 import base64
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -135,7 +137,10 @@ SECRET_LABELS = [
 def decrypt_envelope(envelope: str, passphrase: str) -> str:
     """The desktop's SyncCrypto, test-side: same envelope, python runtime."""
     fields = json.loads(envelope)
-    assert fields['v'] == 1 and fields['kdf'] == 'pbkdf2-sha256', fields
+    assert fields['v'] == 1 and fields['kdf'] == 'pbkdf2-sha256', (
+        f'envelope fields: {sorted(fields)}; '
+        f"v={safe_diag_text(repr(fields.get('v')))}, kdf={safe_diag_text(repr(fields.get('kdf')))}"
+    )
     key = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
@@ -345,6 +350,76 @@ def describe_method(method: str) -> str:
     if method in KNOWN_HTTP_METHODS:
         return method
     return f'an unexpected method (length {len(method)})'
+
+
+# --- failure-output renderers -------------------------------------------------
+#
+# The custody policies' own messages are label-safe by construction; the SAME
+# boundary now covers EVERY other failure output — diagnostic dumps, the final
+# console verdict, connection-store diagnostics, structured assertion payloads
+# and caught exceptions. Untrusted text is WITHHELD WHOLE when it carries any
+# declared secret, raw or in its single-pass +- / percent-decoded form (the
+# identical parser boundary the URL scans use — a reversibly encoded secret is
+# not redacted away); otherwise it is kept, capped with an explicit withheld
+# marker. No partial masking: a fragment either appears clean or disappears
+# entirely. Captured wire/HTTP data itself stays raw in memory for the
+# load-bearing custody verdicts — only these diagnostic renderings are safe.
+
+DIAG_TEXT_CAP = 300     # per-fragment cap for free-text failure diagnostics
+DIAG_BODY_CAP = 1500    # cap for the visible-body diagnostic dump
+
+
+def _carries_secret(text: str) -> bool:
+    return any(secret in text or secret in unquote_plus(text) for secret, _ in SECRET_LABELS)
+
+
+def safe_diag_text(text: str, cap: int = DIAG_TEXT_CAP) -> str:
+    """One untrusted free-text fragment (a console line, an app error, an
+    exception message, page text) rendered for failure output."""
+    if _carries_secret(text):
+        return f'<redacted: withheld ({len(text)} chars)>'
+    if len(text) > cap:
+        return f'{text[:cap]}... [+{len(text) - cap} chars withheld]'
+    return text
+
+
+def safe_exc(exc: BaseException) -> str:
+    """A caught exception for failure output: the type name always, the
+    message only through safe_diag_text — a driver/API error string can
+    embed a credential-bearing URL. Never a raw repr."""
+    message = safe_diag_text(str(exc))
+    return f'{type(exc).__name__}: {message}' if message else type(exc).__name__
+
+
+def safe_repr_payload(obj) -> str:
+    """A structured assertion payload (a parsed envelope, decrypted store
+    objects, recorded frames) for failure output: withheld whole when its
+    repr carries any declared secret, else kept capped."""
+    return safe_diag_text(repr(obj), cap=2000)
+
+
+def safe_console_payload(entries: list) -> list:
+    """The final console verdict's payload: every captured console error
+    through the same withheld-or-capped renderer — a sign-in that reached
+    the console can never be repeated by the failure message."""
+    return [safe_diag_text(entry) for entry in entries]
+
+
+def assert_no_console_errors(entries: list) -> None:
+    """The live final console verdict (was `assert len(console_errors) == 0,
+    console_errors`): the same assertion, its payload now the safe
+    rendering. The negative control drives THIS function, not a copy."""
+    assert len(entries) == 0, safe_console_payload(entries)
+
+
+def describe_connection_state(state: dict) -> str:
+    """The connection store's diagnostic rendering: the state plus the
+    scrubbed/capped error — an app error string can quote a refused URL."""
+    error = state.get('error')
+    return (
+        f"state={safe_diag_text(str(state.get('state')))} "
+        f"error={safe_diag_text('none' if error is None else str(error))}"
+    )
 
 
 def _parse_url(url: str, where: str):
@@ -901,7 +976,8 @@ class _RequestShape:
     material. Same shapes as the live Playwright Request object."""
 
     def __init__(self, prop_headers: dict, full_headers: dict, entries: list | None = None,
-                 delay: float = 0.0, fail: bool = False):
+                 delay: float = 0.0, fail: bool = False,
+                 fail_message: str = 'the complete-header read failed (fixture)'):
         self.method = 'GET'
         self.url = 'https://attacker.e2e.test/x'
         self.post_data = None
@@ -910,6 +986,7 @@ class _RequestShape:
         self._entries = entries
         self._delay = delay
         self._fail = fail
+        self._fail_message = fail_message
 
     @property
     def headers(self) -> dict:
@@ -919,14 +996,14 @@ class _RequestShape:
         if self._delay:
             await asyncio.sleep(self._delay)
         if self._fail:
-            raise RuntimeError('the complete-header read failed (fixture)')
+            raise RuntimeError(self._fail_message)
         return dict(self._full)
 
     async def headers_array(self) -> list:
         if self._delay:
             await asyncio.sleep(self._delay)
         if self._fail:
-            raise RuntimeError('the complete-header read failed (fixture)')
+            raise RuntimeError(self._fail_message)
         return list(self._entries if self._entries is not None
                     else [{'name': k, 'value': v} for k, v in self._full.items()])
 
@@ -954,11 +1031,18 @@ async def gather_captures(tasks: list, timeout: float = 60.0) -> list:
     """EVERY header capture must COMPLETE before the custody verdict or
     browser teardown: the results are awaited (a slow complete-header read
     is waited on, not skipped) and a failed read PROPAGATES — an unfinished
-    or failed capture can never green the run."""
+    or failed capture can never green the run. The propagated failure keeps
+    its TYPE but carries the scrubbed rendering: a driver API error string
+    can embed a captured request's credential-bearing URL, and this
+    exception is what reaches the final traceback."""
     results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout)
     failed = [r for r in results if isinstance(r, BaseException)]
     if failed:
-        raise failed[0]
+        reason = safe_exc(failed[0])
+        try:
+            raise type(failed[0])(reason) from None
+        except TypeError:
+            raise RuntimeError(reason) from None
     return results
 
 
@@ -1119,7 +1203,7 @@ class _TcpPipe:
                     self._writer.write(chunk)
                 self._pending.clear()
             except Exception as e:  # noqa: BLE001 - a dead ferry must name itself in the receipt
-                print(f'--- pipe: TCP CONNECT FAILED: {e!r}')
+                print(f'--- pipe: TCP CONNECT FAILED: {safe_exc(e)}')
 
         self._connect.add_done_callback(_ready)
 
@@ -1318,7 +1402,8 @@ async def wait_for(predicate, timeout: float, what: str):
         if ok:
             return
         await asyncio.sleep(0.3)
-    raise AssertionError(f'timed out waiting for {what} (last: {last})')
+    last_note = safe_exc(last) if isinstance(last, BaseException) else 'none'
+    raise AssertionError(f'timed out waiting for {what} (last probe error: {last_note})')
 
 
 async def clipboard_equals(page, expected: str, timeout: float = 12.0) -> None:
@@ -1342,24 +1427,197 @@ async def wait_for_terminal_line(page, ack: str, timeout: float = 15.0) -> None:
 
 # Failure diagnostics: the flow's page + console errors, dumped when the run
 # dies mid-flow so a stalled selector names what the app was actually showing.
+# Every untrusted field is rendered through the SAME withheld-or-capped
+# boundary as the custody diagnostics (safe_url / safe_diag_text): the page
+# URL structurally, console/body/error text withheld whole when it carries
+# any declared secret. Each read is attempted and collected INDEPENDENTLY —
+# one failed read is reported through safe_exc (never a raw repr), can
+# neither mask the original failure nor skip the remaining reads. The
+# screenshot PNG is written unchanged but is an UNREDACTED artifact by
+# explicit scope: the no-credential claim covers text/log output only;
+# image-artifact handling is reviewed separately.
 PAGE = None
 CONSOLE_ERRORS: list[str] = []
 
 
 async def dump_diagnostics() -> None:
     try:
-        print(f'--- failure diagnostics: url={PAGE.url}')
-        print('--- console errors ---')
-        for e in CONSOLE_ERRORS:
-            print(f'  {e}')
+        try:
+            print(f'--- failure diagnostics: url={safe_url(PAGE.url)}')
+        except Exception as e:  # noqa: BLE001 - each read is collected independently
+            print(f'--- failure diagnostics: url read failed ({safe_exc(e)})')
+        try:
+            print(f'--- console errors ({len(CONSOLE_ERRORS)}) ---')
+            for entry in CONSOLE_ERRORS:
+                print(f'  {safe_diag_text(entry)}')
+        except Exception as e:  # noqa: BLE001
+            print(f'--- console errors: render failed ({safe_exc(e)})')
         shot = os.path.abspath('e2e-failure.png')
-        await PAGE.screenshot(path=shot)
-        print(f'--- screenshot: {shot}')
-        text = await PAGE.inner_text('body')
-        print('--- visible text (first 1500 chars) ---')
-        print(text[:1500])
+        try:
+            await PAGE.screenshot(path=shot)
+            print(f'--- screenshot (unredacted artifact, outside the text policy): {shot}')
+        except Exception as e:  # noqa: BLE001
+            print(f'--- screenshot failed ({safe_exc(e)})')
+        try:
+            text = await PAGE.inner_text('body')
+            print('--- visible text (capped; withheld whole when it carries a declared secret) ---')
+            print(safe_diag_text(text, cap=DIAG_BODY_CAP))
+        except Exception as e:  # noqa: BLE001
+            print(f'--- visible text: read failed ({safe_exc(e)})')
     except Exception as e:  # noqa: BLE001 - diagnostics must never mask the error
-        print(f'(diagnostics unavailable: {e})')
+        print(f'(diagnostics unavailable: {safe_exc(e)})')
+
+
+async def failure_dump_negative_control() -> None:
+    """The FAILURE-DUMP path must be credential-safe too, through the ACTUAL
+    functions (request-free fake objects, no browser — the RED for the frozen
+    e6 dump echoed every placement offline the same way):
+      - dump_diagnostics with a POISONED fake page (the direct-relay dial URL
+        carrying the sign-in; console entries and visible body text with raw,
+        +-encoded and percent-encoded placements) must print useful
+        STRUCTURED diagnostics — the scrubbed URL shape, the console count,
+        the withheld-with-counts body, the screenshot line — and no declared
+        secret raw or ordinarily encoded;
+      - a diagnostic read that FAILS with a secret-bearing exception is
+        reported through the safe rendering (type name + withheld message),
+        neither masks the dump nor skips the remaining reads;
+      - an HONEST page keeps its diagnostics verbatim (capped) — withholding
+        is not blanket;
+      - the ACTUAL final console verdict function (the one main() calls)
+        refuses poisoned console errors through a payload echoing no secret
+        and passes a clean run;
+      - the ACTUAL connection-store diagnostic rendering withholds a
+        poisoned refusal while an honest error stays readable;
+      - a capture failure whose exception message carries a secret lands
+        SCRUBBED at the gather boundary, still failing the run."""
+    global PAGE, CONSOLE_ERRORS
+    enc_first = '%' + GOOGLE_TOKEN[0].encode().hex() + GOOGLE_TOKEN[1:]
+    plus_form = 'BEGIN+OPENSSH+PRIVATE+KEY'
+    probes = tuple(s for s, _ in SECRET_LABELS) + (plus_form, enc_first)
+
+    class _DumpPage:
+        def __init__(self, url: str, body: str, url_raises: Exception | None = None,
+                     body_raises: Exception | None = None):
+            self._url, self._body = url, body
+            self._url_raises, self._body_raises = url_raises, body_raises
+            self.shots: list[str] = []
+
+        @property
+        def url(self):
+            if self._url_raises is not None:
+                raise self._url_raises
+            return self._url
+
+        async def screenshot(self, path=None):
+            self.shots.append(path)
+
+        async def inner_text(self, selector):
+            if self._body_raises is not None:
+                raise self._body_raises
+            assert selector == 'body'
+            return self._body
+
+    def scan(text: str, what: str) -> None:
+        for probe in probes:
+            assert probe not in text, f'{what} echoed a declared secret'
+
+    old_page, old_console = PAGE, list(CONSOLE_ERRORS)
+    try:
+        # the poisoned dump: every placement carries a different declared
+        # secret, encoded forms included
+        poisoned_console = [
+            f'uncaught token={GOOGLE_TOKEN}',
+            f'console err {CANARY}',
+            f'key {quote_plus("BEGIN OPENSSH PRIVATE KEY zz")}',
+            f'enc {enc_first}',
+        ]
+        page = _DumpPage(
+            f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}',
+            f'visible {CANARY} body {KEY_PASSPHRASE} {plus_form} {enc_first}',
+        )
+        PAGE, CONSOLE_ERRORS = page, poisoned_console
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            await dump_diagnostics()
+        out = buf.getvalue()
+        scan(out, 'the poisoned failure dump')
+        # useful structured diagnostics survived the withholding
+        assert 'wss://direct.e2e.test' in out and 'query params: host,port,token' in out, out
+        assert 'path: 1 segment(s)' in out, out
+        assert '--- console errors (4) ---' in out, out
+        assert '<redacted: withheld (' in out, out  # the poisoned body, withheld whole
+        assert '--- screenshot (unredacted artifact' in out and len(page.shots) == 1, out
+        # no CONSOLE entry is kept when it carries a secret — all four withheld
+        assert out.count('<redacted: withheld (') >= 5, out
+
+        # a diagnostic read failing with a secret-bearing exception: type +
+        # withheld message, later reads still collected
+        failing = _DumpPage('https://sync.e2e.test/me', '', body_raises=RuntimeError(f'body read failed for {CANARY}'))
+        PAGE, CONSOLE_ERRORS = failing, []
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            await dump_diagnostics()
+        out = buf.getvalue()
+        scan(out, 'the read-failure dump')
+        assert 'visible text: read failed (RuntimeError: <redacted' in out, out
+        assert CANARY not in out, 'the read-failure message leaked its secret'
+        assert '--- screenshot (unredacted artifact' in out and len(failing.shots) == 1, out
+        assert 'url=https://sync.e2e.test' in out, out
+
+        # the honest page: diagnostics stay USEFUL — nothing is blanket-withheld
+        honest = _DumpPage('https://sync.e2e.test/settings/main', 'No hosts synced yet — all nominal')
+        PAGE, CONSOLE_ERRORS = honest, ['first pull is a legitimate 404']
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            await dump_diagnostics()
+        out = buf.getvalue()
+        scan(out, 'the honest dump')
+        assert 'https://sync.e2e.test' in out and 'No hosts synced yet — all nominal' in out, out
+        assert 'first pull is a legitimate 404' in out, out
+
+        # the ACTUAL final console verdict function, poisoned and clean
+        poisoned_entries = [f'uncaught token={GOOGLE_TOKEN}', f'console {CANARY}', plus_form]
+        threw, message = False, ''
+        try:
+            assert_no_console_errors(poisoned_entries)
+        except AssertionError as exc:
+            threw, message = True, str(exc)
+        assert threw, 'the final console verdict accepted console errors'
+        scan(message, 'the final console verdict payload')
+        rendered = safe_console_payload(poisoned_entries)
+        assert len(rendered) == 3 and all(r.startswith('<redacted: withheld') for r in rendered), rendered
+        assert_no_console_errors([])  # the clean run passes
+        assert safe_console_payload(['benign console line']) == ['benign console line']
+
+        # the ACTUAL connection-store rendering, poisoned and honest
+        poisoned_store = {
+            'error': f'dial refused wss://direct.e2e.test/pipe?token={GOOGLE_TOKEN} {CANARY}',
+            'state': 'idle',
+        }
+        rendered = describe_connection_state(poisoned_store)
+        scan(rendered, 'the connection-store diagnostic')
+        assert 'state=idle' in rendered and '<redacted: withheld' in rendered, rendered
+        honest_rendered = describe_connection_state({'error': 'host key mismatch', 'state': 'error'})
+        assert 'host key mismatch' in honest_rendered and 'state=error' in honest_rendered, honest_rendered
+
+        # a capture failure carrying a secret in its message: the gather
+        # boundary re-raises the SAME type with the scrubbed message — the
+        # run still fails, the traceback never sees the raw string
+        shape = _RequestShape({'user-agent': 'benign'}, {'x': 'y'},
+                              fail=True, fail_message=f'all_headers failed for {GOOGLE_TOKEN} {CANARY}')
+        task = asyncio.ensure_future(capture_request(shape))
+        threw, caught = False, None
+        try:
+            await gather_captures([task])
+        except RuntimeError as exc:
+            threw, caught = True, exc
+        assert threw and task.done(), 'a failed capture no longer fails the run'
+        scan(str(caught), 'the gather-boundary capture failure')
+        assert '<redacted: withheld' in str(caught) and str(caught).startswith('RuntimeError:'), caught
+    finally:
+        PAGE, CONSOLE_ERRORS = old_page, old_console
+    print('failure-dump control: the ACTUAL dump/console-verdict/store/gather outputs stayed '
+          'label-safe, with honest diagnostics and failure propagation intact')
 
 
 async def unlock_on_app(page) -> None:
@@ -1374,9 +1632,14 @@ async def connect_from_host_list(page, name: str) -> None:
         await page.wait_for_url(f'**/host/{name}', timeout=30_000)
     except Exception:
         # A failed or stalled dial: surface what the connection store says so
-        # the receipt names the refusal, not just the timeout.
+        # the receipt names the refusal, not just the timeout. The store read
+        # is collected safely — its own failure must not mask the dial failure.
         await page.wait_for_timeout(2_000)
-        print(f'--- dial to {name} did not navigate; connection store: {await connection_state(page)}')
+        try:
+            rendered = describe_connection_state(await connection_state(page))
+        except Exception as e:  # noqa: BLE001
+            rendered = f'store read failed ({safe_exc(e)})'
+        print(f'--- dial to {name} did not navigate; connection store: {rendered}')
         raise
 
 
@@ -1397,9 +1660,11 @@ async def main() -> int:
     http_custody_negative_control()
     await diagnostics_negative_control()
     await capture_path_negative_control()
+    await failure_dump_negative_control()
     osc52_clear_ack_negative_control()
     print('negative controls: custody oracle, gateway auth-frame recorder, the exact-surface URL policy,'
-          ' the captured-HTTP policy, the complete-header capture path, failure diagnostics'
+          ' the captured-HTTP policy, the complete-header capture path, custody diagnostics,'
+          ' the credential-safe failure dumps (dump/console verdict/store/gather)'
           ' and the OSC 52 ack matcher all bite')
 
     sync = FakeSync()
@@ -1494,9 +1759,9 @@ async def main() -> int:
         await page.click('button:has-text("Parse hosts")')
         await page.wait_for_selector('.import-row')
         rows = await page.locator('.import-row').all_inner_texts()
-        assert any('dockertest' in r for r in rows), rows
-        assert any('already synced' in r for r in rows), rows
-        assert any('pattern' in r and 'skipped' in r for r in await page.locator('.import-hint').all_inner_texts()), rows
+        assert any('dockertest' in r for r in rows), safe_repr_payload(rows)
+        assert any('already synced' in r for r in rows), safe_repr_payload(rows)
+        assert any('pattern' in r and 'skipped' in r for r in await page.locator('.import-hint').all_inner_texts()), safe_repr_payload(rows)
         # New hosts pre-checked, the synced one not re-ticked by default.
         assert await page.locator('.import-row', has_text='dockertest').locator('input[type=checkbox]').is_checked()
         assert await page.locator('.import-row', has_text='keylesstest').locator('input[type=checkbox]').is_checked()
@@ -1533,12 +1798,14 @@ async def main() -> int:
             'the keyless/ambiguous refusal to surface in the connection store',
         )
         surfaced = await connection_state(page)
-        assert surfaced['error'], f'no refusal surfaced: {surfaced}'
-        print(f"keyless-collision refusal surfaced: {surfaced['error'][:100]}")
+        assert surfaced['error'], f'no refusal surfaced: {describe_connection_state(surfaced)}'
+        print(f"keyless-collision refusal surfaced: {safe_diag_text(str(surfaced['error']))}")
         await page.wait_for_timeout(2_000)
         assert relay.dials == dials_before, 'a refused dial must not open a relay socket'
         assert '/host/' not in page.url, 'a refused dial must not navigate to the host'
-        assert surfaced['state'] == 'idle', f'the dial must settle as idle, saw {surfaced["state"]}'
+        assert surfaced['state'] == 'idle', (
+            f'the dial must settle as idle, saw {safe_diag_text(str(surfaced["state"]))}'
+        )
 
         # --- connect the imported host: its OWN key must travel and work ----
         await connect_from_host_list(page, 'dockertest')
@@ -1635,7 +1902,7 @@ async def main() -> int:
             'the restored keys envelope to finish merging into the session',
         )
         names = await page.locator('.host-row .name').all_inner_texts()
-        assert sorted(names) == ['dockertest', 'keylesstest', 'manualbox'], names
+        assert sorted(names) == ['dockertest', 'keylesstest', 'manualbox'], safe_repr_payload(names)
         await connect_from_host_list(page, 'dockertest')
 
         # --- the gateway dial -----------------------------------------------
@@ -1742,7 +2009,8 @@ async def main() -> int:
     #    list — host list AND the roaming key envelope (the key-slot restore
     #    proof: the redial below only works if THIS payload came back).
     final_hosts = json.loads(decrypt_envelope(sync.data['main'], SYNC_PASSPHRASE))['hosts']
-    assert [h['name'] for h in final_hosts] == ['manualbox', 'dockertest', 'keylesstest', 'gwbox'], final_hosts
+    assert [h['name'] for h in final_hosts] == ['manualbox', 'dockertest', 'keylesstest', 'gwbox'], \
+        safe_repr_payload(final_hosts)
     assert final_hosts[1]['identityFile'] == '~/.ssh/key_enc'
     keys_payload = json.loads(decrypt_envelope(sync.data['keys'], SYNC_PASSPHRASE))['secrets']
     for name in ('manualbox', 'dockertest', 'gwbox'):
@@ -1767,15 +2035,16 @@ async def main() -> int:
     #    gateway surface (asserted globally on URLs and headers), and a real
     #    SSH session ran behind `ready`.
     assert gateway.dials == 1, f'expected exactly one gateway dial, saw {gateway.dials}'
-    assert any('/api/v1/hosts/dev-e2e/ssh' in u for u in gateway.urls), gateway.urls
-    assert len(gateway.auth_frames) == 1 and gateway.auth_frames[0].get('type') == 'auth', gateway.auth_frames
+    assert any('/api/v1/hosts/dev-e2e/ssh' in u for u in gateway.urls), [safe_url(u) for u in gateway.urls]
+    assert len(gateway.auth_frames) == 1 and gateway.auth_frames[0].get('type') == 'auth', \
+        safe_repr_payload(gateway.auth_frames)
     assert gateway.auth_frames[0]['token'] == GW_TOKEN, 'auth frame did not carry the broker-scoped token'
     assert gateway.ready_sent == 1
-    assert gateway.text_after_ready == [], f'text frames after ready: {gateway.text_after_ready}'
+    assert gateway.text_after_ready == [], f'text frames after ready: {safe_repr_payload(gateway.text_after_ready)}'
     assert all(
         len(p.relayed) > 0 and len(p.from_server) > 0 for p in gateway.pipes
     ), 'the gateway pipe saw no real SSH traffic'
-    assert len(console_errors) == 0, console_errors
+    assert_no_console_errors(console_errors)
 
     print('E2E PASS: import + key + selection + OSC 52 + gateway verified against the real sshd fixture')
     print(
