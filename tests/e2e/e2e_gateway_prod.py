@@ -253,6 +253,8 @@ def assert_url_custody_prod(url: str, where: str) -> None:
             raise AssertionError(f'{where}: account URL carries query/fragment/userinfo ({safe_url(url)})')
     elif app:
         pass  # the preview origin: no credential anywhere (scanned below)
+    elif host == 'accounts.google.com' and parts.path == '/gsi/client':
+        pass  # the stubbed GIS client script: a configured lab surface, credential-free
     else:
         raise AssertionError(f'{where}: URL is not one of this run\'s configured surfaces ({safe_url(url)})')
 
