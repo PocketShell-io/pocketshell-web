@@ -15,16 +15,20 @@
  *    flag a dialog it no longer belongs to.
  *  - THE CLOCK: the expiry timer is a convenience for the UI, never the
  *    authority. Before a token is surfaced or copied — auto-copy on mint
- *    and `copyAgain` alike — the actual wall clock is checked against the
- *    broker's absolute expiry, so an already-expired mint is never copied,
- *    a timer the browser throttled in a background tab cannot extend the
- *    token's life, and no polling is needed (the timer stays the exact
- *    one-shot bound; the clock check is what gates every copy).
+ *    and `copyAgain` alike — and again at EVERY asynchronous completion
+ *    (broker answer, clipboard write settling either way), the actual wall
+ *    clock is checked against the broker's absolute expiry, so an
+ *    already-expired mint is never copied, a timer the browser throttled in
+ *    a background tab cannot extend the token's life, and a completion that
+ *    lands past the deadline retires the token instead of flagging it
+ *    copied or leaving the manual-copy hint up. No polling (the timer stays
+ *    the exact one-shot bound; the clock check is what gates every copy).
  *
  * A clipboard write that was already performed cannot be undone — nothing
- * here claims otherwise; the guarantees are that stale completions mutate
- * nothing (the next dialog opens clean) and that an expired token is never
- * copied or re-copied by this controller.
+ * here claims otherwise; retiring an expired token after its write settles
+ * only stops THIS controller from displaying or re-copying it. The other
+ * guarantees: stale completions mutate nothing (the next dialog opens
+ * clean) and an expired token is never copied or re-copied.
  */
 
 export interface EnrollTokenView {
@@ -154,16 +158,38 @@ export function createEnrollTokenController(opts: {
           Math.max(0, minted.expiresAtMs - Date.now()),
         );
         render();
+        // The clock, again, immediately before the write: the arrival check
+        // read the wall clock a scheduling tick ago, and a dialog resumed in a
+        // background tab can resume past its own deadline.
+        if (clockExpired()) {
+          expireNow();
+          return;
+        }
         try {
           await opts.copy(minted.token);
-          // A late clipboard completion changes nothing it no longer belongs
-          // to: not a closed/reopened dialog, and not a token the expiry
-          // erased while the write was in flight.
+          // A late clipboard completion is bound to BOTH axes: not a
+          // closed/reopened dialog (generation), and not a token the wall
+          // clock killed while the write was in flight (the expiry timer is a
+          // convenience a throttled tab can delay; the clock is the
+          // authority). Retiring here does not claim to undo the write the
+          // browser already performed — it only refuses to keep displaying a
+          // dead token or flag it `copied`.
           if (mine !== generation || state.token === '') return;
+          if (clockExpired()) {
+            expireNow();
+            return;
+          }
           state.copied = true;
           render();
         } catch {
           if (mine !== generation || state.token === '') return;
+          if (clockExpired()) {
+            // The rejection lands on a dead token: retiring it beats leaving
+            // it in the field behind a manual-copy hint it can no longer
+            // honour. The write the browser refused stays refused.
+            expireNow();
+            return;
+          }
           // Clipboard blocked: the token stays in the field for a manual copy.
           render();
         }
@@ -193,11 +219,21 @@ export function createEnrollTokenController(opts: {
       try {
         await opts.copy(state.token);
         // The clipboard write itself is past undo; a completion from a
-        // closed/replaced dialog just lands nowhere.
+        // closed/replaced dialog just lands nowhere. And a completion whose
+        // token the wall clock killed in flight is bound by the clock too:
+        // retire, never flag `copied`, never leave the manual-copy error up.
         if (mine !== generation || state.token === '') return;
+        if (clockExpired()) {
+          expireNow();
+          return;
+        }
         state.copied = true;
       } catch {
         if (mine !== generation || state.token === '') return;
+        if (clockExpired()) {
+          expireNow();
+          return;
+        }
         state.error = 'Copying was blocked — select the token and copy it by hand.';
       }
       render();

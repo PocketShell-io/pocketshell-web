@@ -51,6 +51,17 @@ transport with the same fail-closed rule: a malformed or conflicting
 transport marker on a synced host refuses the dial and excludes the host
 from the sweep, it never degrades into a direct dial.
 
+**Which record a dial uses (selected-host resolution):** one endpoint can
+carry several named records in your synced list, and a dial is authorized by
+exactly one of them — never the first endpoint match. A request that carries
+the selected record's identity resolves that record uniquely and refuses
+unless the requested hostname, effective port and user agree with it; an
+unknown, duplicated or malformed identity refuses before any credential is
+read. A request without an identity (today's UI, whose payload is derived
+from the record it selected) connects only when hostname, port, user and
+identity-file marker select exactly ONE compatible record — zero or several
+indistinguishable matches refuse rather than guess whose key to use.
+
 ## Setting up a new gateway host
 
 1. **In the browser, Hosts → Add host**: fill in name/hostname/user as usual,

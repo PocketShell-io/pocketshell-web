@@ -27,6 +27,7 @@
 import type { PocketShellApi, Unsubscribe } from '@ui/app/api';
 import type { ConnectionState } from '@pocketshell/core';
 import type { CloneProgress, GatewayTransportTarget, HostEntry } from '@pocketshell/core';
+import { hostEntryId } from '@pocketshell/core';
 import { SshConnection } from '../terminal/connection';
 import { resolveTransportIntent } from './transportIntent';
 import { LinkSshConnection } from '../terminal/linkConnection';
@@ -125,6 +126,87 @@ function knownHostsHooks(payload: { tofuDecision?: 'accept-always' | 'accept-onc
   };
 }
 
+/** The identity-file path a payload/record carries, normalized: an absent,
+ * empty or non-string value is "no identity file" — the same meaning on both
+ * sides of the agreement check. A real path is NEVER reinterpreted as a
+ * selected-host name (the desktop reads privateKeyPath with readFileSync). */
+function identityOf(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * Which synced record a connect payload is authorized to dial.
+ *
+ * The synced host list is the web's ~/.ssh/config, and ONE endpoint can carry
+ * several named records (two accounts on the same box). Endpoint-first
+ * resolution once picked the FIRST hostname/port match — a dial for record B
+ * could read A's secret and inherit A's user or transport. The rules now:
+ *
+ *   a) A SUPPLIED selected-host identity — an own-property `selectedHost`
+ *      holding the selected record's `hostEntryId()` — is authoritative. It
+ *      must resolve to exactly one record and agree with the requested
+ *      hostname, effective port and nonempty user; unknown, duplicated,
+ *      malformed or disagreeing identities refuse before the vault is
+ *      touched. The identity is a consistency binding to the user's own
+ *      selection, never an additional authorization secret.
+ *   b) A caller WITHOUT the identity — today's shared UI, whose payload is
+ *      derived from the record it selected — is authorized only when the
+ *      supplied constraints (hostname, effective port, nonempty requested
+ *      user, identity-file agreement) select exactly ONE compatible record.
+ *      Zero matches refuse; several indistinguishable matches refuse, since
+ *      no byte in such a request can say which record's secret to use.
+ *
+ * Both paths resolve BEFORE `resolveTransportIntent` and `getHostSecret`, so
+ * a refusal here means zero secret reads, zero broker mints, zero sockets.
+ */
+function resolveSelectedEntry(
+  hosts: HostEntry[],
+  payload: { host: string; port?: number; user: string; privateKeyPath?: string },
+): { entry: HostEntry } | { error: string } {
+  const wantedPort = payload.port ?? 22;
+  const raw = payload as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(raw, 'selectedHost')) {
+    const selected = raw['selectedHost'];
+    if (typeof selected !== 'string' || selected === '') {
+      return { error: 'The request carries an unreadable selected-host identity — nothing was connected.' };
+    }
+    const named = hosts.filter((h) => hostEntryId(h) === selected);
+    if (named.length === 0) {
+      return { error: `No synced host is named “${selected}” — the selection does not match your synced list.` };
+    }
+    if (named.length > 1) {
+      return { error: `More than one synced host is named “${selected}” — resolve the duplicate before connecting.` };
+    }
+    const entry = named[0]!;
+    if (
+      entry.hostname !== payload.host ||
+      entry.port !== wantedPort ||
+      (payload.user !== '' && entry.user !== payload.user)
+    ) {
+      return {
+        error: `The selected host “${selected}” (${entry.user ? `${entry.user}@` : ''}${entry.hostname}:${entry.port}) does not match the requested ${payload.user ? `${payload.user}@` : ''}${payload.host}:${wantedPort}.`,
+      };
+    }
+    return { entry };
+  }
+  const wantedIdentity = identityOf(payload.privateKeyPath);
+  const compatible = hosts.filter(
+    (h) =>
+      h.hostname === payload.host &&
+      h.port === wantedPort &&
+      (payload.user === '' || h.user === payload.user) &&
+      identityOf(h.identityFile) === wantedIdentity,
+  );
+  if (compatible.length === 1) return { entry: compatible[0]! };
+  const label = `${payload.user ? `${payload.user}@` : ''}${payload.host}:${wantedPort}`;
+  if (compatible.length === 0) {
+    return { error: `No synced host for ${label}` };
+  }
+  return {
+    error: `Several synced hosts share ${label} and this request cannot say which one to dial — connect from the host list so the selected record is unambiguous.`,
+  };
+}
+
 async function connectHost(payload: {
   host: string;
   port?: number;
@@ -134,16 +216,13 @@ async function connectHost(payload: {
 }): Promise<{ ok: true; connectionId: string } | { ok: false; error: string }> {
   // The synced host list is the web's ~/.ssh/config: a dial is authorised by
   // a synced entry, and its attached secret (never a key FILE path — the
-  // key lives in this browser) is the credential.
+  // key lives in this browser) is the credential. Which entry — the
+  // selected-host resolution — runs FIRST: it touches names and endpoints
+  // only, and every refusal below leaves the vault unopened.
   const store = useHostsStore();
-  const wantedPort = payload.port ?? 22;
-  const entry: HostEntry | undefined =
-    store.hosts.find((h) => h.hostname === payload.host && h.port === wantedPort) ??
-    store.hosts.find((h) => h.name === payload.privateKeyPath) ??
-    store.hosts.find((h) => h.hostname === payload.host);
-  if (!entry) {
-    return { ok: false, error: `No synced host for ${payload.user ? `${payload.user}@` : ''}${payload.host}:${wantedPort}` };
-  }
+  const selection = resolveSelectedEntry(store.hosts, payload);
+  if ('error' in selection) return { ok: false, error: selection.error };
+  const entry = selection.entry;
   // The dial's transport is decided HERE — before the vault is touched, any
   // token minted, or any socket opened. The entry's shape and the payload's
   // raw transport markers decide together; a malformed marker, a conflict

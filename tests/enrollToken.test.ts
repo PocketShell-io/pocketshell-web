@@ -260,3 +260,107 @@ describe('final-corrections custody regressions — fake clock + controlled prom
     await generating2;
   });
 });
+
+describe('clipboard completions are wall-clock bound too', () => {
+  // The counterexample: a background tab throttles the expiry TIMER while a
+  // clipboard write is in flight, and the wall clock crosses the broker's
+  // absolute deadline. The pending completion must not mark a dead token
+  // `copied` (success) or leave a dead token in the field behind the
+  // manual-copy hint (rejection) — the completion re-checks the actual clock
+  // and retires the token, without claiming to undo the write already
+  // submitted to the browser. Timers never run: only Date.now() moves.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function harnessWithPendingCopy(resolvers: Array<() => void>, rejectFirst = false) {
+    let n = 0;
+    const h = harness(
+      () => Promise.resolve({ token: TOKEN_A, expiresAtMs: Date.now() + 5_000 }),
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const settle = () => (n++ === 0 && rejectFirst ? reject(new Error('blocked')) : resolve());
+          resolvers.push(() => settle());
+        }),
+    );
+    return h;
+  }
+
+  it('autoCopySuccessAfterWallClockExpiryRetiresInsteadOfCopied', async () => {
+    const resolvers: Array<() => void> = [];
+    const h = harnessWithPendingCopy(resolvers);
+    h.controller.open();
+    const generating = h.controller.generate();
+    await vi.advanceTimersByTimeAsync(0); // mint landed, auto-copy pending
+    expect(h.latest().token).toBe(TOKEN_A);
+    expect(h.latest().copied).toBe(false);
+    // The tab is backgrounded: the timer never fires, the wall clock passes
+    // the broker's deadline while the write is still in flight.
+    vi.setSystemTime(Date.now() + 6_000);
+    resolvers[0]!(); // the write RESOLVES now
+    await generating;
+    expect(h.latest().token).toBe(''); // retired, not left copyable
+    expect(h.latest().expired).toBe(true);
+    expect(h.latest().copied).toBe(false); // never flagged copied past expiry
+    expect(h.latest().error).toBe('');
+    expect(h.latest().busy).toBe(false);
+  });
+
+  it('autoCopyRejectionAfterWallClockExpiryRetiresInsteadOfHinting', async () => {
+    const resolvers: Array<() => void> = [];
+    const h = harnessWithPendingCopy(resolvers, true);
+    h.controller.open();
+    const generating = h.controller.generate();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(Date.now() + 6_000);
+    resolvers[0]!(); // the write REJECTS now
+    await generating;
+    expect(h.latest().token).toBe('');
+    expect(h.latest().expired).toBe(true);
+    expect(h.latest().copied).toBe(false);
+    // No "copy it by hand" hint for a token that no longer exists.
+    expect(h.latest().error).toBe('');
+    expect(h.latest().busy).toBe(false);
+  });
+
+  it('copyAgainSuccessAfterWallClockExpiryRetires', async () => {
+    const resolvers: Array<() => void> = [];
+    const h = harnessWithPendingCopy(resolvers);
+    h.controller.open();
+    const generating = h.controller.generate();
+    await vi.advanceTimersByTimeAsync(0); // mint landed, auto-copy pending
+    resolvers[0]!(); // the auto-copy lands inside the window
+    await generating;
+    expect(h.latest().copied).toBe(true);
+    const pending = h.controller.copyAgain(); // second write, pending
+    vi.setSystemTime(Date.now() + 6_000); // clock passes the deadline, timer unfired
+    resolvers[1]!(); // the copyAgain write resolves
+    await pending;
+    expect(h.latest().token).toBe('');
+    expect(h.latest().expired).toBe(true);
+    expect(h.latest().copied).toBe(false);
+  });
+
+  it('copyAgainRejectionAfterWallClockExpiryRetires', async () => {
+    const resolvers: Array<() => void> = [];
+    const h = harnessWithPendingCopy(resolvers, true);
+    h.controller.open();
+    const generating = h.controller.generate();
+    await vi.advanceTimersByTimeAsync(0);
+    resolvers[0]!(); // auto-copy rejects inside the window: manual-copy state
+    await generating;
+    expect(h.latest().token).toBe(TOKEN_A); // kept in the field for a manual copy
+    expect(h.latest().copied).toBe(false);
+    const pending = h.controller.copyAgain(); // manual retry, pending
+    vi.setSystemTime(Date.now() + 6_000);
+    resolvers[1]!(); // rejects late
+    await pending;
+    expect(h.latest().token).toBe('');
+    expect(h.latest().expired).toBe(true);
+    expect(h.latest().copied).toBe(false);
+    expect(h.latest().error).toBe(''); // the stale hint died with the token
+  });
+});
