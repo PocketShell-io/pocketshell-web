@@ -1,14 +1,12 @@
 /**
- * Bounded real-SSH lab under the BROWSER crypto shim: an in-process ssh2
- * server and a real ssh2 Client, both with `require('crypto')` served by the
- * compiled src/shims/ssh2-crypto.ts — the production browser wiring. The
- * server VERIFIES the client's auth signature through the same shim
- * (parseKey(ctx.key.data).verify(ctx.blob, ctx.signature, hashAlgo)), so
- * every positive case is a genuine sign -> verify round trip, and the
- * elliptic probe proves no ECDSA signature ever happened.
- *
- * This is the existing bounded-lab pattern (in-process ssh2, no Docker); the
- * full real-browser Docker e2e remains root's integrated step.
+ * Bounded real-SSH lab under the BROWSER crypto shim (supplemental to the
+ * shipping browser lab): an in-process ssh2 server and a real ssh2 Client,
+ * both with `require('crypto')` served by the compiled
+ * src/shims/ssh2-crypto.ts. The server VERIFIES the client's auth signature
+ * through the same shim (parseKey(ctx.key.data).verify(ctx.blob,
+ * ctx.signature, hashAlgo)), so every positive case is a genuine
+ * sign -> verify round trip, and the elliptic probe proves no ECDSA
+ * signature ever happened.
  */
 import assert from 'node:assert/strict';
 import net from 'node:net';
@@ -63,13 +61,13 @@ function dialOnce({ port, pem, passphrase, acceptHostKey = true, command = 'ps-c
   });
 }
 
-/** The kex list the browser build can actually execute today: with the shim,
- * `curve25519Supported` is true (the stubs are typeof-function) so ssh2
- * offers curve25519-sha256 FIRST — and its Curve25519Exchange then dies in
- * the shim's generateKeyPairSync stub (asserted explicitly below). Until the
- * offer list is coordinated upstream, a browser handshake needs a server
- * that avoids curve25519 or this override. */
-const WORKABLE_KEX = ['ecdh-sha2-nistp256', 'diffie-hellman-group14-sha256'];
+/** The kex list connection.ts dials with (src/terminal/connection.ts:294).
+ * The lab's default dial cannot use it (see the pinned limitation below —
+ * under the bare shim ssh2 offers curve25519 first and dies in the stub),
+ * so the positives pass it explicitly here. In the SHIPPING app the config
+ * below IS the offer list, so the curve25519 stub path never triggers;
+ * the shipping browser lab dials with exactly this list and passes. */
+const PRODUCTION_KEX = ['ecdh-sha2-nistp256', 'diffie-hellman-group14-sha256'];
 
 export async function runHandshakeLab(builtDirUrl) {
   // createRequire/require take paths (or URL objects) — not href strings.
@@ -133,11 +131,15 @@ export async function runHandshakeLab(builtDirUrl) {
   try {
     assert.equal(ellipticProbe.ecSignCalls, 0, 'probe must start at zero');
 
-    await lab.test('PRE-EXISTING browser-build limitation: curve25519 kex dies in the shim stub', async () => {
-      // The shim's typeof-stubs make ssh2 believe curve25519 works, so it is
-      // offered FIRST and any curve25519-preferring server picks it — then
-      // Curve25519Exchange hits the generateKeyPairSync stub. Not caused by
-      // the ECDSA guard; flagged for root coordination (offer-list fix).
+    await lab.test('pinned shim-level limitation: a curve25519-first offer dies in the stub (not reachable in the shipping app)', async () => {
+      // The shim's typeof-stubs make ssh2 believe curve25519 works. A dial
+      // with ssh2's DEFAULT offer list therefore dies in the
+      // generateKeyPairSync stub. This can NOT happen in the shipping app:
+      // connection.ts pins algorithms.kex to the nistp256/DH14 list (an
+      // app-level guarantee this lab cannot see), and the shipping browser
+      // lab dials with exactly that list. Kept as a shim-level pin only;
+      // changing the offer list would alter negotiation outside this scope
+      // and has no demonstrated production need.
       const pem = newUserKey('ed25519');
       await assert.rejects(
         dialOnce({ port, pem }),
@@ -148,7 +150,7 @@ export async function runHandshakeLab(builtDirUrl) {
 
     await lab.test('encrypted OpenSSH Ed25519 key completes a verified handshake', async () => {
       const pem = newUserKey('ed25519', { passphrase: ' ' });
-      const result = await dialOnce({ port, pem, passphrase: ' ', kex: WORKABLE_KEX });
+      const result = await dialOnce({ port, pem, passphrase: ' ', kex: PRODUCTION_KEX });
       assert.equal(result.execEcho, 'ECHO:ps-crypto-probe');
       assert.match(result.negotiated.serverHostKey, /ssh-ed25519/);
       // Receipt for what the shim-wired stack negotiates in this lab.
@@ -159,7 +161,7 @@ export async function runHandshakeLab(builtDirUrl) {
 
     await lab.test('OpenSSH RSA key completes a verified handshake (rsa-sha2 signing)', async () => {
       const pem = newUserKey('rsa');
-      const result = await dialOnce({ port, pem, kex: WORKABLE_KEX });
+      const result = await dialOnce({ port, pem, kex: PRODUCTION_KEX });
       assert.equal(result.execEcho, 'ECHO:ps-crypto-probe');
       assert.equal(ellipticProbe.ecSignCalls, 0);
     });
@@ -167,7 +169,7 @@ export async function runHandshakeLab(builtDirUrl) {
     await lab.test('wrong passphrase fails before authentication', async () => {
       const pem = newUserKey('ed25519', { passphrase: 'right-passphrase' });
       await assert.rejects(
-        dialOnce({ port, pem, passphrase: 'wrong-passphrase', kex: WORKABLE_KEX }),
+        dialOnce({ port, pem, passphrase: 'wrong-passphrase', kex: PRODUCTION_KEX }),
         /passphrase|decrypt|authentication methods/i,
       );
       assert.equal(ellipticProbe.ecSignCalls, 0);
@@ -176,7 +178,7 @@ export async function runHandshakeLab(builtDirUrl) {
     await lab.test('refused host-key pin kills the handshake before any auth', async () => {
       const pem = newUserKey('rsa');
       await assert.rejects(
-        dialOnce({ port, pem, acceptHostKey: false, kex: WORKABLE_KEX }),
+        dialOnce({ port, pem, acceptHostKey: false, kex: PRODUCTION_KEX }),
         /denied|handshake|key/i,
       );
       assert.equal(ellipticProbe.ecSignCalls, 0);
@@ -186,7 +188,7 @@ export async function runHandshakeLab(builtDirUrl) {
       const pem = newUserKey('ecdsa');
       let message = '';
       try {
-        await dialOnce({ port, pem, kex: WORKABLE_KEX });
+        await dialOnce({ port, pem, kex: PRODUCTION_KEX });
         assert.fail('ECDSA dial unexpectedly succeeded');
       } catch (err) {
         message = err.message;

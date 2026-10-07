@@ -9,7 +9,7 @@
  * the matching public key with real node crypto.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createHash, createSign as nodeCreateSign, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
+import { createHash, createSign as nodeCreateSign, generateKeyPairSync, sign as nodeSign, verify as nodeVerify } from 'node:crypto';
 import {
   assertSignablePrivateKey,
   assessPrivateKeyAuth,
@@ -21,6 +21,7 @@ import {
 import { ellipticProbe } from './elliptic-probe';
 import {
   encryptedPkcs8,
+  ephemeralDsa,
   ephemeralEc,
   ephemeralEd25519,
   ephemeralRsa,
@@ -34,6 +35,127 @@ const newKeys = () => {
   dirs.push(dir);
   return dir;
 };
+
+/* --- DER / container craft helpers -----------------------------------------
+ * Test-local re-implementations of the framing rules the classifier walks,
+ * used to build malformed negatives that no key generator emits (trailing
+ * bytes, padded lengths, spliced containers). */
+
+function pemToDer(pem: string): Uint8Array {
+  const body = pem
+    .split(/\r?\n/)
+    .filter((l) => l !== '' && !l.startsWith('-----'))
+    .join('');
+  return Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
+}
+
+function derToPem(label: string, der: Uint8Array): string {
+  let bin = '';
+  for (const b of der) bin += String.fromCharCode(b);
+  const b64 = btoa(bin);
+  return `-----BEGIN ${label}-----\n${(b64.match(/.{1,64}/g) ?? []).join('\n')}\n-----END ${label}-----`;
+}
+
+/** One well-formed TLV around `content` (minimal length encoding). */
+function buildTlv(tag: number, content: Uint8Array): Uint8Array {
+  if (content.length < 128) {
+    return Uint8Array.from([tag, content.length, ...content]);
+  }
+  const lenBytes: number[] = [];
+  for (let n = content.length; n > 0; n = Math.floor(n / 256)) {
+    lenBytes.unshift(n & 0xff);
+  }
+  return Uint8Array.from([tag, 0x80 | lenBytes.length, ...lenBytes, ...content]);
+}
+
+/** Children of the outer SEQUENCE of a key DER (the classifier's own walk:
+ * tag, definite length, body). */
+function derChildren(der: Uint8Array): Uint8Array[] {
+  if (der[0] !== 0x30) throw new Error('craft helper: not a SEQUENCE');
+  let len = der[1];
+  let pos = 2;
+  if ((len & 0x80) !== 0) {
+    const n = len & 0x7f;
+    len = 0;
+    for (let i = 0; i < n; i++) len = len * 256 + der[2 + i];
+    pos = 2 + n;
+  }
+  const end = pos + len;
+  const children: Uint8Array[] = [];
+  while (pos < end) {
+    let childLen = der[pos + 1];
+    let head = 2;
+    if ((childLen & 0x80) !== 0) {
+      const n = childLen & 0x7f;
+      childLen = 0;
+      for (let i = 0; i < n; i++) childLen = childLen * 256 + der[pos + 2 + i];
+      head = 2 + n;
+    }
+    children.push(der.slice(pos, pos + head + childLen));
+    pos += head + childLen;
+  }
+  return children;
+}
+
+function buildSeq(children: Uint8Array[]): Uint8Array {
+  const bodyLen = children.reduce((n, c) => n + c.length, 0);
+  const lenEnc = buildTlv(0x00, new Uint8Array(bodyLen)).slice(1);
+  const out = new Uint8Array(1 + lenEnc.length + bodyLen);
+  out[0] = 0x30;
+  out.set(lenEnc, 1);
+  let at = 1 + lenEnc.length;
+  for (const child of children) {
+    out.set(child, at);
+    at += child.length;
+  }
+  return out;
+}
+
+function sshStr(content: Uint8Array): Uint8Array {
+  const out = new Uint8Array(4 + content.length);
+  new DataView(out.buffer).setUint32(0, content.length);
+  out.set(content, 4);
+  return out;
+}
+
+interface OpenSshContainer {
+  pubBlob: Uint8Array;
+  privBlob: Uint8Array;
+}
+
+/** Parse the fields of an unencrypted openssh-key-v1 container. */
+function parseOpenSshContainer(pem: string): OpenSshContainer {
+  const u8 = pemToDer(pem);
+  let at = 'openssh-key-v1'.length + 1;
+  const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const readStr = (offset: number): { data: Uint8Array; next: number } => {
+    const len = view.getUint32(offset);
+    return { data: u8.slice(offset + 4, offset + 4 + len), next: offset + 4 + len };
+  };
+  at = readStr(at).next; // cipher
+  at = readStr(at).next; // kdf
+  at = readStr(at).next; // kdf options
+  const keyCount = view.getUint32(at);
+  if (keyCount !== 1) throw new Error('craft helper: unexpected key count');
+  const pub = readStr(at + 4);
+  const priv = readStr(pub.next);
+  return { pubBlob: pub.data, privBlob: priv.data };
+}
+
+/** Rebuild an unencrypted openssh-key-v1 container from its two blobs. */
+function buildOpenSshContainer({ pubBlob, privBlob }: OpenSshContainer): string {
+  const u8 = Uint8Array.from([
+    ...new TextEncoder().encode('openssh-key-v1'),
+    0x00,
+    ...sshStr(new TextEncoder().encode('none')),
+    ...sshStr(new TextEncoder().encode('none')),
+    ...sshStr(new Uint8Array(0)), // kdf options
+    0, 0, 0, 1, // key count
+    ...sshStr(pubBlob),
+    ...sshStr(privBlob),
+  ]);
+  return derToPem('OPENSSH PRIVATE KEY', u8);
+}
 
 let data: Buffer;
 
@@ -105,6 +227,133 @@ describe('structural classification of real key PEMs', () => {
     expect(ecdsa.kind).toBe('ecdsa');
     expect(assessPrivateKeyAuth(encryptedPkcs8('ed25519')).verdict).toBe('indeterminate');
     expect(assessPrivateKeyAuth('junk').verdict).toBe('indeterminate');
+  });
+
+  it('classifies DSA PKCS#8 (node cannot emit the PKCS#1 DSA form)', () => {
+    const dsa = ephemeralDsa();
+    expect(classifyPrivateKey(dsa.pkcs8)).toBe('dsa');
+    expect(assessPrivateKeyAuth(dsa.pkcs8).verdict).toBe('allowed');
+  });
+});
+
+describe('hardened DER negatives (exact parent consumption, inner payload)', () => {
+  it('rejects trailing bytes after the outer SEQUENCE', () => {
+    const der = pemToDer(ephemeralRsa().pkcs1);
+    const trailing = Uint8Array.from([...der, 0xde, 0xad, 0xbe]);
+    expect(classifyPrivateKey(derToPem('RSA PRIVATE KEY', trailing))).toBe('unknown');
+    const result = shimSign('sha256', data, derToPem('RSA PRIVATE KEY', trailing));
+    expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+  });
+
+  it('rejects non-INTEGER trailing bytes inside the PKCS#1 SEQUENCE', () => {
+    const children = derChildren(pemToDer(ephemeralRsa().pkcs1));
+    expect(children).toHaveLength(9);
+    const padded = buildSeq([...children, buildTlv(0x04, Uint8Array.from([1, 2, 3]))]);
+    expect(classifyPrivateKey(derToPem('RSA PRIVATE KEY', padded))).toBe('unknown');
+  });
+
+  it('rejects a tenth INTEGER in the PKCS#1 SEQUENCE', () => {
+    const children = derChildren(pemToDer(ephemeralRsa().pkcs1));
+    const extra = buildSeq([...children, buildTlv(0x02, Uint8Array.from([1]))]);
+    expect(classifyPrivateKey(derToPem('RSA PRIVATE KEY', extra))).toBe('unknown');
+  });
+
+  it('rejects PKCS#8 whose inner payload does not match the algorithm OID', () => {
+    // rsaEncryption claimed, inner SEQUENCE truncated mid-body
+    const pkcs8 = derChildren(pemToDer(ephemeralRsa().pkcs8));
+    const [version, algSeq, octet] = pkcs8;
+    const inner = octet.slice(4); // strip OCTET STRING header → inner PKCS#1 DER
+    const truncatedInner = inner.slice(0, inner.length - 10);
+    const rebuilt = buildSeq([version, algSeq, buildTlv(0x04, truncatedInner)]);
+    expect(classifyPrivateKey(derToPem('PRIVATE KEY', rebuilt))).toBe('unknown');
+
+    // id-Ed25519 claimed, inner seed not 32 bytes
+    const ed = derChildren(pemToDer(ephemeralEd25519().pkcs8));
+    const [edVersion, edAlg] = ed;
+    const shortSeed = buildSeq([edVersion, edAlg, buildTlv(0x04, buildTlv(0x04, new Uint8Array(31)))]);
+    expect(classifyPrivateKey(derToPem('PRIVATE KEY', shortSeed))).toBe('unknown');
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+  });
+
+  it('rejects PKCS#8 with no inner OCTET STRING at all', () => {
+    const pkcs8 = derChildren(pemToDer(ephemeralRsa().pkcs8));
+    const stripped = buildSeq([pkcs8[0], pkcs8[1]]);
+    expect(classifyPrivateKey(derToPem('PRIVATE KEY', stripped))).toBe('unknown');
+  });
+
+  it('rejects a non-minimal DER length encoding', () => {
+    const der = pemToDer(ephemeralEc('prime256v1').sec1);
+    expect(der[1]).toBeLessThan(0x80); // short form today
+    const padded = Uint8Array.from([0x30, 0x81, der[1], ...der.slice(2)]);
+    expect(classifyPrivateKey(derToPem('EC PRIVATE KEY', padded))).toBe('unknown');
+  });
+
+  it('rejects SEC1 trailing non-[0]/[1] bytes inside the SEQUENCE', () => {
+    const children = derChildren(pemToDer(ephemeralEc('prime256v1').sec1));
+    const junk = buildSeq([...children, buildTlv(0x02, Uint8Array.from([1]))]);
+    expect(classifyPrivateKey(derToPem('EC PRIVATE KEY', junk))).toBe('unknown');
+  });
+
+  it('does not recognize an X25519 PKCS#8 key (unknown → refused at the boundary)', () => {
+    const x = generateKeyPairSync('x25519');
+    const pem = x.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+    expect(classifyPrivateKey(pem)).toBe('unknown');
+    expect((shimSign('sha256', data, pem) as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+  });
+});
+
+describe('hardened OpenSSH container negatives (private section validated)', () => {
+  it('rejects trailing bytes appended to the container', () => {
+    const dir = newKeys();
+    const pem = dir.sshgen('ed25519');
+    const der = pemToDer(pem);
+    expect(classifyPrivateKey(derToPem('OPENSSH PRIVATE KEY', Uint8Array.from([...der, 0, 0, 0])))).toBe('unknown');
+  });
+
+  it('rejects disagreeing check ints, mutated type strings, corrupted padding', () => {
+    const dir = newKeys();
+    const pem = dir.sshgen('ed25519');
+    const { pubBlob, privBlob } = parseOpenSshContainer(pem);
+
+    // check ints must agree
+    const badCheck = privBlob.slice();
+    badCheck[5] ^= 0xff;
+    expect(classifyPrivateKey(buildOpenSshContainer({ pubBlob, privBlob: badCheck }))).toBe('unknown');
+
+    // private section type string must match the public header
+    const badPrivType = privBlob.slice();
+    const typeAt = 8;
+    badPrivType[typeAt + 4 + 4] ^= 0x01; // flip a byte inside "ssh-ed25519"
+    expect(classifyPrivateKey(buildOpenSshContainer({ pubBlob, privBlob: badPrivType }))).toBe('unknown');
+
+    // public header type string mutated
+    const badPubType = pubBlob.slice();
+    badPubType[4 + 4] ^= 0x01;
+    expect(classifyPrivateKey(buildOpenSshContainer({ pubBlob: badPubType, privBlob }))).toBe('unknown');
+
+    // padding corrupted: an extra 0xFF byte can never be a valid next
+    // padding byte (or a new field), whatever alignment the key landed on
+    const badPad = Uint8Array.from([...privBlob, 0xff]);
+    expect(classifyPrivateKey(buildOpenSshContainer({ pubBlob, privBlob: badPad }))).toBe('unknown');
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+  });
+
+  it('rejects a spliced container whose public and private types disagree', () => {
+    const dir = newKeys();
+    const edPem = dir.sshgen('ed25519');
+    const rsaPem = dir.sshgen('rsa', { bits: 2048 });
+    const edPub = parseOpenSshContainer(edPem).pubBlob;
+    const rsaPriv = parseOpenSshContainer(rsaPem).privBlob;
+    // Both halves are valid keys — the container as a whole is not.
+    expect(classifyPrivateKey(buildOpenSshContainer({ pubBlob: edPub, privBlob: rsaPriv }))).toBe('unknown');
+  });
+
+  it('still classifies a rebuilt genuine container (helpers round-trip)', () => {
+    const dir = newKeys();
+    const pem = dir.sshgen('ed25519');
+    expect(classifyPrivateKey(buildOpenSshContainer(parseOpenSshContainer(pem)))).toBe('ed25519');
   });
 });
 

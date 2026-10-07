@@ -62,6 +62,17 @@ export function encryptedPkcs8(kind: 'rsa' | 'ec' | 'ed25519', curve?: string, p
     .toString();
 }
 
+/** Fresh ephemeral DSA key (classification fixture — DSA userauth signing
+ * is a legacy path; only its classifier verdict is pinned here). node:crypto
+ * refuses a PKCS#1 export for DSA, so only the PKCS#8/SPKI forms exist. */
+export function ephemeralDsa(bits = 2048) {
+  const { publicKey, privateKey } = generateKeyPairSync('dsa', { modulusLength: bits });
+  return {
+    pkcs8: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+    spki: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+  };
+}
+
 /** Fresh ephemeral EC key + SEC1 / PKCS#8 private and SPKI public PEMs. */
 export function ephemeralEc(namedCurve: 'prime256v1' | 'secp384r1' | 'secp521r1') {
   const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve });
