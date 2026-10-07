@@ -12,9 +12,16 @@ What the gateway is and is not:
   the browser and the host exactly like a direct connection; the gateway can
   neither read nor alter it in any way that survives SSH's own integrity
   checks.
-- Your **Google sign-in only admits the route** (and only to hosts registered
-  to your own account). The thing that logs you into the host is your **SSH
-  private key**, which lives in this browser and never crosses the gateway.
+- The browser never hands the gateway your **sign-in token**. The raw Google
+  sign-in also authorizes your account's sync storage (reads, writes,
+  deletes), so before a gateway dial the browser exchanges it — at the
+  trusted account service, never at the gateway — for a **gateway-scoped
+  token**: valid only for gateway routing, only for your account, and only
+  for five minutes. A failed exchange fails the dial; there is no fallback
+  to the raw token.
+- The thing that logs you into the host is your **SSH private key**, which
+  lives in this browser and crosses the gateway only inside the encrypted
+  SSH session — never in a credential frame, never in the token exchange.
 - The gateway can never vouch for your host. Only **you** can — by pairing
   its key fingerprint (below). A connection without a pairing is refused, and
   a host whose key ever stops matching the pairing is refused loudly, before
@@ -27,15 +34,27 @@ with the desktop's link). Gateway hosts sync as ordinary hosts in your
 account list — the gateway address and device id are stored with the host;
 the fingerprint pairing is NOT synced, because trust is per-device.
 
+**Legacy credential boundary (existing transports, until migrated):** the
+browser-direct relay dial still rides the raw sign-in in its query string,
+authorized by that relay only; and a deployment with no direct relay
+configured uses the Lambda bridge, whose `connect` frame carries a host's
+key. The automatic warnings sweep no longer sends any host key to that
+bridge — keys move only on a dial you started, over the host's own
+transport. Gateway hosts are excluded from that sweep entirely (see
+maturity limits).
+
 ## Setting up a new gateway host
 
-1. **On the host**: install and enroll the gateway agent (see the gateway
-   server/agent docs). Enrollment registers the device — it prints a
-   **device id** (e.g. `home-laptop`) — and shows the host's **SSH host key
-   fingerprint** (`SHA256:…`).
-2. **In the browser, Hosts → Add host**: fill in name/hostname/user as usual,
-   then set **Gateway device id** to what enrollment printed. Leave
-   **Gateway address** alone unless you run your own gateway.
+1. **In the browser, Hosts → Add host**: fill in name/hostname/user as usual,
+   then set **Gateway device id**. Leave **Gateway address** alone unless you
+   run your own gateway.
+2. **On the host**: enroll the gateway agent (see the pocketshell-gateway
+   repo's agent docs). Enrollment needs a token: use the host's row
+   **Enroll token…** action here — it mints a gateway-scoped token, copies it
+   to your clipboard, and expires within five minutes. Paste it into the
+   enrollment command on the host (it reads the token from stdin). Your
+   actual sign-in is never used on the host. Enrollment confirms the host's
+   **SSH host key fingerprint** (`SHA256:…`).
 3. **Attach your SSH key** with **Key…** — same as any host. Gateway
    connections are key-only; a password login is never attempted.
 4. **Pair the host** with **Pair…**: paste the host's `SHA256:…` fingerprint.
@@ -46,9 +65,9 @@ the fingerprint pairing is NOT synced, because trust is per-device.
    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
    ```
 
-5. **Connect.** The first bytes flow only after: the gateway admitted your
-   token, the host's agent answered, and the host presented the exact key you
-   paired.
+5. **Connect.** The first bytes flow only after: the browser obtained a
+   scoped gateway token, the gateway admitted it, the host's agent answered,
+   and the host presented the exact key you paired.
 
 ## Pairing is the security model
 
@@ -88,15 +107,20 @@ config error before any dial, never a silent downgrade.
 - **Crash warnings (`a warnings`) don't sweep gateway hosts.** The automatic
   warnings sweep runs over the legacy bridge transport only, and gateway host
   keys are excluded from that transport by design — a gateway key must never
-  travel to the bridge infrastructure. Gateway hosts therefore stay out of
-  the sweep (before their secrets are even decrypted); open a session and run
-  `a warnings` yourself to see them. Wiring the sweep onto the gateway
+  travel to the bridge infrastructure. Plain browser-direct hosts are
+  excluded too whenever a direct relay is configured (their keys stay in the
+  browser); only a deployment with no direct relay keeps the historical
+  sweep, because there the bridge IS the host transport. Open a session and
+  run `a warnings` yourself to see them; wiring the sweep onto the gateway
   transport itself is future work.
 - **Port forwarding is not implemented on any browser transport** (see the
   API surface — it refuses with its own name); gateway hosts add nothing
   there.
-- Desktop and Android have their own transports; nothing on this page claims
-  they dial through the gateway.
+- **Desktop and Android do not dial through the gateway yet.** A synced
+  gateway host opened from a client without gateway support would attempt a
+  plain SSH dial to the entry's hostname:port — that client must refuse
+  gateway hosts instead; the web implements the gateway path, the native
+  paths are pending, and nothing here claims otherwise.
 - One browser SSH engine (ssh2) serves gateway and direct dials alike, so
   terminal/exec/SFTP behave identically; the differences are only the route
   and the trust model described above.

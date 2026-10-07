@@ -30,6 +30,7 @@ import type { CloneProgress, HostEntry } from '@pocketshell/core';
 import { normalizeGatewayTarget } from '@pocketshell/core';
 import { SshConnection } from '../terminal/connection';
 import { LinkSshConnection } from '../terminal/linkConnection';
+import { getGatewayToken } from '../api/gatewayToken';
 import { useAuthStore } from '../stores/auth';
 import { useSyncStore } from '@ui/app/stores/sync';
 import { claimsOf } from '../auth/google';
@@ -265,12 +266,20 @@ async function connectViaLink(
 /**
  * The gateway dial: real SSH end-to-end through the PocketShell gateway —
  * the same SshConnection and the same SSH key as a direct dial, but the
- * transport is the gateway's per-host WebSocket and the Google ID token only
- * admits the route. Two things refuse BEFORE anything is dialed: a host
- * without an attached SSH key (a gateway session has no password fallback —
- * the key IS the login), and a device this browser has not PAIRED (no
- * out-of-band fingerprint, no dial — the gateway can never introduce the
- * host's key).
+ * transport is the gateway's per-host WebSocket and the credential is a
+ * SHORT-LIVED BROKER TOKEN: the browser exchanges the Google sign-in at the
+ * trusted account service (config.syncApiBase, POST /gateway/token) and the
+ * gateway's auth frame carries only that scoped token. The raw Google token
+ * also authorizes sync reads/writes/deletes, so it must never reach the
+ * gateway — a failed exchange fails the dial (fail closed), it never falls
+ * back to the raw token.
+ *
+ * Two more things refuse BEFORE anything is dialed: a host without an
+ * attached SSH key (a gateway session has no password fallback — the key IS
+ * the login), and a device this browser has not PAIRED (no out-of-band
+ * fingerprint, no dial — the gateway can never introduce the host's key).
+ * The SSH private key travels only inside the end-to-end encrypted SSH
+ * session — never in the auth frame, never to the broker.
  */
 async function connectViaGateway(
   entry: HostEntry,
@@ -294,15 +303,26 @@ async function connectViaGateway(
       error: `${entry.name} is not paired with this device yet — use Pair on the hosts screen to verify the host's fingerprint, then connect.`,
     };
   }
-  const conn = new SshConnection();
   const auth = useAuthStore();
+  let gatewayToken: string;
+  try {
+    const minted = await getGatewayToken({ googleIdToken: auth.idToken });
+    gatewayToken = minted.token;
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${err instanceof Error ? err.message : String(err)} ${entry.name} was not contacted.`,
+    };
+  }
+  const conn = new SshConnection();
   let connectionIdRef: string | null = null;
   try {
     await conn.connect({
       // The gateway dial ignores the legacy relay URL and host/port entirely;
-      // they stay as labels for the status line.
+      // they stay as labels for the status line. idToken here is the BROKER
+      // token minted above — the raw Google sign-in never rides this dial.
       url: '',
-      idToken: auth.idToken,
+      idToken: gatewayToken,
       host: entry.hostname,
       port: entry.port,
       user: entry.user || fallbackUser,

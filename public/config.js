@@ -17,4 +17,8 @@ window.POCKETSHELL_WEB = {
   // Development ONLY — allows ws:// gateway URLs (a local or docker gateway).
   // Must stay false in production; it admits unencrypted gateway dials.
   gatewayAllowInsecureWs: false,
+  // The trusted account service the browser exchanges the sign-in at for a
+  // short-lived gateway credential. Frontend-owned trust — do not point it
+  // anywhere you do not vouch for; gateway responses can never move it.
+  syncApiBase: 'https://a7sota2qic.execute-api.eu-west-1.amazonaws.com',
 };

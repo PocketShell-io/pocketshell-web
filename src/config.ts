@@ -14,6 +14,15 @@ export interface AppConfig {
   /** Development ONLY: allow ws:// gateway URLs (a local/docker gateway).
    * Never set this in production — it admits unencrypted gateway dials. */
   gatewayAllowInsecureWs: boolean;
+  /**
+   * The trusted account-service base the browser exchanges the sign-in at
+   * for a short-lived gateway credential (`POST {syncApiBase}/gateway/token`).
+   * FRONTEND-OWNED trust: the exchange URL comes from here and nowhere else —
+   * never from gateway input, the dial target, or a ready frame. Kept
+   * independent of `syncApiUrl` so a sync-endpoint override cannot silently
+   * move where credentials are minted.
+   */
+  syncApiBase: string;
 }
 
 declare global {
@@ -21,6 +30,10 @@ declare global {
     POCKETSHELL_WEB?: Partial<AppConfig>;
   }
 }
+
+/** The independently trusted account service (the auth broker's host).
+ * Frontend-owned; the only source of the gateway-token exchange URL. */
+export const TRUSTED_SYNC_API_BASE = 'https://a7sota2qic.execute-api.eu-west-1.amazonaws.com';
 
 // Guarded so node-env unit tests can import modules that reach config
 // transitively (the aplexer runner imports the bridge for its types).
@@ -33,6 +46,7 @@ export const config: AppConfig = {
   directWsUrl: raw.directWsUrl ?? '',
   gatewayServerUrl: raw.gatewayServerUrl ?? GATEWAY_DEFAULT_SERVER_URL,
   gatewayAllowInsecureWs: raw.gatewayAllowInsecureWs ?? false,
+  syncApiBase: raw.syncApiBase ?? TRUSTED_SYNC_API_BASE,
 };
 
 export function isConfigured(): boolean {

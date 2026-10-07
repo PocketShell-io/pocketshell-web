@@ -150,12 +150,15 @@ afterAll(() => {
 function gatewayConnect(overrides: {
   pinnedFingerprint?: string;
   auth?: { kind: 'key'; privateKey: string } | { kind: 'password'; password: string };
+  /** What rides the gateway auth frame. The web app mints this via
+   * getGatewayToken — it is NOT the Google sign-in. */
+  idToken?: string;
 } = {}): Promise<SshConnection> {
   const conn = new SshConnection();
   return conn
     .connect({
       url: '',
-      idToken: ID_TOKEN,
+      idToken: overrides.idToken ?? ID_TOKEN,
       host: 'label-host',
       port: 22,
       user: 'tester',
@@ -227,6 +230,32 @@ describe('the gateway connection over a real ssh2 host', () => {
     // The lab asserted this live on every message it received; the happy
     // path above produced zero text frames after auth.
     expect(gw.textFrames).toEqual([]);
+  });
+
+  it('the auth frame carries the BROKER token — the original Google sign-in never reaches the gateway', async () => {
+    // The web app mints this via getGatewayToken (src/api/gatewayToken.ts);
+    // here it is simply a token DIFFERENT from the Google sign-in, which is
+    // the property the custody rule needs.
+    const brokerToken = 'broker-minted-gateway-jwt.payload.signature';
+    const googleToken = 'original-google-signin-token.never-for-the-gateway';
+    const conn = await gatewayConnect({ idToken: brokerToken });
+    try {
+      // Consume one exec so the session is real, not just handshaken.
+      const outcome = await conn.exec('a warnings');
+      expect(outcome.error).toBeNull();
+    } finally {
+      conn.close();
+    }
+    // NEITHER token may ride a URL.
+    for (const url of gw.upgradeUrls) {
+      expect(url).not.toContain(brokerToken);
+      expect(url).not.toContain(googleToken);
+    }
+    // The auth frame carried the BROKER token, exactly once, and the Google
+    // token appears nowhere in anything the gateway received.
+    expect(gw.authFrames.at(-1)).toEqual({ type: 'auth', v: 1, token: brokerToken, device_id: 'dev-01' });
+    expect(JSON.stringify(gw.authFrames)).not.toContain(googleToken);
+    expect(gw.textFrames.every((t) => !t.includes(googleToken))).toBe(true);
   });
 });
 
