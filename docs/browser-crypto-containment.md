@@ -27,7 +27,14 @@ any private key:
   with the same label, whitespace-only outside; leading junk, trailing junk,
   additional blocks, split markers and label mismatches all classify as
   `unknown` (ambiguity defense — never "whichever block the first regex
-  found"). **Label/DER agreement is enforced**: "RSA PRIVATE KEY" must hold
+  found"). Any **embedded BEGIN/END marker inside the envelope body** — a
+  second, nested or split envelope the non-greedy match could swallow —
+  also classifies `unknown`, and the check runs **before** the
+  `ENCRYPTED PRIVATE KEY`, OpenSSH and legacy `Proc-Type`/`DEK-Info`
+  shortcuts, so two same-label encrypted envelopes or a headered envelope
+  hiding a second block are never read as "encrypted" (which stays an
+  advisory verdict, never an authorization). **Label/DER agreement is
+  enforced**: "RSA PRIVATE KEY" must hold
   a PKCS#1 RSA body, "DSA PRIVATE KEY" a PKCS#1 DSA body, "EC PRIVATE KEY"
   a SEC1 body, "PRIVATE KEY" a PKCS#8 body — a mismatch is `unknown`, never
   the DER's own shape. DER INTEGER fields must be **meaningful, minimal,
@@ -40,15 +47,26 @@ any private key:
   DSA key; id-Ed25519 → exactly OCTET STRING(32); id-ecPublicKey → SEC1
   shape; id-dsa → a strict positive exponent INTEGER; PBES-family →
   "encrypted". Raw `openssh-key-v1` containers and RFC 1423 `Proc-Type`/
-  `DEK-Info` headers are classified too. DER length encodings must be
+  `DEK-Info` headers are classified too: a **cipher=none container must
+  also carry kdf=none and EMPTY KDF options** — any other header
+  combination is inconsistent (never silently "encrypted"); only a real
+  cipher+KDF header is the advisory encrypted verdict. DER length encodings
+  must be
   minimal; anything unrecognized or structurally inconsistent (trailing
   bytes, truncated bodies, container halves that disagree) classifies as
   `unknown` and callers fail closed. No ASN.1 library, no elliptic import,
   no ssh2 import (no cycles).
 - `src/shims/ssh2-crypto.ts`:
-  - one-shot `sign(algo, data, key)`: named-digest calls classify the key and
-    refuse **before** a signer exists — no trial signature, no
-    call-elliptic-to-find-out;
+  - one-shot `sign(algo, data, key)`: **both branches** classify the key
+    and refuse **before** a signer exists — no trial signature, no
+    call-elliptic-to-find-out. The named-digest branch and the
+    **null/undefined-digest branch** go through the same structural gate;
+    the null-digest (Ed25519) branch additionally requires the key to
+    *classify* as Ed25519, so a genuine Ed25519 PKCS#8 body relabeled as
+    an `EC PRIVATE KEY`, carrying mismatched markers, or wrapped in extra
+    marker-only blocks refuses with the stable coded errors instead of
+    signing (the old DER-prefix scan stripped every `-----` line and could
+    not see envelope ambiguity);
   - `createSign(algorithm)`: returns the real browserify-sign signer with its
     `.sign` instance method wrapped by the same check, so the fallback path
     cannot bypass the one-shot guard (the one-shot path itself routes through
@@ -76,7 +94,9 @@ type + the RFC 4253 public fields, and the per-type fields must carry
 meaningful content and AGREE with the public half — RSA: n/e byte-equal plus
 the necessary order relations (e,d,p,q < n, iqmp < p) over strict mpints;
 DSA: p/q/g/y byte-equal plus g,y < p and x < q; Ed25519: A = 32 bytes,
-secret = 64 bytes, and the private A must BE the public A; ECDSA: the curve
+secret = 64 bytes, the private A must BE the public A, and the secret's
+LAST 32 bytes must equal the public A too (OpenSSH serializes the secret as
+seed‖public; the seed half's expansion math is NOT checked); ECDSA: the curve
 name must match the type, Q must be an uncompressed 0x04 point of the
 curve's coordinate size and byte-equal the public Q, and the scalar must be
 a strict positive mpint no longer than the coordinate. The section must be
@@ -117,18 +137,33 @@ path. No trial signing and no "sign once to find out" exists anywhere.
 
 ## Tests
 
-- `tests/crypto/shim-guard.test.ts` — runs in the default `npm test` (50
-  tests): classification of real ephemeral keys, both guard boundaries,
+- `tests/crypto/shim-guard.test.ts` — runs in the default `npm test`
+  (65 tests): classification of real ephemeral keys, both guard boundaries,
   RSA/Ed positives, verification residuals, error hygiene, plus negative
   batteries — single-envelope violations (multi-block, leading/trailing
-  junk, mismatched labels, label/DER disagreement), strict INTEGER content
-  (zero-length/zero/nonminimal/negative + a legal-sign-pad positive
-  control), exact PKCS#8 inner (DSA-under-RSA-OID refused, false-OID inner
-  refused, DSA exponent strictness), and per-type OpenSSH container
-  negatives (Ed 32/64 and A-agreement, RSA mpint content + d ≥ n +
-  same-type splices, EC curve/Q/scalar agreement, 8-byte alignment and
-  0..7 padding, DSA x < q ordering). Every malformed input also asserts a
-  coded guard refusal with the elliptic probe still at zero.
+  junk, mismatched labels, label/DER disagreement, embedded/nested marker
+  blocks refused BEFORE the encrypted and legacy-header shortcuts — two
+  same-label encrypted envelopes are `unknown`, not "encrypted"), strict
+  INTEGER content (zero-length/zero/nonminimal/negative + a legal-sign-pad
+  positive control), exact PKCS#8 inner (DSA-under-RSA-OID refused,
+  false-OID inner refused, DSA exponent strictness), per-type OpenSSH
+  container negatives (Ed 32/64 and A-agreement including the
+  seed‖public secret suffix, RSA mpint content + d ≥ n + same-type splices,
+  EC curve/Q/scalar agreement, 8-byte alignment and 0..7 padding, DSA
+  x < q ordering, cipher=none requiring kdf=none and empty options), and
+  the null/undefined-digest gate (a genuine Ed25519 body relabeled,
+  marker-mismatched, marker-junked or duplicated refuses on BOTH `null`
+  and runtime-`undefined`; RSA/EC/encrypted/trailing-junk/OpenSSH-container
+  inputs refuse with their stable codes; genuine Ed25519 and the ssh2
+  support probe keep signing).
+  **Coverage qualification:** every malformed DER/PEM input that is
+  exercised through the signing APIs asserts a coded guard refusal with
+  the elliptic probe still at zero — but a subset of the structural
+  OpenSSH/DSA negatives assert the refusal at the classification layer
+  only (`classifyPrivateKey`), not through both signing APIs; those are
+  still fail-closed (the same classifier runs at the boundary), and the
+  assertion is deliberately narrower than "every malformed input signs a
+  coded refusal through both APIs".
 - **`tests/crypto/lab/browser/run-browser-lab.mjs` — the shipping acceptance
   pass.** Builds a bundle with the production vite pipeline (the real
   `vite.config.ts`, loaded unmodified — the node-polyfills `crypto` →
@@ -136,24 +171,50 @@ path. No trial signing and no "sign once to find out" exists anywhere.
   lab-only HTML entry), runs it in a real headless Chromium over CDP, and
   dials a real in-process ssh2 server through a WebSocket bridge using
   connection.ts's exact algorithm config (nistp256/DH14, AES-CTR,
-  ed25519/RSA host keys). The runner asserts an exact record manifest (no
-  flow may vanish), real elliptic counter deltas captured before each
-  negative dial (not a value compared with itself), stable coded guard
-  errors on every malformed direct-sign, and per-username server traces.
+  ed25519/RSA host keys). The runner asserts an exact record manifest with
+  the malformed case names PINNED in the runner (a fixture that gains or
+  loses a case fails the run instead of silently reshaping the manifest),
+  real elliptic counter deltas captured before each negative dial (not a
+  value compared with itself), stable coded guard errors on every malformed
+  direct-sign, and per-username server traces.
+  **Guard-attribution oracle (lab-only):** before any dial, the page wraps
+  the shared prototype `sign` of ssh2-parsed keys — the exact method
+  client.js calls for userauth — recording, per real invocation, the key
+  TYPE, hash-algorithm name and either the refusal CODE the guard produced
+  or the signature byte count (the original method does all the real work
+  exactly once: no double sign, no trial sign, and no key/data/signature
+  bytes in any observation). A dial-refusal record is green only when the
+  wrapped signer OBSERVED the expected stable guard code on that actual
+  dial AND the dial's rejection error carries the same code AND the
+  elliptic delta is zero — zero server signatures plus a generic
+  "authentication methods failed" text is not accepted as proof. The
+  parser-REJECTED dial stays honest on the other side: it requires the
+  parse error and ZERO sign invocations, and its record names it a parser
+  event, not a guard event.
   Flows: positive RSA/Ed25519 handshakes (plain + passphrase-encrypted,
   every client signature verified server-side), ECDSA plaintext and
-  encrypted refusals, malformed direct-sign refusals, parser-first
-  malformed dials that stay honest about which layer refused (ssh2's
-  parser first — a key it accepts but the guard refuses dies as an
-  authentication failure with zero signed auth requests; a key it throws
-  on never reaches the server at all — the bridge dials TCP on the first
-  client bytes), and the host-pin refusal. The pin negative supplies a
+  encrypted refusals (guard-code-attributed as above), malformed
+  direct-sign refusals, parser-first malformed dials with honest layer
+  attribution (a key ssh2 accepts but the guard refuses dies at the guard
+  with the observed code and zero signed auth requests; a key it throws on
+  never reaches the server at all — the bridge dials TCP on the first
+  client bytes; its local WebSocket handshake is not an SSH exchange), and
+  the host-pin refusal (zero sign invocations observed, zero auth attempts
+  server-side). The pin negative supplies a
   DIFFERENT VALID host key's fingerprint to the same `digest === pin`
-  comparator the positives pass through — never a hardcoded false — and
-  the server must see zero auth attempts. An elliptic prototype probe
+  comparator the positives pass through — never a hardcoded false. An
+  elliptic prototype probe
   counts ECDSA/EdDSA signatures in the real bundled library (liveness
   proven by the ECDH handshakes hitting the same wrapped prototype plus a
-  labeled throwaway-scalar self-check); every flow ends at zero. **Scope:
+  labeled throwaway-scalar self-check); every flow ends at zero, and the
+  residual-verification record doubles as liveness proof for the
+  sign-observation oracle (real RSA/Ed signatures observed through the
+  same wrapped prototype).
+  **Counting honesty:** the lab's "18 records" are flow records, not
+  dials — 9 dial attempts produce them (each ECDSA refusal emits two
+  records), and 8 of those dials reach the SSH server as TCP connections;
+  the parser-rejected dial leaves no SSH-server trace.
+  **Scope:**
   this lab exercises the shipped crypto/signing boundary through a cloned
   connection config and test entry — not production `connection.ts`,
   `webApi`, or the app's host-pin store; the web-client worker's own

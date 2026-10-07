@@ -91,7 +91,29 @@ async function main() {
     console.log('[run-browser-lab] stage 4: assertions');
     const failed = results.filter((r) => !r.ok);
     assert.equal(failed.length, 0, `${failed.length} browser flow(s) failed: ${failed.map((f) => f.name).join('; ')}`);
-    // exact record manifest: no flow may vanish or fail silently
+
+    // The malformed case names are PINNED here, independently of the
+    // fixture object: a fixture that gains or loses a case fails this run
+    // loudly instead of silently reshaping the manifest (deriving the
+    // expected records from Object.keys(fixtures.malformed) would let a
+    // flow disappear whenever its fixture disappears).
+    const MALFORMED_CASES = [
+      'SEC1 truncated body',
+      'RSA PKCS#1 with trailing DER bytes',
+      'not a pem at all',
+      'X25519 PKCS#8 (unknown algorithm OID)',
+      'empty string',
+    ];
+    assert.deepEqual(
+      Object.keys(fixtures.malformed).sort(),
+      [...MALFORMED_CASES].sort(),
+      'malformed fixture set drifted from the pinned manifest',
+    );
+
+    // Exact record manifest. Counting honesty: this is 18 flow RECORDS from
+    // 9 dial attempts — each ECDSA refusal emits two records (refusal +
+    // elliptic counter) — of which 8 reach the SSH server as TCP
+    // connections; the parser-REJECTED dial creates no server-side trace.
     const expectedRecords = [
       'positive: RSA OpenSSH handshake (production kex)',
       'positive: encrypted RSA handshake (bcrypt decrypt)',
@@ -101,7 +123,7 @@ async function main() {
       'refusal: plaintext ECDSA user key — elliptic never signed',
       'refusal: encrypted ECDSA user key (correct passphrase)',
       'refusal: encrypted ECDSA user key (correct passphrase) — elliptic never signed',
-      ...Object.keys(fixtures.malformed).map((name) => `refusal: malformed ${name}`),
+      ...MALFORMED_CASES.map((name) => `refusal: malformed ${name}`),
       'malformed refusals left elliptic untouched (whole loop)',
       'parser-first: parsed-but-guarded key dial refused',
       'parser-first: unparseable key dial rejected before auth',
@@ -115,16 +137,45 @@ async function main() {
       assert.ok(record, `missing flow record: ${name}`);
       assert.equal(record.ok, true, `flow record not green: ${name} — ${record.detail}`);
     }
+    // Guard-attribution codes must appear in the recorded evidence: the
+    // wrapped parsed-key signer observed the stable code on the ACTUAL dial
+    // (a generic authentication-failure text is not accepted in the page).
+    const ecdsaRefusal = results.find((r) => r.name === 'refusal: plaintext ECDSA user key');
+    const ecdsaEncRefusal = results.find((r) => r.name === 'refusal: encrypted ECDSA user key (correct passphrase)');
+    for (const record of [ecdsaRefusal, ecdsaEncRefusal]) {
+      assert.ok(
+        record.detail.includes('ERR_BROWSER_ECDSA_UNSUPPORTED'),
+        `${record.name}: expected the observed ECDSA guard code in "${record.detail}"`,
+      );
+    }
+    const parserGuarded = results.find((r) => r.name === 'parser-first: parsed-but-guarded key dial refused');
+    assert.ok(
+      parserGuarded.detail.includes('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED'),
+      `parser-guarded dial: expected the observed format guard code in "${parserGuarded.detail}"`,
+    );
+    const parserRejected = results.find((r) => r.name === 'parser-first: unparseable key dial rejected before auth');
+    assert.match(
+      parserRejected.detail,
+      /not a guard event; 0 sign invocations/,
+      `parser-rejected dial must be attributed to the parser with zero sign invocations, saw: "${parserRejected.detail}"`,
+    );
     assert.equal(probe.ecSignCalls, 0, 'elliptic ECDSA sign must never run');
     assert.equal(probe.eddsaSignCalls, 0, 'elliptic EdDSA sign must never run');
     assert.ok(probe.genKeyPairCalls > 0, 'probe liveness: ECDH must have hit the wrapped elliptic prototype');
+    assert.ok(
+      outcome.signObservations.some((o) => o.outcome.kind === 'signature'),
+      'sign-observer liveness: real parsed-key signatures must have been observed',
+    );
 
     // Server trace, in dial order (the browser matrix is strictly
-    // sequential): 4 positives, 2 ECDSA-guarded, 1 parser-accepted-guarded,
-    // 1 pin-refused. The parser-REJECTED dial is asserted BY ABSENCE: the
-    // bridge dials the SSH server on the first client bytes, and a key that
-    // ssh2 throws on never writes anything — it must leave NO trace here
-    // (8 connections, not 9).
+    // sequential): 9 dial attempts produced the 18 flow records; 8 of the
+    // dials reach the SSH server as TCP connections — 4 positives,
+    // 2 ECDSA-guarded, 1 parser-accepted-guarded, 1 pin-refused. The
+    // parser-REJECTED dial is asserted BY ABSENCE: the bridge dials the
+    // SSH server on the first client bytes, and a key that ssh2 throws on
+    // never writes anything — it leaves NO SSH-server trace here
+    // (8 connections, not 9; its local WebSocket handshake is not an SSH
+    // exchange).
     const conns = harness.connections;
     console.log('[run-browser-lab] server trace:');
     conns.forEach((c, i) => console.log(
@@ -158,8 +209,12 @@ async function main() {
     assert.equal(conns[7].accepted, false, 'pin-refused dial must not authenticate');
     assert.equal(conns[7].username, null, 'pin-refused dial must never reach userauth');
 
-    console.log('[run-browser-lab] receipt: browser flow matrix green (exact manifest), server trace green,');
-    console.log(`   zero elliptic ECDSA/EdDSA signatures; ECDH genKeyPair calls: ${probe.genKeyPairCalls}`);
+    console.log('[run-browser-lab] receipt: 18 flow records green (exact pinned manifest) from 9 dial attempts,');
+    console.log('   8 of which reached the SSH server as TCP connections (parser-rejected dial: no server trace);');
+    console.log('   every negative dial observed its stable guard code on the real wrapped parsed-key signer;');
+    console.log(`   zero elliptic ECDSA/EdDSA signatures; ECDH genKeyPair calls: ${probe.genKeyPairCalls}.`);
+    console.log('   Scope: shipped crypto/signing boundary exercised through the production vite bundle and a');
+    console.log('   CLONED connection config over a lab transport — not production connection.ts/webApi/pin-store.');
   } finally {
     await harness.stop();
   }

@@ -169,8 +169,10 @@ export class BrowserLabHarness {
       // its banner immediately once connected, so real dials always speak
       // first — while a dial whose ssh2 config throws synchronously (e.g.
       // an unparseable key) never writes anything and never reaches the
-      // SSH server at all. That makes "refused before any network
-      // exchange" a deterministic, observable fact.
+      // SSH server at all. That makes "refused before any SSH-server
+      // exchange" a deterministic, observable fact (the browser's local
+      // WebSocket handshake to this bridge still happens; it carries no
+      // SSH bytes).
       let tcp = null;
       const ensureTcp = () => {
         if (tcp !== null) return tcp;

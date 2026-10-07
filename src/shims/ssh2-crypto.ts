@@ -95,11 +95,19 @@ export const randomFillSync = cryptoBrowserify.randomFillSync.bind(cryptoBrowser
  */
 
 /** Fail closed before elliptic can see a private key: allowed kinds are
- * RSA/DSA/Ed25519 (and the null-digest Ed25519 path checks its own PKCS#8
- * shape); ECDSA, still-encrypted and unrecognized keys all refuse. Errors
- * are stable, must not contain key or passphrase material, and are the only
- * thing that ever leaves this module about the key. */
+ * RSA/DSA/Ed25519; ECDSA, still-encrypted and unrecognized keys all refuse.
+ * Errors are stable, must not contain key or passphrase material, and are
+ * the only thing that ever leaves this module about the key. */
 export function assertSignablePrivateKey(key: unknown): void {
+  classifyAllowedPrivateKey(key);
+}
+
+/** Shared gate for EVERY sign API branch: classifies the key structurally
+ * and either throws the stable coded refusal or returns the allowed kind.
+ * Both the null-digest branch and the named-digest branch of `sign` (and
+ * the createSign().sign wrapper) go through this, so no branch can reach a
+ * signer with a key the classifier did not clear. */
+function classifyAllowedPrivateKey(key: unknown): PrivateKeyKind {
   if (typeof key !== 'string' && !(key instanceof Uint8Array)) {
     // browserify-sign also accepts node KeyObjects; nothing in the browser
     // bundle produces one, and a key we cannot structurally classify is not
@@ -108,11 +116,12 @@ export function assertSignablePrivateKey(key: unknown): void {
       'browser build refuses to sign with an unrecognizable private-key value',
     );
   }
-  switch (classifyPrivateKey(key)) {
+  const kind = classifyPrivateKey(key);
+  switch (kind) {
     case 'rsa':
     case 'dsa':
     case 'ed25519':
-      return;
+      return kind;
     case 'ecdsa':
       throw unsupportedFormatError(
         `browser build refuses ECDSA private-key signing: ${ECDSA_REFUSAL_REASON}`,
@@ -198,18 +207,33 @@ function ed25519HasPrefix(der: Uint8Array, prefix: Uint8Array): boolean {
 
 /** node crypto.sign: null algorithm = Ed25519 (raw 64-byte signature), named
  * digest = RSA (DER) through the same createSign path ssh2 would fall back to.
- * A named digest with an ECDSA/encrypted/unclassifiable private key refuses
- * before createSign — and therefore elliptic — is ever reached. */
+ * BOTH branches run the shared structural guard before any signer exists —
+ * null/undefined digest is the Ed25519 path and additionally requires the
+ * key to CLASSIFY as Ed25519, so a relabeled, marker-mismatched or
+ * multi-envelope body that pemToDer would happily strip down to a signable
+ * PKCS#8 form still refuses with the stable coded errors. */
 export function sign(
-  algorithm: string | null,
+  algorithm: string | null | undefined,
   data: Uint8Array | Buffer,
   key: string,
 ): Buffer | Error {
   try {
     if (algorithm === null || algorithm === undefined) {
+      // Classify FIRST: pemToDer below discards every `-----` line and
+      // cannot see envelope ambiguity. Encrypted headers stay advisory at
+      // assessment but are never an authorization here, and an ECDSA
+      // classification refuses with its own code before anything is seeded.
+      if (classifyAllowedPrivateKey(key) !== 'ed25519') {
+        throw unsupportedFormatError(
+          'browser build refuses null-digest signing with a private key that does not classify as Ed25519',
+        );
+      }
       const der = pemToDer(key);
       if (!ed25519HasPrefix(der, PKCS8_ED25519_PREFIX)) {
-        return new Error('not an Ed25519 private key');
+        // Backstop only: an ed25519 classification already validated the
+        // exact PKCS#8 Ed25519 shape (a cipher=none OpenSSH container
+        // classifies ed25519 but is not the PKCS#8 DER this seeds from).
+        return unsupportedFormatError('not a PKCS#8 Ed25519 private key');
       }
       // The PKCS8 body holds the 32-byte seed; tweetnacl signs with the
       // 64-byte secret key the seed expands to.
@@ -230,7 +254,7 @@ export function sign(
 /** node crypto.verify: same shapes in, boolean out. A private key PEM is
  * accepted here too — the seed pair derives the verifying public key. */
 export function verify(
-  algorithm: string | null,
+  algorithm: string | null | undefined,
   data: Uint8Array | Buffer,
   key: string,
   signature: Uint8Array | Buffer,

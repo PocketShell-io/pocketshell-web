@@ -153,14 +153,20 @@ function parseOpenSshContainer(pem: string): OpenSshContainer {
   return { pubBlob: pub.data, privBlob: priv.data };
 }
 
-/** Rebuild an unencrypted openssh-key-v1 container from its two blobs. */
-function buildOpenSshContainer({ pubBlob, privBlob }: OpenSshContainer): string {
+/** Rebuild an unencrypted openssh-key-v1 container from its two blobs; the
+ * cipher/KDF/option headers default to OpenSSH's cipher=none shape but can
+ * be overridden to build header-inconsistent negatives. */
+function buildOpenSshContainer(
+  { pubBlob, privBlob }: OpenSshContainer,
+  headers: { cipher?: string; kdf?: string; kdfOpts?: Uint8Array } = {},
+): string {
+  const enc = (t: string) => new TextEncoder().encode(t);
   const u8 = Uint8Array.from([
-    ...new TextEncoder().encode('openssh-key-v1'),
+    ...enc('openssh-key-v1'),
     0x00,
-    ...sshStr(new TextEncoder().encode('none')),
-    ...sshStr(new TextEncoder().encode('none')),
-    ...sshStr(new Uint8Array(0)), // kdf options
+    ...sshStr(enc(headers.cipher ?? 'none')),
+    ...sshStr(enc(headers.kdf ?? 'none')),
+    ...sshStr(headers.kdfOpts ?? new Uint8Array(0)), // kdf options
     0, 0, 0, 1, // key count
     ...sshStr(pubBlob),
     ...sshStr(privBlob),
@@ -537,6 +543,236 @@ describe('single-envelope PEM contract', () => {
   });
 });
 
+/* --- null/undefined digest path is classified before it signs ---------------- */
+
+describe('null/undefined digest path classifies before signing', () => {
+  const ALGOS = [null, undefined] as const;
+
+  it('signs a genuine Ed25519 PKCS#8 with null AND runtime-undefined algorithm', () => {
+    const ed = ephemeralEd25519();
+    for (const algo of ALGOS) {
+      const sig = shimSign(algo, data, ed.pkcs8) as Buffer;
+      expect(sig).toBeInstanceOf(Buffer);
+      expect(sig.length).toBe(64);
+      expect(nodeVerify(null, data, ed.spki, sig)).toBe(true);
+    }
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+
+  it('keeps the ssh2 Ed25519 support probe working for null AND undefined', () => {
+    const probeKey =
+      '-----BEGIN PRIVATE KEY-----\r\nMC4CAQAwBQYDK2VwBCIEIHKj+sVa9WcD'
+      + '/q2DJUJaf43Kptc8xYuUQA4bOFj9vC8T\r\n-----END PRIVATE KEY-----';
+    for (const algo of ALGOS) {
+      const sig = shimSign(algo, Buffer.from('a'), probeKey) as Buffer;
+      expect(sig.length).toBe(64);
+      expect(shimVerify(null, Buffer.from('a'), probeKey, sig)).toBe(true);
+    }
+  });
+
+  it('refuses a genuine Ed25519 body relabeled as EC PRIVATE KEY (both conventions)', () => {
+    const ed = ephemeralEd25519();
+    const relabeled = relabel(ed.pkcs8, 'PRIVATE KEY', 'EC PRIVATE KEY');
+    // the DER is a perfectly signable PKCS#8 Ed25519 — only the envelope is
+    // a lie, and the shared classifier (not the DER prefix scan) must decide
+    expect(classifyPrivateKey(relabeled)).toBe('unknown');
+    for (const algo of ALGOS) {
+      const result = shimSign(algo, data, relabeled);
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    }
+    expect(() => assertSignablePrivateKey(relabeled)).toThrowError(/unrecognized/);
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+
+  it('refuses mismatched BEGIN/END markers on the null path (both conventions)', () => {
+    const ed = ephemeralEd25519();
+    const mismatched = ed.pkcs8.replace(
+      '-----END PRIVATE KEY-----',
+      '-----END EC PRIVATE KEY-----',
+    );
+    expect(classifyPrivateKey(mismatched)).toBe('unknown');
+    for (const algo of ALGOS) {
+      const result = shimSign(algo, data, mismatched);
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    }
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+
+  it('refuses marker-only extra blocks around a genuine Ed25519 body (both conventions)', () => {
+    const ed = ephemeralEd25519();
+    const markerBlock = '-----BEGIN BOGUS-----\n-----END BOGUS-----\n';
+    for (const bad of [ed.pkcs8 + '\n' + markerBlock, markerBlock + ed.pkcs8]) {
+      expect(classifyPrivateKey(bad)).toBe('unknown');
+      for (const algo of ALGOS) {
+        const result = shimSign(algo, data, bad);
+        expect(result).toBeInstanceOf(Error);
+        expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+      }
+    }
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+
+  it('refuses a marker-only block embedded INSIDE the envelope body', () => {
+    const ed = ephemeralEd25519();
+    // pemToDer strips every ----- line, so without the classification this
+    // body would still seed a signer; the classifier must refuse first
+    const embedded = ed.pkcs8.replace(
+      '-----END PRIVATE KEY-----',
+      '-----BEGIN BOGUS-----\n-----END BOGUS-----\n-----END PRIVATE KEY-----',
+    );
+    expect(embedded).not.toBe(ed.pkcs8);
+    expect(classifyPrivateKey(embedded)).toBe('unknown');
+    for (const algo of ALGOS) {
+      const result = shimSign(algo, data, embedded);
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    }
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+
+  it('refuses two genuine Ed25519 envelopes on the null path', () => {
+    const ed = ephemeralEd25519();
+    const two = ed.pkcs8 + '\n' + ed.pkcs8;
+    expect(classifyPrivateKey(two)).toBe('unknown');
+    for (const algo of ALGOS) {
+      const result = shimSign(algo, data, two);
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    }
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+
+  it('routes a genuine ECDSA key on the null path to the ECDSA refusal', () => {
+    const ec = ephemeralEc('prime256v1');
+    for (const algo of ALGOS) {
+      const result = shimSign(algo, data, ec.sec1);
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).code).toBe('ERR_BROWSER_ECDSA_UNSUPPORTED');
+    }
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+  });
+
+  it('refuses RSA, trailing-junk, encrypted and OpenSSH-container keys on the null path', () => {
+    const rsa = ephemeralRsa();
+    const dir = newKeys();
+    const junkRsa = derToPem(
+      'RSA PRIVATE KEY',
+      Uint8Array.from([...pemToDer(rsa.pkcs1), 0xde, 0xad]),
+    );
+    const encEd = dir.sshgen('ed25519', { passphrase: 'null path probe' });
+    const opensshEd = dir.sshgen('ed25519');
+    const cases: Array<[string, string, RegExp]> = [
+      ['RSA PKCS#1', rsa.pkcs1, /does not classify as Ed25519/],
+      ['RSA PKCS#8 with trailing DER', junkRsa, /unrecognized/],
+      ['encrypted OpenSSH Ed25519', encEd, /encrypted/],
+      // classifies ed25519 (cipher=none container validates) but is not the
+      // PKCS#8 DER form the null-digest path seeds from — coded backstop
+      ['OpenSSH cipher=none Ed25519 container', opensshEd, /PKCS#8 Ed25519/],
+    ];
+    for (const [name, pem, message] of cases) {
+      for (const algo of ALGOS) {
+        const result = shimSign(algo, data, pem);
+        expect(result, name).toBeInstanceOf(Error);
+        expect((result as Error).code, name).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+        expect((result as Error).message, name).toMatch(message);
+      }
+    }
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+});
+
+/* --- exactly-one-envelope precedes every encrypted/header shortcut ------------ */
+
+describe('exactly-one-envelope precedes encrypted/header shortcuts', () => {
+  it('refuses two consecutive ENCRYPTED PRIVATE KEY envelopes as unknown, not encrypted', () => {
+    const enc = encryptedPkcs8('rsa');
+    const two = enc + '\n' + enc;
+    expect(classifyPrivateKey(two)).toBe('unknown');
+    expect(assessPrivateKeyAuth(two).kind).toBe('unknown');
+    const result = shimSign('sha256', data, two);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+  });
+
+  it('refuses an encrypted envelope with a whole second envelope nested inside', () => {
+    const enc = encryptedPkcs8('ed25519');
+    const body = enc
+      .split(/\r?\n/)
+      .filter((l) => l !== '' && !l.startsWith('-----'))
+      .join('');
+    const half = Math.floor(body.length / 2);
+    const nested =
+      `-----BEGIN ENCRYPTED PRIVATE KEY-----\n${body.slice(0, half)}\n`
+      + '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n'
+      + `${body.slice(half)}\n-----END ENCRYPTED PRIVATE KEY-----`;
+    expect(classifyPrivateKey(nested)).toBe('unknown');
+    expect(assessPrivateKeyAuth(nested).kind).toBe('unknown');
+    expect((shimSign('sha256', data, nested) as Error).code)
+      .toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+  });
+
+  it('detects embedded markers BEFORE the legacy encryption-header shortcut', () => {
+    const headered = withLegacyEncryptionHeaders(ephemeralRsa().pkcs1);
+    const withEmbedded = headered.replace(
+      '-----END RSA PRIVATE KEY-----',
+      '-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----',
+    );
+    // the Proc-Type header sits in the FIRST lines: the shortcut must not
+    // return "encrypted" before the embedded envelope deeper in the body
+    // is rejected
+    expect(classifyPrivateKey(withEmbedded)).toBe('unknown');
+    expect(assessPrivateKeyAuth(withEmbedded).kind).toBe('unknown');
+    expect((shimSign('sha256', data, withEmbedded) as Error).code)
+      .toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+  });
+
+  it('still reads a single genuine encrypted envelope as encrypted (advisory, not authorization)', () => {
+    const enc = encryptedPkcs8('ed25519');
+    expect(classifyPrivateKey('\n  ' + enc + ' \n')).toBe('encrypted');
+    expect(assessPrivateKeyAuth(enc).verdict).toBe('indeterminate');
+    const result = shimSign('sha256', data, enc);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).code).toBe('ERR_BROWSER_KEY_FORMAT_UNSUPPORTED');
+  });
+});
+
+/* --- OpenSSH cipher=none header consistency ------------------------------------ */
+
+describe('OpenSSH cipher=none requires none-KDF and empty options', () => {
+  it('refuses cipher=none paired with a real KDF name or non-empty KDF options', () => {
+    const dir = newKeys();
+    const { pubBlob, privBlob } = parseOpenSshContainer(dir.sshgen('ed25519'));
+    const genuine = { pubBlob, privBlob };
+    expect(classifyPrivateKey(buildOpenSshContainer(genuine))).toBe('ed25519');
+    // cipher=none but kdf=bcrypt — headers no real writer produces
+    expect(classifyPrivateKey(buildOpenSshContainer(genuine, { kdf: 'bcrypt' }))).toBe('unknown');
+    // cipher=none, kdf=none, but options carried anyway
+    expect(
+      classifyPrivateKey(buildOpenSshContainer(genuine, { kdfOpts: Uint8Array.from([1, 2, 3]) })),
+    ).toBe('unknown');
+  });
+
+  it('keeps a real cipher+KDF header advisory (encrypted) and a none/none container allowed', () => {
+    const dir = newKeys();
+    const { pubBlob, privBlob } = parseOpenSshContainer(dir.sshgen('ed25519'));
+    const genuine = { pubBlob, privBlob };
+    expect(
+      classifyPrivateKey(buildOpenSshContainer(genuine, { cipher: 'aes256-ctr', kdf: 'bcrypt' })),
+    ).toBe('encrypted');
+    expect(assessPrivateKeyAuth(buildOpenSshContainer(genuine, { cipher: 'aes256-ctr', kdf: 'bcrypt' })).verdict)
+      .toBe('indeterminate');
+  });
+});
+
 /* --- strict DER INTEGER content and exact PKCS#8 inner ---------------------- */
 
 describe('strict DER INTEGER content and exact PKCS#8 inner', () => {
@@ -649,6 +885,11 @@ describe('OpenSSH cipher=none per-type structural validation', () => {
     expect(classify(buildPrivSection(parsed, { fields: [a, secret.slice(0, 32)] }))).toBe('unknown');
     // private A disagrees with the public blob's A
     expect(classify(buildPrivSection(parsed, { fields: [flipByte(a, 0), secret] }))).toBe('unknown');
+    // OpenSSH serializes the 64-byte secret as seed||public: the secret's
+    // LAST 32 bytes must also be the public A (the FIRST 32 are the seed —
+    // no seed→keypair math is claimed or checked)
+    expect(secret.slice(32)).toEqual(a);
+    expect(classify(buildPrivSection(parsed, { fields: [a, concatU8(secret.slice(0, 32), flipByte(secret.slice(32), 5))] }))).toBe('unknown');
     expect(ellipticProbe.ecSignCalls).toBe(0);
   });
 
