@@ -4,16 +4,29 @@
  * `a warnings`, …) the sessions workspace polls — the shape the desktop's
  * SshService offers its renderer, minus the process boundary.
  *
- * The transport is the same as DirectSshSession's: the browser runs the SSH
- * client over a dumb WebSocket relay; the private key never leaves the tab.
- * Nothing here knows about Vue or the UI — the workspace controller drives
- * this class, and DirectSshSession is a one-shell wrapper over it.
+ * Two transports feed the same engine:
+ *  - legacy bridge/relay: a dumb WebSocket keyed by `?host=&port=&token=`;
+ *  - gateway: the PocketShell gateway's per-host WebSocket (see
+ *    gatewayDuplex.ts) — real SSH end-to-end through the gateway, key-only
+ *    auth, fail-closed against the out-of-band host-key fingerprint pin.
+ *
+ * The transport is chosen per connect(); everything above it (exec, PTY,
+ * SFTP) is identical. Nothing here knows about Vue or the UI — the workspace
+ * controller drives this class, and DirectSshSession is a one-shell wrapper
+ * over it.
  */
 import { Client as SSHClient } from 'ssh2';
 import type { ClientChannel, SFTPWrapper } from 'ssh2';
 import { Buffer } from 'node:buffer';
-import { connectWebSocketDuplex } from './wsduplex';
-import { decodePublicKeyBlob, verifyHostKeyPin, type HostKeyPin } from '@pocketshell/core';
+import { connectWebSocketDuplex, WebSocketDuplex } from './wsduplex';
+import { dialGateway } from './gatewayDuplex';
+import {
+  decodePublicKeyBlob,
+  normalizeSha256Fingerprint,
+  verifyGatewayHostKeyPin,
+  verifyHostKeyPin,
+  type HostKeyPin,
+} from '@pocketshell/core';
 import { sha256Fingerprint } from './hostKeyFingerprint';
 import type { BridgeAuth } from './bridge';
 
@@ -78,19 +91,51 @@ export interface KnownHostsHooks {
   onMismatch?(info: HostKeyInfo): void;
 }
 
+/**
+ * A gateway dial: the browser reaches the host through the PocketShell
+ * gateway's per-host WebSocket and speaks REAL SSH end-to-end to the host's
+ * own sshd — the gateway relays opaque bytes; the ssh2 engine, the exec/PTY/
+ * SFTP channels and the private key are all the same as a direct dial, and
+ * the key never crosses the gateway.
+ *
+ * Trust is fail-closed: `pinnedFingerprint` is the SHA-256 fingerprint the
+ * owner provisioned out of band (trusted local enrollment or the host's own
+ * `ssh-keygen -lf` output). A dial without it refuses before anything is
+ * sent; a presented key that doesn't match refuses before SSH
+ * authentication runs. The gateway's own `ready.ssh_host_key` is advisory
+ * and never consulted here.
+ */
+export interface GatewayConnectTarget {
+  serverUrl: string;
+  deviceId: string;
+  /** Independently provisioned host-key fingerprint (SHA256:…). REQUIRED. */
+  pinnedFingerprint: string;
+  /** Development escape hatch for ws:// gateways — never in production. */
+  allowInsecureWs?: boolean;
+  /** Injectable socket (tests drive an in-memory gateway). */
+  socketFactory?: (url: string) => WebSocket;
+}
+
 export interface ConnectOptions {
-  /** The relay's wss:// base URL; host/port/token ride the query string. */
+  /** The relay's wss:// base URL; host/port/token ride the query string.
+   * Legacy bridge dials only — a gateway dial ignores it entirely. */
   url: string;
   idToken: string;
   host: string;
   port: number;
   user: string;
   auth: BridgeAuth;
+  /** Set: reach the host through the PocketShell gateway instead of the
+   * legacy query-string bridge. Key auth only — a password has no place on
+   * a transport whose whole point is the user's own key. */
+  gateway?: GatewayConnectTarget;
   onStatus?: (status: string) => void;
   /** The SSH transport died (network, relay, server). Channels will each
    * deliver their own exit; this is for the connection-level indicator. */
   onClosed?: () => void;
-  /** Host-key pinning (TOFU). Absent = accept the presented key. */
+  /** Host-key pinning (TOFU) for legacy dials. Absent = accept the
+   * presented key. Gateway dials do NOT use this — they verify against the
+   * pinned fingerprint and refuse without one. */
   knownHosts?: KnownHostsHooks;
 }
 
@@ -111,19 +156,47 @@ export class SshConnection {
     return this.conn !== null && !this.closedByUs;
   }
 
-  /** Dial the relay, run the SSH handshake through it, resolve when the
-   * connection is authenticated and usable — the shell's `ready`. */
+  /** Dial through the gateway (or the legacy relay), run the SSH handshake
+   * through it, resolve when the connection is authenticated and usable —
+   * the shell's `ready`. */
   async connect(opts: ConnectOptions): Promise<void> {
+    const gw = opts.gateway;
+    // Gateway preconditions refuse BEFORE any socket exists: no fingerprint,
+    // no dial; a password is not a gateway credential.
+    if (gw) {
+      if (normalizeSha256Fingerprint(gw.pinnedFingerprint) === null) {
+        throw new Error(
+          'This gateway host has no verified key fingerprint on this device yet — pair it on the Hosts screen before connecting.',
+        );
+      }
+      if (opts.auth.kind !== 'key' || (opts.auth.privateKey ?? '') === '') {
+        throw new Error('Gateway connections authenticate with your SSH key — attach a key for this host.');
+      }
+    }
     const auth = this.authOf(opts.auth);
     this.closedByUs = false;
     this.onClosed = opts.onClosed ?? null;
     this.hostKeyError = null;
-    const query = new URLSearchParams({
-      host: opts.host,
-      port: String(opts.port),
-      token: opts.idToken,
-    });
-    const sock = await connectWebSocketDuplex(`${opts.url}?${query.toString()}`);
+
+    let sock: WebSocketDuplex;
+    if (gw) {
+      const dial = await dialGateway({
+        serverUrl: gw.serverUrl,
+        deviceId: gw.deviceId,
+        idToken: opts.idToken,
+        allowInsecureWs: gw.allowInsecureWs,
+        socketFactory: gw.socketFactory,
+        onStatus: opts.onStatus,
+      });
+      sock = dial.duplex;
+    } else {
+      const query = new URLSearchParams({
+        host: opts.host,
+        port: String(opts.port),
+        token: opts.idToken,
+      });
+      sock = await connectWebSocketDuplex(`${opts.url}?${query.toString()}`);
+    }
     sock.on('close', () => {
       if (!this.closedByUs) this.onClosed?.();
     });
@@ -166,13 +239,34 @@ export class SshConnection {
         tryKeyboard: false,
         // The TOFU prompt pauses the handshake mid-key-exchange, and the
         // prompt time counts against this budget — a fingerprint is read at
-        // human speed (OpenSSH waits forever; we wait 90s).
-        readyTimeout: opts.knownHosts ? 90_000 : 20_000,
+        // human speed (OpenSSH waits forever; we wait 90s). A gateway dial
+        // never prompts: it verifies against the paired fingerprint.
+        readyTimeout: opts.knownHosts && !opts.gateway ? 90_000 : 20_000,
         keepaliveInterval: 30_000,
         // No hostHash: the verifier gets the RAW key blob, decodes it, and
         // compares against the stored pin byte-for-byte — the desktop's
         // hostVerifier shape, not a hex digest of it.
         hostVerifier: (key: Buffer, verify: (ok: boolean) => void) => {
+          if (opts.gateway) {
+            // Fail closed against the out-of-band pin. No TOFU, no prompt,
+            // no gateway-supplied metadata in the decision.
+            verifyGatewayHostKey(opts.gateway.pinnedFingerprint, key, {
+              onStatus: opts.onStatus,
+            })
+              .then((r) => {
+                if (r.ok) {
+                  verify(true);
+                } else {
+                  this.hostKeyError = r.reason;
+                  verify(false);
+                }
+              })
+              .catch((e: unknown) => {
+                this.hostKeyError = e instanceof Error ? e.message : String(e);
+                verify(false);
+              });
+            return;
+          }
           const hooks = opts.knownHosts;
           if (!hooks) {
             opts.onStatus?.(`host key ${decodePublicKeyBlob(key).keyType}`);
@@ -356,6 +450,40 @@ export class SshConnection {
     }
     return { password: auth.password ?? '' };
   }
+}
+
+/**
+ * The gateway host-key decision, exported for tests: the presented key must
+ * match the fingerprint paired OUT OF BAND — a missing pin refuses (there is
+ * no TOFU on this transport), a mismatch refuses. This runs inside ssh2's
+ * key exchange, so either refusal happens before SSH authentication — and
+ * before the private key is ever offered to the host.
+ */
+export async function verifyGatewayHostKey(
+  pinnedFingerprint: string | null | undefined,
+  keyBlob: Uint8Array,
+  opts: { onStatus?: (s: string) => void } = {},
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const { keyType } = decodePublicKeyBlob(keyBlob);
+  const fingerprint = await sha256Fingerprint(keyBlob);
+  const verdict = verifyGatewayHostKeyPin(pinnedFingerprint, fingerprint);
+  if (verdict === 'trusted') {
+    opts.onStatus?.(`host key verified — ${keyType} ${fingerprint}`);
+    return { ok: true };
+  }
+  if (verdict === 'unpinned') {
+    opts.onStatus?.('host key UNPAIRED — refused');
+    return {
+      ok: false,
+      reason:
+        'This gateway host has no verified key fingerprint on this device yet. Pair it on the Hosts screen (Pair) with the fingerprint from the host itself, then connect.',
+    };
+  }
+  opts.onStatus?.('host key MISMATCH — refused');
+  return {
+    ok: false,
+    reason: `Host key mismatch — the host's ${keyType} key (${fingerprint}) is not the key you paired with this device. Nothing was sent to it. If its key was rotated on purpose, pair the new fingerprint on the Hosts screen.`,
+  };
 }
 
 /**

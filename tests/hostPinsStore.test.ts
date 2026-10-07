@@ -95,3 +95,67 @@ describe('hostPins store', () => {
     expect(await useHostPinsStore().lookup('devbox', 22)).toBeUndefined();
   });
 });
+
+describe('gateway host pins (the pairing fingerprints)', () => {
+  const FINGERPRINT =
+    'SHA256:ABCDEFGHIJKLMNOPabcdefghijklmnop12345678901'; // 43 unpadded chars
+
+  it('setGatewayPin normalizes the fingerprint and a fresh store reads it back', async () => {
+    useHostsStore().passphrase = 'sync-pass';
+    const pins = useHostPinsStore();
+    const pin = await pins.setGatewayPin('dev-01', `  sha256:${FINGERPRINT.slice(7)}=  `);
+    expect(pin).toEqual({ fingerprintSha256: FINGERPRINT });
+
+    setActivePinia(createPinia());
+    useHostsStore().passphrase = 'sync-pass';
+    expect(await useHostPinsStore().gatewayLookup('dev-01')).toEqual({ fingerprintSha256: FINGERPRINT });
+  });
+
+  it('pairing refuses non-SHA-256 input — a bad paste never becomes a pin', async () => {
+    useHostsStore().passphrase = 'sync-pass';
+    const pins = useHostPinsStore();
+    expect(await pins.setGatewayPin('dev-01', 'MD5:ab:cd:ef')).toBeNull();
+    expect(await pins.setGatewayPin('dev-01', 'the host looked legit')).toBeNull();
+    expect(await pins.gatewayLookup('dev-01')).toBeUndefined();
+  });
+
+  it('re-pairing (deliberate rotation) replaces the pin', async () => {
+    useHostsStore().passphrase = 'sync-pass';
+    const pins = useHostPinsStore();
+    await pins.setGatewayPin('dev-01', FINGERPRINT);
+    await pins.setGatewayPin('dev-01', 'SHA256:zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJ');
+    expect((await pins.gatewayLookup('dev-01'))!.fingerprintSha256).toBe(
+      'SHA256:zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJ',
+    );
+  });
+
+  it('forgetGatewayPin drops the pairing; legacy pins are untouched by all of it', async () => {
+    useHostsStore().passphrase = 'sync-pass';
+    const pins = useHostPinsStore();
+    await pins.pin('legacy-host', 22, PIN);
+    await pins.setGatewayPin('dev-01', FINGERPRINT);
+    await pins.forgetGatewayPin('dev-01');
+    expect(await pins.gatewayLookup('dev-01')).toBeUndefined();
+    expect(await pins.lookup('legacy-host', 22)).toEqual(PIN);
+  });
+
+  it('a corrupt gatewayPins map degrades to empty without touching the pins map', async () => {
+    useHostsStore().passphrase = 'sync-pass';
+    const pins = useHostPinsStore();
+    await pins.pin('legacy-host', 22, PIN);
+    await pins.setGatewayPin('dev-01', FINGERPRINT);
+    // Hand-corrupt the envelope's inner payload: re-encrypt a payload with a
+    // nonsense gatewayPins value under the same passphrase.
+    const { decryptEnvelope, encryptToEnvelope } = await import('../src/shared/syncCrypto');
+    const raw = localStorage.getItem('ps.hostPins')!;
+    const plaintext = await decryptEnvelope(raw, 'sync-pass');
+    const parsed = JSON.parse(plaintext) as { gatewayPins: unknown };
+    parsed.gatewayPins = { 'dev-01': { fingerprintSha256: 42 }, junk: 'x' };
+    localStorage.setItem('ps.hostPins', await encryptToEnvelope(JSON.stringify(parsed), 'sync-pass'));
+    setActivePinia(createPinia());
+    useHostsStore().passphrase = 'sync-pass';
+    const fresh = useHostPinsStore();
+    expect(await fresh.gatewayLookup('dev-01')).toBeUndefined();
+    expect(await fresh.lookup('legacy-host', 22)).toEqual(PIN);
+  });
+});

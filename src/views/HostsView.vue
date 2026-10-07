@@ -10,6 +10,8 @@ import { normalizeHostDraft } from '../hostForm';
 import { parseSshConfigText } from '../sshConfigImport';
 import { claimsOf } from '../auth/google';
 import { forgetPassphrase, recallPassphrase, rememberPassphrase } from '../shared/passphraseVault';
+import { GATEWAY_DEFAULT_SERVER_URL } from '@pocketshell/core';
+import { useHostPinsStore } from '../stores/hostPins';
 import type { HostEntry } from '@pocketshell/core';
 
 const auth = useAuthStore();
@@ -36,7 +38,7 @@ const keyPassphrase = ref('');
 const keyFileName = ref('');
 
 const formOpen = ref(false);
-const draft = ref({ name: '', hostname: '', port: '22', user: '' });
+const draft = ref({ name: '', hostname: '', port: '22', user: '', gatewayDeviceId: '', gatewayUrl: '' });
 const draftIsEdit = ref(false);
 const saving = ref(false);
 const formError = ref('');
@@ -44,6 +46,15 @@ const formError = ref('');
  * aria-invalid (and the error border) until the form resets or saves. */
 const portInvalid = ref(false);
 const hostSaved = ref('');
+
+/* Gateway pairing: the fingerprint dialog. A gateway host is reached through
+   the PocketShell gateway; its SSH key is trusted only after the owner pastes
+   the host's own SHA-256 fingerprint — from the host, never from the network. */
+const pairHost = ref<HostEntry | null>(null);
+const pairDraft = ref('');
+const pairSaved = ref('');
+const pairError = ref('');
+const pairPinned = ref('');
 
 const importOpen = ref(false);
 const importStep = ref<'choose' | 'select' | 'missing'>('choose');
@@ -61,7 +72,7 @@ const importResume = ref(false);
 /** The quiet confirmation is one notice at rest: a new action's feedback
  * supersedes the previous confirmation instead of stacking with it. */
 function setNotice(slot: Ref<string>, message: string) {
-  for (const notice of [hostSaved, importDone, keySaved, keyRemoved]) {
+  for (const notice of [hostSaved, importDone, keySaved, keyRemoved, pairSaved]) {
     if (notice !== slot) notice.value = '';
   }
   slot.value = message;
@@ -160,20 +171,31 @@ function hostBusy(name: string): boolean {
 }
 
 function newHost() {
-  draft.value = { name: '', hostname: '', port: '22', user: '' };
+  draft.value = { name: '', hostname: '', port: '22', user: '', gatewayDeviceId: '', gatewayUrl: '' };
   draftIsEdit.value = false;
   formOpen.value = true;
   keyHost.value = null;
+  pairHost.value = null;
   importOpen.value = false;
   formError.value = '';
   portInvalid.value = false;
 }
 
 function editHost(host: HostEntry) {
-  draft.value = { name: host.name, hostname: host.hostname, port: String(host.port), user: host.user };
+  draft.value = {
+    name: host.name,
+    hostname: host.hostname,
+    port: String(host.port),
+    user: host.user,
+    gatewayDeviceId: host.gateway?.deviceId ?? '',
+    // A gateway host shows its stored URL; a fresh form shows nothing (the
+    // canonical gateway applies) until the user types one.
+    gatewayUrl: host.gateway?.serverUrl ?? '',
+  };
   draftIsEdit.value = true;
   formOpen.value = true;
   keyHost.value = null;
+  pairHost.value = null;
   importOpen.value = false;
   formError.value = '';
   portInvalid.value = false;
@@ -199,6 +221,38 @@ async function saveHost() {
   } finally {
     saving.value = false;
   }
+}
+
+/* --- Gateway pairing ------------------------------------------------------ */
+
+async function openPair(host: HostEntry) {
+  pairHost.value = host;
+  pairDraft.value = '';
+  pairError.value = '';
+  pairSaved.value = '';
+  formOpen.value = false;
+  keyHost.value = null;
+  importOpen.value = false;
+  const pin = host.gateway ? await useHostPinsStore().gatewayLookup(host.gateway.deviceId) : undefined;
+  pairPinned.value = pin?.fingerprintSha256 ?? '';
+}
+
+async function savePair() {
+  if (pairHost.value?.gateway === undefined) return;
+  const pin = await useHostPinsStore().setGatewayPin(pairHost.value.gateway.deviceId, pairDraft.value);
+  if (pin === null) {
+    pairError.value = 'That is not a SHA-256 fingerprint — on the host, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub';
+    return;
+  }
+  pairPinned.value = pin.fingerprintSha256;
+  setNotice(pairSaved, pairHost.value.name);
+  pairHost.value = null;
+}
+
+async function removePair(host: HostEntry) {
+  if (host.gateway === undefined) return;
+  await useHostPinsStore().forgetGatewayPin(host.gateway.deviceId);
+  if (pairHost.value === host) pairPinned.value = '';
 }
 
 /* --- Private key per host ------------------------------------------------ */
@@ -411,6 +465,7 @@ async function open(host: HostEntry) {
         <p v-if="importDone" class="notice" role="status">{{ importDone }}</p>
         <p v-if="keySaved" class="notice" role="status">Key for {{ keySaved }} stored encrypted and synced to your account.</p>
         <p v-if="keyRemoved" class="notice" role="status">Key for {{ keyRemoved }} removed from this browser.</p>
+        <p v-if="pairSaved" class="notice" role="status">{{ pairSaved }} is paired — its fingerprint is stored encrypted on this device.</p>
 
         <!-- The vault's persistent presence: appears the moment a passphrase
              is saved (the tick's feedback) and stays for later sessions, so
@@ -428,7 +483,7 @@ async function open(host: HostEntry) {
             <div class="host-text">
               <div class="name">{{ host.name }}</div>
               <div class="meta">
-                {{ describe(host) }}<span v-if="host.identityFile" class="key-name"> · key {{ keyFile(host.identityFile) }}</span
+                {{ describe(host) }}<span v-if="host.gateway" class="key-name"> · via PocketShell gateway</span><span v-if="host.identityFile" class="key-name"> · key {{ keyFile(host.identityFile) }}</span
                 ><template v-if="!hosts.secretHosts.includes(host.name)"> · key needed</template>
               </div>
               <!-- Crash/OOM warnings from the host's aplexer (issue #1): the
@@ -457,6 +512,7 @@ async function open(host: HostEntry) {
             </div>
             <div class="actions">
               <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>
+              <button v-if="host.gateway" @click="openPair(host)">Pair…</button>
               <button @click="editHost(host)">Edit</button>
               <button @click="attachKey(host)">Key…</button>
               <button class="primary" @click="open(host)">Connect</button>
@@ -486,6 +542,19 @@ async function open(host: HostEntry) {
               <div class="field f-port">
                 <label class="flabel" for="hf-port">Port</label>
                 <input id="hf-port" v-model="draft.port" placeholder="Port" inputmode="numeric" :aria-invalid="portInvalid ? 'true' : undefined" />
+              </div>
+              <div class="field f-gateway-device" style="grid-column: 1 / -1;">
+                <label class="flabel" for="hf-gw-device">Gateway device id <span class="muted">(optional — for a host behind NAT that runs the PocketShell gateway agent)</span></label>
+                <input id="hf-gw-device" v-model="draft.gatewayDeviceId" placeholder="Device id from the host's enrollment, e.g. home-laptop" autocomplete="off" />
+                <p class="muted" style="margin: 4px 0 0;">
+                  Set this and the browser reaches the host through the PocketShell gateway — no open ports needed.
+                  You'll pair the host's key fingerprint below before the first connect.
+                </p>
+              </div>
+              <div v-if="draft.gatewayDeviceId.trim() !== ''" class="field f-gateway-url" style="grid-column: 1 / -1;">
+                <label class="flabel" for="hf-gw-url">Gateway address</label>
+                <input id="hf-gw-url" v-model="draft.gatewayUrl" :placeholder="GATEWAY_DEFAULT_SERVER_URL" autocomplete="off" />
+                <p class="muted" style="margin: 4px 0 0;">Leave as is unless you run your own gateway.</p>
               </div>
               <div class="form-actions">
                 <button class="primary" type="submit" :disabled="saving || draft.hostname.trim() === ''">
@@ -575,7 +644,14 @@ async function open(host: HostEntry) {
         <details v-if="keyHost" class="keybox" open>
           <summary><span class="sumtitle">Private key for {{ keyHost.name }}</span></summary>
           <div class="cardbox-body">
-            <p class="card-lede">Stored encrypted, synced to your account; sent to the bridge only when you connect.</p>
+            <p class="card-lede">
+              Stored encrypted, synced to your account;
+              {{
+                keyHost.gateway === undefined
+                  ? 'sent to the bridge only when you connect.'
+                  : 'used only inside this browser to sign in to the host — the gateway relays the encrypted session and never sees the key.'
+              }}
+            </p>
             <div class="keyfile-row">
               <div class="field">
                 <label class="flabel" for="kf-file">Key file</label>
@@ -608,6 +684,46 @@ async function open(host: HostEntry) {
               <button class="primary" @click="saveKey">Save</button>
               <button @click="keyHost = null">Cancel</button>
             </div>
+          </div>
+        </details>
+
+        <!-- Gateway pairing: the fingerprint dialog. The gateway itself can
+             never introduce the host's key — the owner reads the fingerprint
+             FROM the host and this device pins it. -->
+        <details v-if="pairHost" class="keybox" open>
+          <summary><span class="sumtitle">Pair {{ pairHost.name }} — verify its key</span></summary>
+          <div class="cardbox-body">
+            <p class="card-lede">
+              Before the first connect, confirm the host's identity: paste its key fingerprint, read from the host itself
+              (never from a message or this page). Connections are refused until a fingerprint is saved here, and refused
+              loudly if the host's key ever stops matching it.
+            </p>
+            <p v-if="pairPinned !== ''" class="muted" role="status">
+              Currently paired with <code>{{ pairPinned }}</code>. Saving a different fingerprint replaces it — do that
+              only when you verified the host's key really changed.
+            </p>
+            <div class="field">
+              <label class="flabel" for="pf-fp">Host key fingerprint</label>
+              <input
+                id="pf-fp"
+                v-model="pairDraft"
+                placeholder="SHA256:… (the whole line of ssh-keygen -lf works too)"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="Host key fingerprint"
+              />
+            </div>
+            <p class="muted">
+              On the host (its own screen or SSH you already trust), run:
+              <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> — and paste the SHA256:… value.
+              If you enrolled the gateway agent on that host, its confirmation screen shows the same fingerprint.
+            </p>
+            <div class="form-actions">
+              <button class="primary" :disabled="pairDraft.trim() === ''" @click="savePair">Save fingerprint</button>
+              <button v-if="pairPinned !== ''" @click="removePair(pairHost)">Remove pairing</button>
+              <button @click="pairHost = null">Cancel</button>
+            </div>
+            <p v-if="pairError" class="error" role="alert">{{ pairError }}</p>
           </div>
         </details>
       </div>

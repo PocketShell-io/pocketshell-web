@@ -1,23 +1,45 @@
 /**
  * A node-stream Duplex whose peer is a WebSocket — the shim that lets ssh2
- * speak over the relay. Bytes that cross here are already SSH wire format
- * (encrypted end-to-end between this browser and the host); the relay on the
- * other side never sees anything readable.
+ * speak over a WebSocket transport. Bytes that cross here are already SSH
+ * wire format (encrypted end-to-end between this browser and the host); the
+ * relay or gateway on the other side never sees anything readable.
  *
  * `stream` resolves to the browser shim (stream-browserify) under Vite and to
  * node's own stream in vitest, so the same file serves both.
  */
 import { Duplex } from 'node:stream';
 
+export interface WebSocketDuplexOptions {
+  /** Inspect every inbound frame BEFORE it reaches the SSH stream. Return
+   * true when the interceptor consumed the frame (handshake traffic, a
+   * protocol violation it handled by destroying the stream) — returning
+   * true keeps the bytes away from ssh2. The gateway handshake uses this to
+   * gate TEXT frames and bound message size. */
+  intercept?: (ev: MessageEvent) => boolean;
+  /** Reject (destroy) any single inbound binary message larger than this —
+   * a bound on what a misbehaving server can push at the parser. */
+  maxMessageBytes?: number;
+  /** Dial with an injected socket factory (tests drive an in-memory peer).
+   * Absent: the platform's global WebSocket. */
+  socketFactory?: (url: string) => WebSocket;
+}
+
 export class WebSocketDuplex extends Duplex {
   private readonly ws: WebSocket;
+  private readonly maxMessageBytes: number;
 
-  constructor(ws: WebSocket) {
+  constructor(ws: WebSocket, options: WebSocketDuplexOptions = {}) {
     super();
     this.ws = ws;
+    this.maxMessageBytes = options.maxMessageBytes ?? Number.POSITIVE_INFINITY;
     ws.binaryType = 'arraybuffer';
     ws.addEventListener('message', (ev: MessageEvent) => {
+      if (options.intercept?.(ev) === true) return;
       if (typeof ev.data === 'string') return;
+      if (ev.data instanceof ArrayBuffer && ev.data.byteLength > this.maxMessageBytes) {
+        this.destroy(new Error(`server message of ${ev.data.byteLength} bytes exceeds the transport bound`));
+        return;
+      }
       // A real Buffer for the ssh2 parser: it does slice/compare arithmetic
       // that the plain polyfill view does not answer.
       this.push(Buffer.from(new Uint8Array(ev.data as ArrayBuffer)));
@@ -59,7 +81,7 @@ export class WebSocketDuplex extends Duplex {
     cb();
   }
 
-  _destroy(err: Error | null, cb: (err?: Error | null) => void): void {
+  _destroy(err: Error | null, cb: (err: Error | null) => void): void {
     try {
       this.ws.close();
     } catch {
@@ -69,11 +91,15 @@ export class WebSocketDuplex extends Duplex {
   }
 }
 
-/** Dial the relay and resolve with the Duplex once the socket is open. */
-export function connectWebSocketDuplex(url: string): Promise<WebSocketDuplex> {
+/** Dial the WebSocket and resolve with the Duplex once the socket is open. */
+export function connectWebSocketDuplex(
+  url: string,
+  options: Omit<WebSocketDuplexOptions, 'socketFactory'> & { socketFactory?: (url: string) => WebSocket } = {},
+): Promise<WebSocketDuplex> {
+  const open = options.socketFactory ?? ((u: string) => new WebSocket(u));
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    ws.onopen = () => resolve(new WebSocketDuplex(ws));
+    const ws = open(url);
+    ws.onopen = () => resolve(new WebSocketDuplex(ws, options));
     ws.onerror = () => reject(new Error('relay WebSocket connection failed'));
   });
 }

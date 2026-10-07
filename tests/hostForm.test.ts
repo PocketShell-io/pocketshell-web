@@ -73,3 +73,83 @@ describe('upsertHost', () => {
     expect(list[1]!.hostname).toBe('b.example.com');
   });
 });
+
+describe('normalizeHostDraft: the gateway fields', () => {
+  const GATEWAY = 'wss://gateway.pocketshell.io';
+
+  it('a device id with no URL makes the host a gateway host on the canonical gateway', () => {
+    const out = normalizeHostDraft({
+      name: 'home',
+      hostname: 'home.example.com',
+      port: '',
+      user: 'alexey',
+      gatewayDeviceId: ' home-laptop ',
+      gatewayUrl: '',
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.entry.gateway).toEqual({ serverUrl: GATEWAY, deviceId: 'home-laptop' });
+  });
+
+  it('an explicit gateway URL is normalized (https:// spelling included)', () => {
+    const out = normalizeHostDraft({
+      name: 'home',
+      hostname: 'home.example.com',
+      port: '',
+      user: '',
+      gatewayDeviceId: 'dev-01',
+      gatewayUrl: 'https://gw.selfhosted.example',
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.entry.gateway).toEqual({ serverUrl: 'wss://gw.selfhosted.example', deviceId: 'dev-01' });
+  });
+
+  it('a broken gateway URL or device id names its field', () => {
+    const badUrl = normalizeHostDraft({
+      name: 'home',
+      hostname: 'h',
+      port: '',
+      user: '',
+      gatewayDeviceId: 'dev-01',
+      gatewayUrl: 'wss://gw.selfhosted.example/api/v1/hosts/x/ssh?token=leak',
+    });
+    expect(badUrl).toMatchObject({ ok: false, field: 'gatewayUrl' });
+    const badId = normalizeHostDraft({
+      name: 'home',
+      hostname: 'h',
+      port: '',
+      user: '',
+      gatewayDeviceId: 'bad id',
+      gatewayUrl: '',
+    });
+    expect(badId).toMatchObject({ ok: false, field: 'gatewayDeviceId' });
+  });
+
+  it('editing a gateway host to an empty device id removes gateway mode entirely', () => {
+    const base = host('home');
+    base.gateway = { serverUrl: GATEWAY, deviceId: 'dev-01' };
+    const out = normalizeHostDraft(
+      { name: 'home', hostname: 'home.example.com', port: '', user: '', gatewayDeviceId: '', gatewayUrl: '' },
+      base,
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect('gateway' in out.entry).toBe(false);
+  });
+
+  it('a gateway host survives the sync payload round-trip with its target intact', () => {
+    const out = normalizeHostDraft({
+      name: 'home',
+      hostname: 'home.example.com',
+      port: '22',
+      user: 'alexey',
+      gatewayDeviceId: 'dev-01',
+      gatewayUrl: '',
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const [parsed] = upsertHost([], out.entry);
+    expect(parsed!.gateway).toEqual({ serverUrl: GATEWAY, deviceId: 'dev-01' });
+  });
+});

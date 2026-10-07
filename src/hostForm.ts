@@ -1,4 +1,5 @@
 import type { HostEntry } from '@pocketshell/core';
+import { GATEWAY_DEFAULT_SERVER_URL, normalizeGatewayServerUrl, normalizeGatewayTarget } from '@pocketshell/core';
 
 /**
  * The web-side host form: validating what a browser user submits and the
@@ -21,6 +22,11 @@ export interface HostDraft {
   /** As typed — '' means the default port. */
   port: string;
   user: string;
+  /** Gateway dial (a NAT'd host running the gateway agent): the device id
+   * to reach. '' = not a gateway host. */
+  gatewayDeviceId: string;
+  /** Gateway base URL; '' = the canonical production gateway. */
+  gatewayUrl: string;
 }
 
 /** A validated draft → a HostEntry the sync payload can carry, or why not.
@@ -28,7 +34,7 @@ export interface HostDraft {
  * its alert back to the input (the port field's aria-invalid state). */
 export type NormalizedDraft =
   | { ok: true; entry: HostEntry }
-  | { ok: false; error: string; field?: 'name' | 'hostname' | 'user' | 'port' };
+  | { ok: false; error: string; field?: 'name' | 'hostname' | 'user' | 'port' | 'gatewayDeviceId' | 'gatewayUrl' };
 
 export function normalizeHostDraft(draft: HostDraft, base?: HostEntry): NormalizedDraft {
   const name = draft.name.trim();
@@ -47,6 +53,28 @@ export function normalizeHostDraft(draft: HostDraft, base?: HostEntry): Normaliz
       return { ok: false, error: 'Port must be a whole number from 1 to 65535.', field: 'port' };
     }
   }
+  // Gateway mode: a device id makes this a gateway host; the URL field may
+  // stay empty (the canonical gateway applies). Clearing the device id on an
+  // edit removes gateway mode — a direct host again. The fields tolerate
+  // older drafts (and the desktop-twin shape) that predate gateway mode.
+  const gatewayDeviceId = (draft.gatewayDeviceId ?? '').trim();
+  let gateway: HostEntry['gateway'];
+  if (gatewayDeviceId !== '') {
+    const rawUrl = (draft.gatewayUrl ?? '').trim();
+    const serverUrl = normalizeGatewayServerUrl(rawUrl === '' ? GATEWAY_DEFAULT_SERVER_URL : rawUrl);
+    if (serverUrl === null) {
+      return { ok: false, error: 'The gateway address must look like wss://gateway.pocketshell.io.', field: 'gatewayUrl' };
+    }
+    const target = normalizeGatewayTarget({ serverUrl, deviceId: gatewayDeviceId });
+    if (target === null) {
+      return {
+        ok: false,
+        error: 'The device id is letters, digits, dots, dashes, colons or underscores — as the host showed at enrollment.',
+        field: 'gatewayDeviceId',
+      };
+    }
+    gateway = target;
+  }
   return {
     ok: true,
     entry: {
@@ -63,6 +91,7 @@ export function normalizeHostDraft(draft: HostDraft, base?: HostEntry): Normaliz
       localForwards: base?.localForwards ?? [],
       remoteForwards: base?.remoteForwards ?? [],
       fromConfig: base?.fromConfig ?? false,
+      ...(gateway !== undefined ? { gateway } : {}),
     },
   };
 }

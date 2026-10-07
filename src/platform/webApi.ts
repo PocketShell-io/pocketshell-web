@@ -27,6 +27,7 @@
 import type { PocketShellApi, Unsubscribe } from '@ui/app/api';
 import type { ConnectionState } from '@pocketshell/core';
 import type { CloneProgress, HostEntry } from '@pocketshell/core';
+import { normalizeGatewayTarget } from '@pocketshell/core';
 import { SshConnection } from '../terminal/connection';
 import { LinkSshConnection } from '../terminal/linkConnection';
 import { useAuthStore } from '../stores/auth';
@@ -154,6 +155,9 @@ async function connectHost(payload: {
     }
     return connectViaLink(entry, secret.password!);
   }
+  if (entry.gateway) {
+    return connectViaGateway(entry, secret, payload.user);
+  }
   if (!secret || ((secret.privateKeyPem ?? '') === '' && (secret.password ?? '') === '')) {
     return {
       ok: false,
@@ -253,6 +257,77 @@ async function connectViaLink(
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
   const id = registerConnectionBundle(conn as unknown as SshConnection);
+  connectionIdRef = id;
+  emitState(id, 'connected');
+  return { ok: true, connectionId: id };
+}
+
+/**
+ * The gateway dial: real SSH end-to-end through the PocketShell gateway —
+ * the same SshConnection and the same SSH key as a direct dial, but the
+ * transport is the gateway's per-host WebSocket and the Google ID token only
+ * admits the route. Two things refuse BEFORE anything is dialed: a host
+ * without an attached SSH key (a gateway session has no password fallback —
+ * the key IS the login), and a device this browser has not PAIRED (no
+ * out-of-band fingerprint, no dial — the gateway can never introduce the
+ * host's key).
+ */
+async function connectViaGateway(
+  entry: HostEntry,
+  secret: { privateKeyPem?: string; keyPassphrase?: string } | undefined,
+  fallbackUser: string,
+): Promise<{ ok: true; connectionId: string } | { ok: false; error: string }> {
+  const target = normalizeGatewayTarget(entry.gateway);
+  if (!target) {
+    return { ok: false, error: `Host ${entry.name} has a broken gateway configuration — edit the host and re-enter its device id.` };
+  }
+  if (!secret || (secret.privateKeyPem ?? '') === '') {
+    return {
+      ok: false,
+      error: 'Gateway connections authenticate with your SSH key — attach a key for this host on the hosts screen.',
+    };
+  }
+  const paired = await useHostPinsStore().gatewayLookup(target.deviceId);
+  if (!paired) {
+    return {
+      ok: false,
+      error: `${entry.name} is not paired with this device yet — use Pair on the hosts screen to verify the host's fingerprint, then connect.`,
+    };
+  }
+  const conn = new SshConnection();
+  const auth = useAuthStore();
+  let connectionIdRef: string | null = null;
+  try {
+    await conn.connect({
+      // The gateway dial ignores the legacy relay URL and host/port entirely;
+      // they stay as labels for the status line.
+      url: '',
+      idToken: auth.idToken,
+      host: entry.hostname,
+      port: entry.port,
+      user: entry.user || fallbackUser,
+      auth: {
+        kind: 'key' as const,
+        privateKey: secret.privateKeyPem!,
+        ...(secret.keyPassphrase ? { passphrase: secret.keyPassphrase } : {}),
+      },
+      gateway: {
+        serverUrl: target.serverUrl,
+        deviceId: target.deviceId,
+        pinnedFingerprint: paired.fingerprintSha256,
+        ...(config.gatewayAllowInsecureWs ? { allowInsecureWs: true } : {}),
+      },
+      onClosed: () => {
+        const id = connectionIdRef;
+        if (id === null) return;
+        evictConnection(id);
+        emitState(id, 'lost');
+      },
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  const id = registerConnectionBundle(conn);
   connectionIdRef = id;
   emitState(id, 'connected');
   return { ok: true, connectionId: id };

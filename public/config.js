@@ -12,4 +12,9 @@ window.POCKETSHELL_WEB = {
   wsUrl: '',
   // Browser-direct relay (wss://...); empty keeps the Lambda bridge.
   directWsUrl: '',
+  // The PocketShell gateway that "via gateway" hosts dial (docs/gateway-client.md).
+  gatewayServerUrl: 'wss://gateway.pocketshell.io',
+  // Development ONLY — allows ws:// gateway URLs (a local or docker gateway).
+  // Must stay false in production; it admits unencrypted gateway dials.
+  gatewayAllowInsecureWs: false,
 };
