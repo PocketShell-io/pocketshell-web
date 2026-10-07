@@ -1,15 +1,20 @@
 /**
- * Browser-fidelity crypto lab entry point.
+ * Browser-fidelity crypto lab — SUPPLEMENTAL evidence.
  *
  *   node tests/crypto/lab/run-lab.mjs
  *
  * Builds the owned shim/probe/fixtures to .tmp/crypto-lab/, registers node
  * module hooks that serve `require('crypto')` with the compiled shim and
- * `require('elliptic')` with the counting probe (the exact redirects the
- * production browser build makes via vite aliases — node builtins bypass
- * vite aliases under vitest, so plain node with hooks is the deterministic
- * equivalent), then runs the ssh2 key-parser and real-SSH handshake labs.
- * Exits nonzero if anything failed. Ephemeral keys only; nothing is mocked.
+ * `require('elliptic')` with a counting probe, then runs the ssh2 key-parser
+ * and real-SSH handshake labs under real node require().
+ *
+ * This lab is valuable because the hook can COUNT elliptic calls and prove
+ * the interception sources, but it is NOT the shipping wiring: the shipping
+ * bundle aliases `crypto` through vite-plugin-node-polyfills, and the
+ * acceptance pass for that is tests/crypto/lab/browser/run-browser-lab.mjs,
+ * which runs a bundle emitted by the production vite config in a real
+ * Chromium. Exits nonzero if anything failed. Ephemeral keys only; nothing
+ * is mocked.
  */
 import { registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
