@@ -211,7 +211,7 @@ async function main() {
 
     console.log('[run-browser-lab] receipt: 18 flow records green (exact pinned manifest) from 9 dial attempts,');
     console.log('   8 of which reached the SSH server as TCP connections (parser-rejected dial: no server trace);');
-    console.log('   every negative dial observed its stable guard code on the real wrapped parsed-key signer;');
+    console.log('   every GUARD-REFUSED dial observed its stable guard code on the real wrapped parsed-key signer (parser-rejected and host-pin dials have zero signer invocations by design);');
     console.log(`   zero elliptic ECDSA/EdDSA signatures; ECDH genKeyPair calls: ${probe.genKeyPairCalls}.`);
     console.log('   Scope: shipped crypto/signing boundary exercised through the production vite bundle and a');
     console.log('   CLONED connection config over a lab transport — not production connection.ts/webApi/pin-store.');

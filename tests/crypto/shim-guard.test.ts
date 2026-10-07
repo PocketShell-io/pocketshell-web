@@ -571,6 +571,30 @@ describe('null/undefined digest path classifies before signing', () => {
     }
   });
 
+  it('signs the classifier-permitted whitespace spelling on the null path (both conventions)', () => {
+    // The classifier's envelope contract permits whitespace outside and
+    // around the single envelope (indented marker lines, indented base64,
+    // CRLF). The null-path decoder must accept the SAME spellings: before
+    // the trimmed-marker strip, an indented BEGIN line survived pemToDer and
+    // atob died with an uncoded error on an already-classified Ed25519 key.
+    const ed = ephemeralEd25519();
+    const indented = ed.pkcs8
+      .split(/\r?\n/)
+      .map((line) => (line === '' ? line : `  ${line}`))
+      .join('\r\n');
+    expect(classifyPrivateKey(indented)).toBe('ed25519');
+    const canonical = shimSign(null, data, ed.pkcs8) as Buffer;
+    for (const algo of ALGOS) {
+      const sig = shimSign(algo, data, indented) as Buffer;
+      expect(sig).toBeInstanceOf(Buffer);
+      expect(sig.equals(canonical)).toBe(true);
+      expect(nodeVerify(null, data, ed.spki, sig)).toBe(true);
+      expect(shimVerify(null, data, indented, sig)).toBe(true);
+    }
+    expect(ellipticProbe.ecSignCalls).toBe(0);
+    expect(ellipticProbe.eddsaSignCalls).toBe(0);
+  });
+
   it('refuses a genuine Ed25519 body relabeled as EC PRIVATE KEY (both conventions)', () => {
     const ed = ephemeralEd25519();
     const relabeled = relabel(ed.pkcs8, 'PRIVATE KEY', 'EC PRIVATE KEY');

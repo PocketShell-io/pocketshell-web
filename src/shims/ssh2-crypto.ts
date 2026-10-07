@@ -193,9 +193,22 @@ const SPKI_ED25519_PREFIX = new Uint8Array([
 ]);
 
 function pemToDer(pem: string): Uint8Array {
+  // Marker detection runs on the TRIMMED line so the decoder accepts exactly
+  // the whitespace spellings the classifier's envelope contract permits
+  // (indented markers, indented base64, CRLF). Before this, a PEM whose
+  // BEGIN line was prefixed by spaces classified as Ed25519 but this strip
+  // left the marker inside the body and atob died with an uncoded error — a
+  // direct-shim API compatibility gap only, since every sign path has
+  // already validated the envelope through the shared classifier (exactly
+  // one envelope, whitespace-only outside, embedded markers refused) before
+  // any decode happens here.
   const body = pem
     .split(/\r?\n/)
-    .filter((line) => line !== '' && !line.startsWith('-----'))
+    .filter((line) => {
+      const trimmed = line.trim();
+      return trimmed !== '' && !trimmed.startsWith('-----');
+    })
+    .map((line) => line.trim())
     .join('');
   const bin = atob(body);
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
@@ -219,10 +232,11 @@ export function sign(
 ): Buffer | Error {
   try {
     if (algorithm === null || algorithm === undefined) {
-      // Classify FIRST: pemToDer below discards every `-----` line and
-      // cannot see envelope ambiguity. Encrypted headers stay advisory at
-      // assessment but are never an authorization here, and an ECDSA
-      // classification refuses with its own code before anything is seeded.
+      // Classify FIRST: pemToDer below strips marker lines (on their trimmed
+      // form) and cannot see envelope ambiguity. Encrypted headers stay
+      // advisory at assessment but are never an authorization here, and an
+      // ECDSA classification refuses with its own code before anything is
+      // seeded.
       if (classifyAllowedPrivateKey(key) !== 'ed25519') {
         throw unsupportedFormatError(
           'browser build refuses null-digest signing with a private key that does not classify as Ed25519',

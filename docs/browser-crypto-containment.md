@@ -24,7 +24,11 @@ any private key:
 - `src/shims/private-key-classify.ts` (new, dependency-free): structural
   classification of the PEM forms that actually reach the boundary.
   **Input contract: exactly ONE complete PEM envelope** — BEGIN/END markers
-  with the same label, whitespace-only outside; leading junk, trailing junk,
+  with the same label, whitespace-only outside (the whitespace spellings the
+  contract permits — indented markers, indented base64, CRLF — are accepted
+  consistently by the shim's null-path decoder too, which strips marker
+  lines on their trimmed form; embedded markers stay a refusal everywhere);
+  leading junk, trailing junk,
   additional blocks, split markers and label mismatches all classify as
   `unknown` (ambiguity defense — never "whichever block the first regex
   found"). Any **embedded BEGIN/END marker inside the envelope body** — a

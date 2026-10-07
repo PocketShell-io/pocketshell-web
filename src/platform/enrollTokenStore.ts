@@ -21,8 +21,11 @@
  *    already-expired mint is never copied, a timer the browser throttled in
  *    a background tab cannot extend the token's life, and a completion that
  *    lands past the deadline retires the token instead of flagging it
- *    copied or leaving the manual-copy hint up. No polling (the timer stays
- *    the exact one-shot bound; the clock check is what gates every copy).
+ *    copied or leaving the manual-copy hint up — and a plain expiry (timer
+ *    or clock) clears an already-displayed hint along with the token, so a
+ *    dead token never shows a copy instruction beside the expired notice.
+ *    No polling (the timer stays the exact one-shot bound; the clock check
+ *    is what gates every copy).
  *
  * A clipboard write that was already performed cannot be undone — nothing
  * here claims otherwise; retiring an expired token after its write settles
@@ -108,10 +111,14 @@ export function createEnrollTokenController(opts: {
     return state.expiresAtMs !== null && Date.now() >= state.expiresAtMs;
   }
 
-  /** Expire the CURRENT token now — erase and flag, timer or clock invoked. */
+  /** Expire the CURRENT token now — erase and flag, timer or clock invoked.
+   * The manual-copy hint dies with the token: a dialog that no longer holds
+   * a token must not keep announcing "copy it by hand" beside the expired
+   * notice. (A mint failure's error is untouched — that path has no token.) */
   function expireNow(): void {
     eraseToken();
     state.expired = true;
+    state.error = '';
     render();
   }
 

@@ -54,6 +54,7 @@ import os
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -324,6 +325,10 @@ class FakeGateway:
         self.dials = 0
         self.urls: list[str] = []
         self.auth_frames: list[dict] = []
+        # The RAW first text frame (the auth frame) is custody-scanned like
+        # every other surface: recording it for the exact-token assertion is
+        # not a substitute for scanning it against the secret set.
+        self.first_texts: list[str] = []
         self.text_after_ready: list[str] = []
         self.pipes: list[_TcpPipe] = []
         self.ready_sent = 0
@@ -361,6 +366,7 @@ class FakeGateway:
                 frame = json.loads(raw)
             except json.JSONDecodeError:
                 frame = {'type': 'unreadable', 'raw': raw}
+            self.first_texts.append(raw)
             self.auth_frames.append(frame)
             if frame.get('type') != 'auth' or frame.get('device_id') != self.device_id:
                 return
@@ -380,7 +386,11 @@ class FakeGateway:
         return b"".join(p.relayed for p in self.pipes)
 
     def every_text_frame(self) -> list[str]:
-        return [t for p in self.pipes for t in p.browser_text] + [json.dumps(f) for f in self.text_after_ready]
+        return (
+            list(self.first_texts)
+            + [t for p in self.pipes for t in p.browser_text]
+            + [json.dumps(f) for f in self.text_after_ready]
+        )
 
 
 async def handle_broker(route):
@@ -643,12 +653,24 @@ async def main() -> int:
         print('OSC 52 SET: remote yank reached the browser clipboard through the real terminal')
 
         # A remote must not be able to BLANK the clipboard: the empty-payload
-        # sequence is refused by the shipping handler.
-        await page.keyboard.type("printf '\\033]52;c;\\a'")
+        # sequence is refused by the shipping handler. The refusal is
+        # asserted against ORDERED PTY output, not a sleep: the marker echo
+        # is typed after the clear attempt, so when it renders, the clear
+        # sequence has necessarily traversed the PTY already.
+        await page.keyboard.type("printf '\\033]52;c;\\a'; echo PTY-AFTER-CLEAR-m4kqz9")
         await page.keyboard.press('Enter')
-        await page.wait_for_timeout(2_000)
+
+        async def clear_attempt_ordered() -> bool:
+            rows = await page.locator('.xterm-rows').first.inner_text()
+            return 'PTY-AFTER-CLEAR-m4kqz9' in rows
+
+        await wait_for(
+            clear_attempt_ordered,
+            15,
+            'the PTY output ordered after the OSC 52 clear attempt to render',
+        )
         await clipboard_equals(page, OSC52_MARKER)
-        print('OSC 52 CLEAR: empty-payload refusal kept the yanked marker')
+        print('OSC 52 CLEAR: empty-payload refusal kept the yanked marker (ordered PTY proof)')
 
         # --- kill the sibling key, reload, redial ---------------------------
         # With key_plain (manualbox's credential) deleted from authorized_keys,
@@ -736,9 +758,13 @@ async def main() -> int:
         await pw.stop()
 
     # --- wire-level assertions ----------------------------------------------
-    # 0. The custody oracle's surfaces: HTTP requests (all of them), relay
-    #    frames (binary AND text), gateway frames (binary AND text), socket
-    #    URLs. The negative control above proved the oracle bites.
+    # 0. The custody oracle's surfaces: every HTTP request the page issued
+    #    (Playwright's request feed — note its exact coverage: WebSocket
+    #    handshakes do NOT appear here, they are recorded by the socket
+    #    handlers' own url lists; likewise requests no page code makes are
+    #    absent by definition), relay frames (binary AND text), gateway
+    #    frames (binary AND text — including the auth frame), socket URLs.
+    #    The negative control above proved the oracle bites.
     #
     # The Google sign-in's accepted surfaces, per the documented credential
     # boundary: the Authorization header to the account surfaces (sync +
@@ -746,16 +772,22 @@ async def main() -> int:
     # relay's query string, which that relay itself authorizes. The GATEWAY
     # carries none of it (its admission is the broker-scoped routing token,
     # asserted at the auth frame below), and no key/canary material rides
-    # ANY surface.
-    allow_google_in_url = ('direct.e2e.test', 'sync.e2e.test', 'gateway-broker.e2e.test')
+    # ANY surface. Allowlisting is by EXACT parsed hostname — never a
+    # substring of the URL, which any path or query could counterfeit
+    # (`https://evil.test/direct.e2e.test` must not pass).
+    allow_google_on_hosts = {'direct.e2e.test', 'sync.e2e.test', 'gateway-broker.e2e.test'}
+
+    def url_host(url: str) -> str:
+        return (urlsplit(url).hostname or '').lower()
+
     for method, url in http_surfaces:
         for secret in SECRETS_AS_TEXT:
             if secret == GOOGLE_TOKEN:
                 continue  # token-bearing URLs are checked per-host below
             assert secret not in url, f'{secret[:24]}… appeared in a request URL: {method} {url}'
         if GOOGLE_TOKEN in url:
-            assert any(host in url for host in allow_google_in_url), (
-                f'the Google sign-in reached a non-account surface: {method} {url}'
+            assert url_host(url) in allow_google_on_hosts, (
+                f'the Google sign-in reached a non-account surface ({url_host(url)!r}): {method} {url}'
             )
     assert_wire_custody(relay.every_relayed_byte(), relay.every_text_frame(), 'direct-relay')
     assert_wire_custody(gateway.every_relayed_byte(), gateway.every_text_frame(), 'gateway')

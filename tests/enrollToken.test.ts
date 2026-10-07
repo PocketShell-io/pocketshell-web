@@ -88,6 +88,28 @@ describe('enrollmentTokenExpiresAndClosedRequestCannotRepopulate', () => {
     expect(h.copy).not.toHaveBeenCalled(); // copy stays disabled after expiry
   });
 
+  it('expiry clears a stale manual-copy error: a dead token shows no copy hint', async () => {
+    // copyAgain is refused INSIDE the window: the token stays in the field
+    // behind the manual-copy hint. When the token then expires, the hint is
+    // stale — the dialog must not announce "copy it by hand" for a token it
+    // no longer holds, on top of the expired notice.
+    const blocked = harness(
+      () => Promise.resolve({ token: TOKEN_B, expiresAtMs: Date.now() + 5_000 }),
+      () => Promise.reject(new Error('blocked')),
+    );
+    blocked.controller.open();
+    await blocked.controller.generate(); // auto-copy rejects too: manual-copy state
+    await blocked.controller.copyAgain(); // the hint is now up
+    expect(blocked.latest().token).toBe(TOKEN_B);
+    expect(blocked.latest().error).toMatch(/blocked/);
+    expect(blocked.latest().expired).toBe(false);
+    // The timer fires: the stale hint dies WITH the token.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(blocked.latest().token).toBe('');
+    expect(blocked.latest().expired).toBe(true);
+    expect(blocked.latest().error).toBe('');
+  });
+
   it('copyAgain refuses once expired and works before it', async () => {
     const h = harness(() => Promise.resolve({ token: TOKEN_B, expiresAtMs: Date.now() + 60_000 }));
     h.controller.open();
@@ -282,7 +304,15 @@ describe('clipboard completions are wall-clock bound too', () => {
       () => Promise.resolve({ token: TOKEN_A, expiresAtMs: Date.now() + 5_000 }),
       () =>
         new Promise<void>((resolve, reject) => {
-          const settle = () => (n++ === 0 && rejectFirst ? reject(new Error('blocked')) : resolve());
+          // A blocked clipboard blocks EVERY write, not just the first: the
+          // rejection-labelled regressions must drive their pending write to
+          // an actual rejection, never a silent resolve (which would exercise
+          // the success branch and prove nothing about the refusal path).
+          const settle = () => {
+            n += 1;
+            if (rejectFirst) reject(new Error('blocked'));
+            else resolve();
+          };
           resolvers.push(() => settle());
         }),
     );
