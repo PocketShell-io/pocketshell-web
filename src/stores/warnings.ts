@@ -20,6 +20,20 @@ import { useHostsStore } from './hosts';
  * out of the map; nothing here ever blocks or breaks the list itself. The
  * host's `a` is the source of truth: an ack re-runs the command, and the
  * refetched list (not the ack's exit status) decides what remains visible.
+ *
+ * ## The gateway exclusion (credential custody)
+ *
+ * The only transport this store has is the LEGACY bridge (`config.wsUrl` —
+ * the Lambda that receives a host's key in its `connect` frame). A gateway
+ * host's key exists to authenticate end-to-end against the host's own sshd
+ * THROUGH the gateway, and must never be handed to any other infrastructure:
+ * this store explicitly excludes every `entry.gateway` host — in the sweep
+ * queue AND in `linkFor`, the one gate every bridge run passes — BEFORE the
+ * secret is so much as decrypted. There is no fallback: a gateway host
+ * without a live workspace connection has no warnings sweep at all (see
+ * docs/gateway-client.md, maturity limits). The guard is structural, not
+ * incidental: it does not depend on which URLs happen to be configured, on
+ * the order of unlock/refresh, or on the sweep being manual or automatic.
  */
 export const useWarningsStore = defineStore('host-warnings', {
   state: () => ({
@@ -38,15 +52,23 @@ export const useWarningsStore = defineStore('host-warnings', {
     total: (s) => Object.values(s.byHost).reduce((n, list) => n + list.length, 0),
   },
   actions: {
-    /** The runner link for one host from this browser's stored credential,
+    /**
+     * The runner link for one host from this browser's stored credential,
      * or null when there is nothing to connect with (no sign-in, no bridge
-     * URL, no secret — each a quiet skip, never an error surface). */
+     * URL, no secret — each a quiet skip, never an error surface).
+     *
+     * A GATEWAY host is always null here, checked before `getHostSecret`
+     * touches the vault: the key must stay clear of the legacy bridge no
+     * matter what this browser has stored or which URLs are set.
+     */
     async linkFor(name: string): Promise<HostLink | null> {
       const auth = useAuthStore();
       const hosts = useHostsStore();
       if (auth.idToken === '' || config.wsUrl === '') return null;
       const host = hosts.hosts.find((h) => h.name === name);
       if (host === undefined) return null;
+      // Gateway exclusion — BEFORE the credential is loaded (see class doc).
+      if (host.gateway !== undefined) return null;
       const bridgeAuth = bridgeAuthOf(await hosts.getHostSecret(name));
       if (bridgeAuth === null) return null;
       return {
@@ -62,8 +84,10 @@ export const useWarningsStore = defineStore('host-warnings', {
     /**
      * Refresh every host that has a credential in this browser (only those
      * can answer `a`), two connections at a time so a dozen hosts don't
-     * stampede the bridge. Hosts dropped from the synced list lose their
-     * entry even though nothing queries them anymore.
+     * stampede the bridge. Gateway hosts are out of the queue entirely — the
+     * bridge sweep never considers them, automatically or otherwise. Hosts
+     * dropped from the synced list lose their entry even though nothing
+     * queries them anymore.
      */
     async sweep(): Promise<void> {
       if (this.sweeping) return;
@@ -72,9 +96,15 @@ export const useWarningsStore = defineStore('host-warnings', {
         const hosts = useHostsStore();
         const known = new Set(hosts.hosts.map((h) => h.name));
         for (const name of Object.keys(this.byHost)) {
-          if (!known.has(name)) delete this.byHost[name];
+          const host = hosts.hosts.find((h) => h.name === name);
+          // Left the list, or became a gateway host: a bridge-sourced row
+          // could then never refresh or ack again — drop it rather than
+          // show a half-truth.
+          if (!known.has(name) || host?.gateway !== undefined) delete this.byHost[name];
         }
-        const queue = hosts.hosts.filter((h) => hosts.secretHosts.includes(h.name)).map((h) => h.name);
+        const queue = hosts.hosts
+          .filter((h) => h.gateway === undefined && hosts.secretHosts.includes(h.name))
+          .map((h) => h.name);
         const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
           for (;;) {
             const name = queue.shift();
