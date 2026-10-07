@@ -41,11 +41,15 @@ bundle only in direct mode).
 
 ## Production deploy (AWS)
 
-The deployed relay is not this Worker but its protocol twin:
-`aws-infra/sandbox/pocketshell-relay` (`relay.go` — same wire contract and
-token checks, plus a fail-closed email allowlist) on a t4g.nano behind
-`wss://relay.pocketshell.io/`, TLS via in-process ACME, no SSH port,
-administered over SSM. `./deploy.sh` there provisions the stack, ships the
-arm64 binary via S3+SSM, and health-gates on the protocol's 426. This
-Worker remains the portable reference; the app consumes either one the
+The deployed relay is not this Worker. The production server is the Go
+implementation in the **private `PocketShell-io/pocketshell-gateway` repo**
+(same wire contract and token checks, plus a fail-closed email allowlist),
+which owns its own automatic OIDC CI/CD. It runs on a t4g.nano behind the
+canonical **`wss://gateway.pocketshell.io/`** — TLS via in-process ACME, no
+SSH port, administered over SSM. The legacy **`wss://relay.pocketshell.io/`**
+hostname is kept as an alias on the same IP so existing clients keep
+connecting; the old `aws-infra/sandbox/pocketshell-relay` home of the server
+is retired to inventory-only.
+
+This Worker remains the portable reference; the app consumes either one the
 same way, via `directWsUrl`.
