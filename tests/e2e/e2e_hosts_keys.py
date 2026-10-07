@@ -441,6 +441,10 @@ def describe_connection_state(state: dict) -> str:
 
 
 TRACEBACK_FRAME_CAP = 12     # per-exception frame cap for the final report
+TRACEBACK_NODE_CAP = 32      # hard bound on exception nodes visited across the WHOLE chain/group
+TRACEBACK_REPORT_FALLBACK = (
+    'failure report unavailable (safe rendering failed; original error withheld)'
+)  # the fixed, credential-free last-resort report
 try:
     _EXC_GROUP_TYPES: tuple = (BaseExceptionGroup,)   # noqa: F821 - 3.11+
 except NameError:  # pragma: no cover - pre-3.11 runtimes
@@ -450,20 +454,32 @@ except NameError:  # pragma: no cover - pre-3.11 runtimes
 def safe_traceback(exc: BaseException) -> str:
     """The executable failure boundary's report over the WHOLE chain: every
     linked exception (direct causes, handled-while contexts, exception-group
-    members; cyclic links deduplicated) renders its source locations —
-    file:line/function, never runtime data — with its message and any
-    `__notes__` through safe_diag_text, and deep recursion capped with an
-    explicit withheld marker. The raw exception is never re-raised above the
-    boundary, so Python's own printer (message, notes, chained causes
-    verbatim) is never reached; this rendering is what the failure looks
-    like."""
+    members) renders its source locations — file:line/function, never
+    runtime data — with its message and any `__notes__` through
+    safe_diag_text. Traversal itself stops at an already-seen node (the loop
+    is marked, its links are NOT followed again) and a hard node budget
+    bounds the entire chain/group — depth and count alike — past which a
+    fixed withheld marker closes the report; no exception graph can make
+    this renderer recurse unbounded. The raw exception is never re-raised
+    above the boundary, so Python's own printer (message, notes, chained
+    causes verbatim) is never reached; this rendering is what the failure
+    looks like."""
     seen: set[int] = set()
     lines: list[str] = []
+    budget = TRACEBACK_NODE_CAP
+    budget_reported = False
 
-    def render(e: BaseException, heading: str) -> None:
+    def withhold_more() -> None:
+        nonlocal budget_reported
+        if not budget_reported:
+            lines.append('  (further chained failures withheld: chain budget reached)')
+            budget_reported = True
+
+    def render(e: BaseException, heading: str) -> bool:
+        # False = already seen: the CALLER must stop here, not follow links.
         if id(e) in seen:
             lines.append(f'{heading} [chain loop withheld]')
-            return
+            return False
         seen.add(id(e))
         lines.append(heading)
         frames = traceback.extract_tb(e.__traceback__)
@@ -474,9 +490,16 @@ def safe_traceback(exc: BaseException) -> str:
         lines.append(f'  {type(e).__name__}: {safe_diag_text(str(e))}')
         for note in getattr(e, '__notes__', None) or []:
             lines.append(f'  note: {safe_diag_text(str(note))}')
+        return True
 
     def walk(e: BaseException, heading: str) -> None:
-        render(e, heading)
+        nonlocal budget
+        budget -= 1
+        if budget < 0:
+            withhold_more()
+            return
+        if not render(e, heading):
+            return
         if isinstance(e, _EXC_GROUP_TYPES):
             for i, member in enumerate(e.exceptions, 1):
                 walk(member, f'member {i} of the failure-group above:')
@@ -1697,10 +1720,17 @@ async def failure_boundary_negative_control() -> None:
     payloads, through the ACTUAL functions (request-free, no browser):
       - the ACTUAL entrypoint() — what `__main__` calls — with main() replaced
         by synthetic driver failures carrying EVERY declared secret (raw,
-        +-encoded, percent-encoded, chained-cause and __notes__ placements)
-        must exit NONZERO with a report that keeps the failure's type and
-        source location but echoes no secret on stdout or stderr, and must
-        never re-raise the raw exception for Python's printer;
+        +-encoded, percent-encoded, chained-cause, __notes__, cyclic and
+        deep/grouped-chain placements) must exit NONZERO with a report that
+        keeps the failure's type and source location but echoes no secret on
+        stdout or stderr, and must never re-raise the raw exception for
+        Python's printer; chain/group traversal itself stops at already-seen
+        nodes and is hard-bounded by the node budget;
+      - a FAILING REPORT RENDERER (a poisoned safe_traceback or safe_exc
+        seam) must print the fixed credential-free fallback and exit 1 —
+        never the original failure, never the reporter's own error, no raw
+        traceback, no escaping exception (a raising loop handler would hand
+        asyncio's DEFAULT handler the raw context);
       - a driver failure the run never retrieves (an orphan fixture-handler
         task) reaches stderr only through the loop's SAFE exception handler —
         the default would print the raw traceback as an independent bypass;
@@ -1725,7 +1755,7 @@ async def failure_boundary_negative_control() -> None:
     original_main, original_page = main, PAGE
     try:
         # --- the ACTUAL executable boundary (its own thread + loop) ---------
-        def drive(poisoned, what: str) -> tuple[str, str]:
+        def drive(poisoned, what: str, expect: str = 'RuntimeError') -> tuple[str, str]:
             buf_err, buf_out, box = io.StringIO(), io.StringIO(), {}
 
             def run():
@@ -1744,7 +1774,9 @@ async def failure_boundary_negative_control() -> None:
             assert box.get('rc') == 1, f'{what}: the boundary did not exit nonzero'
             err, out = buf_err.getvalue(), buf_out.getvalue()
             scan(err + out, what)
-            assert 'E2E FAIL' in err and 'RuntimeError' in err, f'{what}: unclear failure report: {err[:200]}'
+            assert 'E2E FAIL' in err and expect in err, f'{what}: unclear failure report: {err[:200]}'
+            assert 'Traceback (most recent call last)' not in err + out, \
+                f'{what}: a raw traceback reached the output'
             return err, out
 
         for secret, label in SECRET_LABELS:
@@ -1777,6 +1809,55 @@ async def failure_boundary_negative_control() -> None:
 
         drive(poisoned_context, 'the handled-while (context-chain) driver failure')
 
+        # cyclic chains: traversal itself must STOP at an already-seen node —
+        # these two shapes once recursed to RecursionError INSIDE this very
+        # boundary, and Python's printer then emitted the raw original
+        async def poisoned_self_cause():
+            boom = RuntimeError(f'self-caused driver failure {GOOGLE_TOKEN}')
+            boom.__cause__ = boom
+            raise boom
+
+        err, _ = drive(poisoned_self_cause, 'the self-cause cycle driver failure')
+        assert '[chain loop withheld]' in err, err[:400]
+
+        async def poisoned_two_node_cycle():
+            side_a = RuntimeError(f'cycle side A {CANARY}')
+            side_b = RuntimeError(f'cycle side B {KEY_PASSPHRASE}')
+            side_a.__cause__ = side_b
+            side_b.__context__ = side_a
+            raise side_a
+
+        err, _ = drive(poisoned_two_node_cycle, 'the two-node cause/context cycle driver failure')
+        assert '[chain loop withheld]' in err, err[:400]
+
+        # honest-but-deep chains and nested groups are BOUNDED: past the node
+        # budget a fixed marker closes the report (no unbounded rendering)
+        async def poisoned_deep_chain():
+            link = RuntimeError(f'chain leaf {CANARY}')
+            for depth in range(200):
+                nxt = RuntimeError(f'chain link {depth} {GOOGLE_TOKEN}')
+                nxt.__cause__ = link
+                link = nxt
+            raise link
+
+        err, _ = drive(poisoned_deep_chain, 'the 200-link chained driver failure')
+        assert 'chain budget reached' in err, err[:400]
+        assert len(err.splitlines()) <= TRACEBACK_NODE_CAP * (TRACEBACK_FRAME_CAP + 3) + 4, \
+            'the chain report exceeded the node budget'
+
+        async def poisoned_group():
+            raise ExceptionGroup(
+                'driver group', (
+                    RuntimeError(f'group member one {GOOGLE_TOKEN}'),
+                    ExceptionGroup('nested driver group', (
+                        RuntimeError(f'group member two {KEY_PASSPHRASE}'),
+                        ValueError(f'group member three {CANARY}'),
+                    )),
+                ))
+
+        err, _ = drive(poisoned_group, 'the nested exception-group driver failure')
+        assert 'member 2 of the failure-group above:' in err, err[:400]
+
         async def orphan_poisoned():
             async def fixture_handler():
                 await asyncio.sleep(0.01)
@@ -1789,12 +1870,46 @@ async def failure_boundary_negative_control() -> None:
         err, _ = drive(orphan_poisoned, 'the never-retrieved fixture-handler failure')
         assert 'loop failure, never retrieved' in err and '<redacted' in err, err[:400]
 
+        # the loop handler's OWN renderer failing: it must print the FIXED
+        # fallback instead of raising — a raising handler hands asyncio's
+        # DEFAULT handler the raw context (an alternate raw-output path)
+        def broken_safe_exc(_exc):
+            raise RuntimeError(f'loop renderer exploded {CANARY}')
+
+        original_safe_exc = safe_exc
+        globals()['safe_exc'] = broken_safe_exc
+        try:
+            err, _ = drive(orphan_poisoned, 'the broken-loop-renderer failure')
+            assert TRACEBACK_REPORT_FALLBACK in err, err[:400]
+            assert 'loop renderer exploded' not in err, 'the loop-renderer error leaked'
+        finally:
+            globals()['safe_exc'] = original_safe_exc
+
         async def honest_main():
             raise RuntimeError('honest dial timeout after 30s')
 
         err, out = drive(honest_main, 'the honest driver failure')
         assert 'honest dial timeout after 30s' in err, err
         assert '.py:' in err, f'the report lost source locations: {err[:400]}'
+
+        # the report renderer ITSELF failing: the boundary fails CLOSED — the
+        # fixed credential-free fallback and exit 1, never the original
+        # failure, never the reporter's own error, no raw traceback
+        def broken_reporter(_exc):
+            raise RuntimeError(f'reporter exploded {CANARY}')
+
+        async def poisoned_for_reporter():
+            raise RuntimeError(f'driver failure carrying {GOOGLE_TOKEN}')
+
+        original_reporter = safe_traceback
+        globals()['safe_traceback'] = broken_reporter
+        try:
+            err, out = drive(poisoned_for_reporter, 'the broken-reporter failure',
+                             expect=TRACEBACK_REPORT_FALLBACK)
+            assert 'reporter exploded' not in err + out, 'the reporter error leaked'
+            assert 'driver failure carrying' not in err + out, 'the original failure leaked'
+        finally:
+            globals()['safe_traceback'] = original_reporter
 
         class _BoundaryPage:
             def __init__(self):
@@ -1896,7 +2011,9 @@ async def failure_boundary_negative_control() -> None:
         globals()['PAGE'] = original_page
     print('failure-boundary control: the ACTUAL executable boundary + safe loop handler + '
           'untrusted-metadata payloads (decrypt_envelope fields, envelope shape, PUT version) '
-          'withheld every declared secret, kept honest diagnostics useful and failures nonzero')
+          'withheld every declared secret, kept honest diagnostics useful and failures nonzero; '
+          'cyclic/deep/grouped chains terminate bounded and a failing report renderer falls back '
+          'to the fixed credential-free report at exit 1')
 
 
 async def unlock_on_app(page) -> None:
@@ -2341,13 +2458,19 @@ def _safe_loop_exception_handler(loop, context) -> None:
     route/task dying beside the run's own failure): the DEFAULT handler prints
     the raw exception and its traceback — an independent credential-bearing
     bypass around the safe boundary below. Every field renders through the
-    safe family instead; this handler never raises."""
-    message = safe_diag_text(str(context.get('message') or 'unhandled loop failure'))
-    exc = context.get('exception')
-    detail = safe_exc(exc) if isinstance(exc, BaseException) else 'no exception object'
-    origin = context.get('task') or context.get('future') or context.get('handle')
-    what = type(origin).__name__ if origin is not None else 'unknown origin'
-    print(f'--- loop failure, never retrieved ({what}): {message}; {detail}', file=sys.stderr)
+    safe family instead; and a failing safe renderer prints the FIXED
+    fallback rather than raising — a raising handler makes asyncio log the
+    error and fall back to its DEFAULT handler, which would emit the raw
+    context. This handler never raises."""
+    try:
+        message = safe_diag_text(str(context.get('message') or 'unhandled loop failure'))
+        exc = context.get('exception')
+        detail = safe_exc(exc) if isinstance(exc, BaseException) else 'no exception object'
+        origin = context.get('task') or context.get('future') or context.get('handle')
+        what = type(origin).__name__ if origin is not None else 'unknown origin'
+        print(f'--- loop failure, never retrieved ({what}): {message}; {detail}', file=sys.stderr)
+    except BaseException:  # noqa: BLE001 - fail closed to fixed output, never to asyncio's printer
+        print(f'--- loop failure, never retrieved: {TRACEBACK_REPORT_FALLBACK}', file=sys.stderr)
 
 
 async def _main_with_safe_loop_handler():
@@ -2365,17 +2488,31 @@ def entrypoint() -> int:
     chained causes verbatim, and no internal renderer reaches that output —
     the report is safe_traceback over the whole chain, diagnostics still dump
     (and can neither mask the report nor crash it), and the exit stays
-    nonzero and clear. Raw captured custody data is untouched; only this
+    nonzero and clear. If the report renderer ITSELF fails (any exception
+    graph or renderer bug), the boundary fails closed: the fixed
+    credential-free TRACEBACK_REPORT_FALLBACK is printed and the exit stays
+    1 — neither the original nor the reporting exception is ever re-raised to
+    Python's raw printer. Raw captured custody data is untouched; only this
     output boundary changed."""
     try:
         return asyncio.run(_main_with_safe_loop_handler())
     except BaseException as exc:  # noqa: BLE001 - the boundary owns every failure's final rendering
         try:
-            if PAGE is not None:
-                asyncio.run(dump_diagnostics())
-        except Exception as dump_exc:  # noqa: BLE001 - diagnostics never mask the failure
-            print(f'(failure diagnostics unavailable: {safe_exc(dump_exc)})', file=sys.stderr)
-        print(f'E2E FAIL: {safe_traceback(exc)}', file=sys.stderr)
+            try:
+                if PAGE is not None:
+                    asyncio.run(dump_diagnostics())
+            except BaseException as dump_exc:  # noqa: BLE001 - diagnostics never mask the failure
+                try:
+                    print(f'(failure diagnostics unavailable: {safe_exc(dump_exc)})', file=sys.stderr)
+                except BaseException:  # noqa: BLE001 - even this rendering fails closed
+                    print('(failure diagnostics unavailable)', file=sys.stderr)
+            try:
+                report = safe_traceback(exc)
+            except BaseException:  # noqa: BLE001 - reporter failed: fixed output, never re-raise
+                report = TRACEBACK_REPORT_FALLBACK
+            print(f'E2E FAIL: {report}', file=sys.stderr)
+        except BaseException:  # noqa: BLE001 - even emitting the report must not re-raise anything
+            print(f'E2E FAIL: {TRACEBACK_REPORT_FALLBACK}', file=sys.stderr)
         return 1
 
 
