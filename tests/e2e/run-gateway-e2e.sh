@@ -167,18 +167,20 @@ cleanup() {
   kill_and_wait "${GWA_PID:-}" "gateway A"
   kill_and_wait "${GWB_PID:-}" "gateway B"
   local agentpid
-  for agentpid in "${AGENT_PIDS[@]:-}"; do kill_and_wait "$agentpid" "home agent"; done
+  for agentpid in ${AGENT_PIDS[@]+"${AGENT_PIDS[@]}"}; do kill_and_wait "$agentpid" "home agent"; done
   # Preserve the sshd fleet's view (accepted/failed userauth lines) BEFORE
   # the containers go away — userauth failures are diagnosed from these.
+  # (The @+ idiom: an EMPTY owned set must iterate ZERO names, never one
+  # empty name — a bogus failure entry would be its own kind of lie.)
   local cname
-  for cname in "${CONTAINERS[@]:-}"; do
+  for cname in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     docker logs "$cname" > "${WORK:-/tmp}/sshd-${cname}.log" 2>&1 \
       || CLEANUP_FAILURES+=("could not save sshd logs of $cname")
   done
-  for cname in "${CONTAINERS[@]:-}"; do
+  for cname in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     docker rm -f "$cname" > /dev/null 2>&1 || CLEANUP_FAILURES+=("could not remove container $cname")
   done
-  for cname in "${CONTAINERS[@]:-}"; do
+  for cname in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     docker inspect "$cname" > /dev/null 2>&1 && CLEANUP_FAILURES+=("container $cname still present after removal")
   done
   if [[ -n "${REGISTRY_FILE:-}" ]]; then
