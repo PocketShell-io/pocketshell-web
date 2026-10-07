@@ -90,35 +90,75 @@ async function main() {
     // -- stage 4: assertions
     console.log('[run-browser-lab] stage 4: assertions');
     const failed = results.filter((r) => !r.ok);
-    assert.equal(failed.length, 0, `${failed.length} browser flow(s) failed`);
-    assert.ok(results.length >= 12, `expected >=12 flows, saw ${results.length}`);
+    assert.equal(failed.length, 0, `${failed.length} browser flow(s) failed: ${failed.map((f) => f.name).join('; ')}`);
+    // exact record manifest: no flow may vanish or fail silently
+    const expectedRecords = [
+      'positive: RSA OpenSSH handshake (production kex)',
+      'positive: encrypted RSA handshake (bcrypt decrypt)',
+      'positive: Ed25519 handshake',
+      'positive: encrypted Ed25519 handshake',
+      'refusal: plaintext ECDSA user key',
+      'refusal: plaintext ECDSA user key — elliptic never signed',
+      'refusal: encrypted ECDSA user key (correct passphrase)',
+      'refusal: encrypted ECDSA user key (correct passphrase) — elliptic never signed',
+      ...Object.keys(fixtures.malformed).map((name) => `refusal: malformed ${name}`),
+      'malformed refusals left elliptic untouched (whole loop)',
+      'parser-first: parsed-but-guarded key dial refused',
+      'parser-first: unparseable key dial rejected before auth',
+      'hostpin: wrong-fingerprint pin refuses the dial',
+      'residual: public-key verification still works (RSA + Ed25519)',
+    ];
+    assert.equal(results.length, expectedRecords.length,
+      `expected exactly ${expectedRecords.length} flow records, saw ${results.length}`);
+    for (const name of expectedRecords) {
+      const record = results.find((r) => r.name === name);
+      assert.ok(record, `missing flow record: ${name}`);
+      assert.equal(record.ok, true, `flow record not green: ${name} — ${record.detail}`);
+    }
     assert.equal(probe.ecSignCalls, 0, 'elliptic ECDSA sign must never run');
     assert.equal(probe.eddsaSignCalls, 0, 'elliptic EdDSA sign must never run');
     assert.ok(probe.genKeyPairCalls > 0, 'probe liveness: ECDH must have hit the wrapped elliptic prototype');
 
+    // Server trace, in dial order (the browser matrix is strictly
+    // sequential): 4 positives, 2 ECDSA-guarded, 1 parser-accepted-guarded,
+    // 1 pin-refused. The parser-REJECTED dial is asserted BY ABSENCE: the
+    // bridge dials the SSH server on the first client bytes, and a key that
+    // ssh2 throws on never writes anything — it must leave NO trace here
+    // (8 connections, not 9).
     const conns = harness.connections;
-    assert.equal(conns.length, 7, `expected 7 server connections (4 positives, 2 ECDSA, 1 pin-refused), saw ${conns.length}`);
-    // positives: authenticated with a VERIFIED signature
-    const positiveNames = ['RSA', 'encrypted RSA', 'Ed25519', 'encrypted Ed25519'];
-    positiveNames.forEach((name, i) => {
+    console.log('[run-browser-lab] server trace:');
+    conns.forEach((c, i) => console.log(
+      `   [${i}] username=${c.username} accepted=${c.accepted} auths=[${c.authRequests.map((a) => `${a.method}${a.sigPresent ? '+sig' : ''}`).join(', ')}]`,
+    ));
+    assert.equal(conns.length, 8,
+      `expected 8 server connections (4 positive, 2 ECDSA, 1 parser-guarded, 1 pin-refused; parser-rejected must not appear), saw ${conns.length}`);
+    // positives: authenticated with a VERIFIED signature under their own username
+    const positiveUsernames = ['lab-pos-rsa', 'lab-pos-rsa-enc', 'lab-pos-ed', 'lab-pos-ed-enc'];
+    positiveUsernames.forEach((username, i) => {
       const conn = conns[i];
-      assert.equal(conn.accepted, true, `${name} dial must authenticate`);
+      assert.equal(conn.username, username, `connection ${i} must be the ${username} dial`);
+      assert.equal(conn.accepted, true, `${username} dial must authenticate`);
       const signed = conn.authRequests.filter((r) => r.sigPresent);
-      assert.ok(signed.length >= 1, `${name} dial must include a signed auth request`);
+      assert.ok(signed.length >= 1, `${username} dial must include a signed auth request`);
       assert.ok(
         signed.every((r) => r.verified === true),
-        `${name}: server must verify every client signature`,
+        `${username}: server must verify every client signature`,
       );
     });
-    // ECDSA dials: no signed auth request ever reaches the server
-    for (const idx of [4, 5]) {
+    // ECDSA and parser-guarded dials: no signed auth request ever reaches
+    // the server (unsigned probe requests are protocol-negotiation noise)
+    for (const idx of [4, 5, 6]) {
       const signed = conns[idx].authRequests.filter((r) => r.sigPresent);
-      assert.equal(signed.length, 0, 'an ECDSA signature must never reach the server');
+      assert.equal(signed.length, 0, `connection ${idx}: a signature must never reach the server`);
+      assert.notEqual(conns[idx].username, null, `connection ${idx} must have attempted userauth (probe)`);
+      assert.equal(conns[idx].accepted, false, `connection ${idx} must not authenticate`);
     }
     // pin-refused dial: zero auth requests at all (refusal before userauth)
-    assert.equal(conns[6].authRequests.length, 0, 'pin-refused dial must fail before userauth');
+    assert.equal(conns[7].authRequests.length, 0, 'pin-refused dial must fail before userauth');
+    assert.equal(conns[7].accepted, false, 'pin-refused dial must not authenticate');
+    assert.equal(conns[7].username, null, 'pin-refused dial must never reach userauth');
 
-    console.log('[run-browser-lab] receipt: browser flow matrix green, server trace green,');
+    console.log('[run-browser-lab] receipt: browser flow matrix green (exact manifest), server trace green,');
     console.log(`   zero elliptic ECDSA/EdDSA signatures; ECDH genKeyPair calls: ${probe.genKeyPairCalls}`);
   } finally {
     await harness.stop();

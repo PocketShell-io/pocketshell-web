@@ -4,6 +4,14 @@
  * IS before browserify-sign (and behind it elliptic) ever receives it; once
  * the vulnerable ECDSA signer runs, it is too late to contain.
  *
+ * The input contract is deliberately narrow: the text must be exactly ONE
+ * complete recognized PEM envelope — BEGIN/END markers with the same label,
+ * whitespace-only outside, label and contained DER structure in agreement.
+ * Anything else (junk around the block, extra blocks, mismatched markers,
+ * a label promising one algorithm over another's DER) classifies as
+ * "unknown", because ambiguity must fail closed at both the early
+ * assessment and the authoritative signing boundary.
+ *
  * The PEMs that reach the signing boundary come from ssh2's key parser
  * (ssh2/lib/protocol/keyParser.js), which re-serializes every container it
  * accepts — OpenSSH, legacy "BEGIN x PRIVATE KEY" (optionally decrypted),
@@ -11,10 +19,15 @@
  * classifier also reads the raw OpenSSH container itself so an early
  * user-facing check can judge the key as the user stored it, before ssh2
  * has converted anything: unencrypted (cipher=none) containers are parsed
- * down to their validated private section, while encrypted containers can
- * only be judged by their headers — the ciphertext cannot be checked — so
- * their verdict is advisory and the signing boundary re-classifies the
- * decrypted PEM ssh2 actually produces.
+ * down to their validated private section — real per-type field structure,
+ * public/private agreement, OpenSSH's pad-to-8 alignment — while encrypted
+ * containers can only be judged by their headers — the ciphertext cannot be
+ * checked — so their verdict is advisory and the signing boundary
+ * re-classifies the decrypted PEM ssh2 actually produces.
+ *
+ * What this module does NOT claim: cryptographic validity of the secret
+ * math (primality, p·q = n, scalar·G = Q) is never verified; a passing
+ * verdict means "structurally the declared key type", nothing more.
  *
  * Deliberately dependency-free: no ASN.1 library, no elliptic, no ssh2
  * import — an ssh2 -> shim -> ssh2 cycle is exactly what this must not
@@ -88,14 +101,31 @@ function singleTrailingTlv(u8: Uint8Array, from: number, end: number): boolean {
   return tlv !== null && tlv.next === end;
 }
 
-/** Consecutive INTEGER TLVs from `start` filling [start, end) exactly; null
- * when a non-INTEGER, a malformed TLV or trailing bytes interrupt the run. */
+/** DER INTEGER body of a key field: a meaningful, minimal encoding of a
+ * POSITIVE value — never empty, never zero (version fields are validated
+ * separately), at most one leading 0x00 octet and only as sign padding in
+ * front of a value whose next octet's high bit demands it. A body whose
+ * first octet has the high bit set without the pad encodes a negative
+ * number — not a legal key field. */
+function strictPositiveInteger(u8: Uint8Array, start: number, end: number): boolean {
+  const len = end - start;
+  if (len < 1) return false;
+  if (u8[start] === 0x00) {
+    return len > 1 && (u8[start + 1] & 0x80) !== 0;
+  }
+  return (u8[start] & 0x80) === 0;
+}
+
+/** Consecutive strict positive INTEGER TLVs from `start` filling
+ * [start, end) exactly; null when a non-INTEGER, a malformed TLV, an empty
+ * / zero / nonminimal / negative body or trailing bytes interrupt the run. */
 function integerRun(u8: Uint8Array, start: number, end: number): number | null {
   let count = 0;
   let cursor = start;
   while (cursor < end) {
     const field = derExpect(u8, cursor, 0x02);
     if (field === null) return null;
+    if (!strictPositiveInteger(u8, field.bodyStart, field.bodyEnd)) return null;
     count += 1;
     cursor = field.next;
   }
@@ -103,30 +133,28 @@ function integerRun(u8: Uint8Array, start: number, end: number): number | null {
 }
 
 /** PKCS#1 shape at [start, end): SEQUENCE, exactly filling the span, of
- * version 0 + INTEGERs — 9 total (RSA) or 6 total (DSA). */
-function pkcs1Shape(
-  u8: Uint8Array,
-  start: number,
-  end: number,
-): 'rsa' | 'dsa' | 'unknown' {
+ * version 0 + `intFields` strict positive INTEGERs — RSA: n,e,d,p,q,dp,dq,
+ * qinv (8 after the version); DSA: p,q,g,y,x (5). The INTEGER count alone
+ * decides nothing: every field must carry meaningful DER integer content. */
+function pkcs1Shape(u8: Uint8Array, start: number, end: number, intFields: number): boolean {
   const seq = derExpect(u8, start, 0x30);
-  if (seq === null || seq.bodyEnd !== end) return 'unknown';
+  if (seq === null || seq.bodyEnd !== end) return false;
   const version = derExpect(u8, seq.bodyStart, 0x02);
   if (
     version === null ||
     version.bodyEnd - version.bodyStart !== 1 ||
     u8[version.bodyStart] !== 0x00
   ) {
-    return 'unknown';
+    return false;
   }
-  const ints = integerRun(u8, seq.bodyStart, seq.bodyEnd);
-  if (ints === 9) return 'rsa';
-  if (ints === 6) return 'dsa';
-  return 'unknown';
+  return integerRun(u8, version.next, seq.bodyEnd) === intFields;
 }
 
-/** SEC1 ECPrivateKey shape at [start, end): version 1, OCTET STRING, then
- * only optional [0] curve / [1] pubkey TLVs, all exactly filling the span. */
+/** SEC1 ECPrivateKey shape at [start, end): version 1, a non-empty OCTET
+ * STRING privateKey, then only optional [0] curve / [1] pubkey TLVs, all
+ * exactly filling the span. A constructed [1] must hold exactly one BIT
+ * STRING with more than just the unused-bits octet; the legacy primitive
+ * [1] form must be non-empty. */
 function sec1Shape(u8: Uint8Array, start: number, end: number): boolean {
   const version = derExpect(u8, start, 0x02);
   if (
@@ -137,7 +165,7 @@ function sec1Shape(u8: Uint8Array, start: number, end: number): boolean {
     return false;
   }
   const octet = derExpect(u8, version.next, 0x04);
-  if (octet === null) return false;
+  if (octet === null || octet.bodyEnd === octet.bodyStart) return false;
   let cursor = octet.next;
   while (cursor < end) {
     const tag = u8[cursor];
@@ -145,6 +173,13 @@ function sec1Shape(u8: Uint8Array, start: number, end: number): boolean {
     if (tag !== 0xa0 && tag !== 0xa1 && tag !== 0x81) return false;
     const tlv = derExpect(u8, cursor, tag);
     if (tlv === null) return false;
+    if (tag === 0xa1) {
+      const bit = derExpect(u8, tlv.bodyStart, 0x03);
+      if (bit === null || bit.bodyEnd !== tlv.bodyEnd) return false;
+      if (bit.bodyEnd - bit.bodyStart < 2) return false; // unused-bits + ≥1 point byte
+    } else if (tag === 0x81 && tlv.bodyEnd === tlv.bodyStart) {
+      return false;
+    }
     cursor = tlv.next;
   }
   return cursor === end;
@@ -210,52 +245,62 @@ function looksLikeHeaderLine(line: string): boolean {
   return /^[A-Za-z0-9-]+:/.test(line);
 }
 
-/** "BEGIN RSA|DSA|EC|PRIVATE KEY" body → DER structure class. The outer
- * SEQUENCE must exactly consume the whole DER buffer — a parent that ends
- * early (truncation) or leaves trailing bytes after it is not a key this
- * module classifies. */
-function classifyDer(u8: Uint8Array): PrivateKeyKind {
+/** Label-driven DER classification: the PEM label and the DER structure
+ * must AGREE. A "BEGIN RSA PRIVATE KEY" whose DER is a SEC1 EC key, a
+ * "PRIVATE KEY" whose DER is a bare PKCS#1 INTEGER run, a "DSA PRIVATE
+ * KEY" holding nine INTEGERs — every such mismatch classifies as unknown,
+ * never as whichever shape the DER happens to walk into. */
+function classifyDer(u8: Uint8Array, label: string): PrivateKeyKind {
+  switch (label) {
+    case 'RSA PRIVATE KEY':
+      return pkcs1Shape(u8, 0, u8.length, 8) ? 'rsa' : 'unknown';
+    case 'DSA PRIVATE KEY':
+      return pkcs1Shape(u8, 0, u8.length, 5) ? 'dsa' : 'unknown';
+    case 'EC PRIVATE KEY': {
+      // SEC1: an outer SEQUENCE wraps { version 1, privateKey, … } — the
+      // shape walk starts inside it. The SEQUENCE must exactly consume the
+      // whole DER buffer (truncation or trailing bytes refuse).
+      const seq = derExpect(u8, 0, 0x30);
+      if (seq === null || seq.bodyEnd !== u8.length) return 'unknown';
+      return sec1Shape(u8, seq.bodyStart, seq.bodyEnd) ? 'ecdsa' : 'unknown';
+    }
+    case 'PRIVATE KEY':
+      return classifyPkcs8(u8);
+    default:
+      return 'unknown';
+  }
+}
+
+/** PKCS#8 PrivateKeyInfo at [0, len): SEQUENCE exactly filling the buffer,
+ * of version 0 + AlgorithmIdentifier SEQUENCE + OCTET STRING. */
+function classifyPkcs8(u8: Uint8Array): PrivateKeyKind {
   const seq = derExpect(u8, 0, 0x30);
   if (seq === null || seq.bodyEnd !== u8.length) return 'unknown';
   const version = derExpect(u8, seq.bodyStart, 0x02);
-  if (version === null || version.bodyEnd - version.bodyStart !== 1) {
+  if (
+    version === null ||
+    version.bodyEnd - version.bodyStart !== 1 ||
+    u8[version.bodyStart] !== 0x00
+  ) {
     return 'unknown';
   }
-  const v = u8[version.bodyStart];
-  if (v === 0x01) {
-    // SEC1 EC: version 1, then OCTET STRING privateKey, then only optional
-    // [0] curve / [1] pubkey. Version 1 alone is not enough — the full
-    // shape must hold, so an unclassifiable EC form still refuses rather
-    // than slips through.
-    return sec1Shape(u8, seq.bodyStart, seq.bodyEnd) ? 'ecdsa' : 'unknown';
-  }
-  if (v !== 0x00) return 'unknown';
-
-  // Version 0: PKCS#8 (version, AlgorithmIdentifier SEQUENCE, OCTET STRING)
-  // or PKCS#1 (RSA/DSA: nothing but INTEGERs).
   const algSeq = derExpect(u8, version.next, 0x30);
-  if (algSeq !== null) {
-    const oid = derExpect(u8, algSeq.bodyStart, 0x06);
-    if (oid === null) return 'unknown';
-    // AlgorithmIdentifier = SEQUENCE { algorithm OID, parameters ANY } —
-    // after the OID only one complete parameters TLV may remain.
-    if (!singleTrailingTlv(u8, oid.next, algSeq.bodyEnd)) return 'unknown';
-    const octet = derExpect(u8, algSeq.next, 0x04);
-    if (octet === null || octet.bodyEnd !== seq.bodyEnd) return 'unknown';
-    return classifyPkcs8Inner(u8, oid, octet);
-  }
-
-  // PKCS#1 RSA: version,n,e,d,p,q,dp,dq,qinv = 9 INTEGERs; PKCS#1 DSA:
-  // version,p,q,g,y,x = 6 INTEGERs — exactly filling the SEQUENCE.
-  const ints = integerRun(u8, seq.bodyStart, seq.bodyEnd);
-  if (ints === 9) return 'rsa';
-  if (ints === 6) return 'dsa';
-  return 'unknown';
+  if (algSeq === null) return 'unknown';
+  const oid = derExpect(u8, algSeq.bodyStart, 0x06);
+  if (oid === null) return 'unknown';
+  // AlgorithmIdentifier = SEQUENCE { algorithm OID, parameters ANY } —
+  // after the OID only one complete parameters TLV may remain.
+  if (!singleTrailingTlv(u8, oid.next, algSeq.bodyEnd)) return 'unknown';
+  const octet = derExpect(u8, algSeq.next, 0x04);
+  if (octet === null || octet.bodyEnd !== seq.bodyEnd) return 'unknown';
+  return classifyPkcs8Inner(u8, oid, octet);
 }
 
 /** PKCS#8 privateKeyOctet validation: the inner payload must structurally
- * match the declared algorithm OID — an OCTET STRING claiming rsaEncryption
- * whose content is not a PKCS#1 RSA shape classifies as unknown, not rsa. */
+ * match the declared algorithm OID — EXACTLY. A payload claiming
+ * rsaEncryption must be the full PKCS#1 RSA shape: the six-INTEGER DSA
+ * body under an rsaEncryption OID is a mismatch, not a DSA key. Every
+ * mismatch classifies as unknown. */
 function classifyPkcs8Inner(
   u8: Uint8Array,
   oid: DerSpan,
@@ -265,15 +310,21 @@ function classifyPkcs8Inner(
   const innerStart = octet.bodyStart;
   const innerEnd = octet.bodyEnd;
   switch (oidText) {
-    case '1.2.840.113549.1.1.1': // rsaEncryption — inner is PKCS#1 RSA
-      return pkcs1Shape(u8, innerStart, innerEnd);
+    case '1.2.840.113549.1.1.1': // rsaEncryption — inner is EXACTLY PKCS#1
+      // RSA (version + the 8 RSA fields); no other INTEGER run, in
+      // particular no DSA-shaped 5-field payload, may pass under this OID.
+      return pkcs1Shape(u8, innerStart, innerEnd, 8) ? 'rsa' : 'unknown';
     case '1.2.840.10040.4.1': {
-      // id-dsa — PKCS#8 carries only the private exponent here (an INTEGER;
-      // the domain parameters ride in the AlgorithmIdentifier). The PKCS#1
-      // -style DSA SEQUENCE is only the legacy "BEGIN DSA PRIVATE KEY"
-      // top-level form, handled above.
+      // id-dsa — PKCS#8 carries only the private exponent here (a strict
+      // positive INTEGER; the domain parameters ride in the
+      // AlgorithmIdentifier). The PKCS#1-style DSA SEQUENCE is only the
+      // legacy "BEGIN DSA PRIVATE KEY" top-level form, handled above.
       const x = derExpect(u8, innerStart, 0x02);
-      return x !== null && x.bodyEnd === innerEnd ? 'dsa' : 'unknown';
+      return x !== null &&
+        x.bodyEnd === innerEnd &&
+        strictPositiveInteger(u8, x.bodyStart, x.bodyEnd)
+        ? 'dsa'
+        : 'unknown';
     }
     case '1.2.840.10045.2.1': {
       // id-ecPublicKey — inner is a full SEC1 ECPrivateKey DER
@@ -318,9 +369,9 @@ function kindOfTypeString(type: string | null): PrivateKeyKind {
 }
 
 /** Private-section field counts after the type string (PROTOCOL.key); the
- * framing is uniform u32-length fields for every type. A trailing comment
- * string follows the key fields for every type, then 1..255 padding bytes
- * of canonical 1..N. */
+ * framing is uniform u32-length fields for every type, then a trailing
+ * comment string, then OpenSSH's pad-to-8 (0..7 bytes, canonical 1..N when
+ * present). */
 const OPENSSH_PRIVATE_FIELDS: Record<string, number> = {
   'ssh-rsa': 6, // n, e, d, iqmp, p, q
   'ssh-dss': 5, // p, q, g, y, x
@@ -330,22 +381,167 @@ const OPENSSH_PRIVATE_FIELDS: Record<string, number> = {
   'ecdsa-sha2-nistp521': 3,
 };
 
+/** Public-blob field counts after the type string (RFC 4253). */
+const OPENSSH_PUBLIC_FIELDS: Record<string, number> = {
+  'ssh-rsa': 2, // e, n
+  'ssh-dss': 4, // p, q, g, y
+  'ssh-ed25519': 1, // A
+  'ecdsa-sha2-nistp256': 2, // curve name, Q
+  'ecdsa-sha2-nistp384': 2,
+  'ecdsa-sha2-nistp521': 2,
+};
+
+/** Byte length of one NIST curve coordinate (uncompressed point form). */
+const ECDSA_COORD_BYTES: Record<string, number> = {
+  nistp256: 32,
+  nistp384: 48,
+  nistp521: 66,
+};
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** a < b for two already-validated positive minimal SSH mpints (strip the
+ * single sign-pad octet, then length + lexicographic compare). */
+function mpintLess(a: Uint8Array, b: Uint8Array): boolean {
+  const sa = a[0] === 0x00 ? a.subarray(1) : a;
+  const sb = b[0] === 0x00 ? b.subarray(1) : b;
+  if (sa.length !== sb.length) return sa.length < sb.length;
+  for (let i = 0; i < sa.length; i++) {
+    if (sa[i] !== sb[i]) return (sa[i] ?? 0) < (sb[i] ?? 0);
+  }
+  return false; // equal
+}
+
+function allValidMpints(fields: Uint8Array[]): boolean {
+  return fields.every((f) => strictPositiveInteger(f, 0, f.length));
+}
+
+/** Per-type structural agreement between the public blob and the decrypted
+ * private section of a cipher=none container — the ACTUAL fields, not just
+ * their count: every field must carry a meaningful mpint/point/octet, the
+ * public and private halves must agree (same n/e, same p/q/g/y, same A,
+ * same curve and Q), and the necessary order relations of a real key must
+ * hold (e,d,p,q < n; iqmp < p; x,y,g < p and x < q for DSA; scalar ≤
+ * coordinate size for EC). This is structure, NOT secret math: no primality
+ * of p/q, no p·q = n, no scalar·G = Q is checked here — those remain the
+ * consumer's job. */
+function validateOpenSshKeyFields(
+  pubType: string,
+  pub: Uint8Array[],
+  priv: Uint8Array[],
+): boolean {
+  switch (pubType) {
+    case 'ssh-rsa': {
+      // pub [e, n]; priv [n, e, d, iqmp, p, q]
+      if (pub.length !== 2 || priv.length !== 6) return false;
+      const [e, n] = pub as [Uint8Array, Uint8Array];
+      const [n2, e2, d, iqmp, p, q] = priv as Uint8Array[];
+      if (!allValidMpints([e, n, ...priv])) return false;
+      return (
+        bytesEqual(n2, n) &&
+        bytesEqual(e2, e) &&
+        mpintLess(e, n) &&
+        mpintLess(d, n) &&
+        mpintLess(p, n) &&
+        mpintLess(q, n) &&
+        mpintLess(iqmp, p)
+      );
+    }
+    case 'ssh-dss': {
+      // pub [p, q, g, y]; priv [p, q, g, y, x]
+      if (pub.length !== 4 || priv.length !== 5) return false;
+      const [p, q, g, y] = pub as Uint8Array[];
+      if (!allValidMpints([...pub, ...priv])) return false;
+      const [p2, q2, g2, y2, x] = priv as Uint8Array[];
+      return (
+        bytesEqual(p2, p) &&
+        bytesEqual(q2, q) &&
+        bytesEqual(g2, g) &&
+        bytesEqual(y2, y) &&
+        mpintLess(g, p) &&
+        mpintLess(y, p) &&
+        mpintLess(x, q)
+      );
+    }
+    case 'ssh-ed25519': {
+      // pub [A]; priv [A, secret] — canonical OpenSSH sizes, and the
+      // private A must be THE public A, not just some 32 bytes.
+      if (pub.length !== 1 || priv.length !== 2) return false;
+      const [pubA] = pub as [Uint8Array];
+      const [privA, secret] = priv as Uint8Array[];
+      return (
+        pubA.length === 32 &&
+        privA.length === 32 &&
+        secret.length === 64 &&
+        bytesEqual(privA, pubA)
+      );
+    }
+    default: {
+      if (!pubType.startsWith('ecdsa-sha2-')) return false;
+      const curve = pubType.slice('ecdsa-sha2-'.length);
+      const coord = ECDSA_COORD_BYTES[curve];
+      if (coord === undefined) return false;
+      // pub [curveName, Q]; priv [curveName, Q, scalar]
+      if (pub.length !== 2 || priv.length !== 3) return false;
+      const [pubCurve, pubQ] = pub as Uint8Array[];
+      const [privCurve, privQ, scalar] = priv as Uint8Array[];
+      const uncompressedPoint = (q: Uint8Array) =>
+        q.length === 1 + 2 * coord && q[0] === 0x04;
+      // scalar ≤ order: the value must fit the coordinate size — the sign
+      // pad (one 0x00 octet) is part of the encoding, not the value
+      const scalarValueBytes = scalar[0] === 0x00 ? scalar.length - 1 : scalar.length;
+      return (
+        utf8(pubCurve) === curve &&
+        bytesEqual(privCurve, pubCurve) &&
+        uncompressedPoint(pubQ) &&
+        uncompressedPoint(privQ) &&
+        bytesEqual(privQ, pubQ) &&
+        strictPositiveInteger(scalar, 0, scalar.length) &&
+        scalarValueBytes <= coord
+      );
+    }
+  }
+}
+
+/** Consecutive SSH strings from `at` consuming exactly [at, end). */
+function sshFieldRun(u8: Uint8Array, at: number, end: number): Uint8Array[] | null {
+  const fields: Uint8Array[] = [];
+  let cursor = at;
+  while (cursor < end) {
+    const field = sshString(u8, cursor);
+    if (field === null || field.next > end) return null;
+    fields.push(field.data);
+    cursor = field.next;
+  }
+  return fields;
+}
+
 /** Validate the DECRYPTED private section of a cipher=none container: the
- * section must consume the container exactly, its check ints must agree, its
- * own type string must match the public header, its per-type fields plus the
- * comment must frame exactly, and the padding (present only when the section
- * is not already 8-byte aligned) must be canonical increasing 1..N. This is
- * what makes the unencrypted-container verdict read the ACTUAL private key
+ * section must consume the container exactly AND be 8-byte aligned (OpenSSH
+ * pads with its while-loop to the next multiple of 8, so aligned sections
+ * legitimately carry no padding), its check ints must agree, its own type
+ * string must match the public header, the field counts must frame exactly
+ * with the trailing comment, the padding (0..7 bytes) must be the canonical
+ * increasing 1..N, and the per-type fields must structurally validate and
+ * agree with the public blob (see validateOpenSshKeyFields). This is what
+ * makes the unencrypted-container verdict read the ACTUAL private key
  * rather than trusting the public header. */
 function classifyOpenSSHPrivateSection(
   u8: Uint8Array,
   at: number,
   pubType: string,
+  pubFields: Uint8Array[],
 ): PrivateKeyKind {
   const priv = sshString(u8, at);
   if (priv === null || priv.next !== u8.length) return 'unknown';
   const p = priv.data;
-  if (p.length < 12) return 'unknown';
+  if (p.length < 12 || p.length % 8 !== 0) return 'unknown';
   const check1 = readU32be(p, 0);
   const check2 = readU32be(p, 4);
   if (check1 !== check2) return 'unknown';
@@ -355,24 +551,28 @@ function classifyOpenSSHPrivateSection(
   // Header and body must agree; a mismatch is a malformed container, not a
   // key either name promises.
   if (privType !== pubType) return 'unknown';
-  const fields = OPENSSH_PRIVATE_FIELDS[pubType];
-  if (fields === undefined) return 'unknown';
+  const fieldCount = OPENSSH_PRIVATE_FIELDS[pubType];
+  if (fieldCount === undefined) return 'unknown';
+  const fields: Uint8Array[] = [];
   let cursor = typeField.next;
-  for (let i = 0; i < fields + 1; i++) {
+  for (let i = 0; i < fieldCount + 1; i++) {
     // key fields, then the comment string (possibly empty)
     const field = sshString(p, cursor);
     if (field === null) return 'unknown';
+    fields.push(field.data);
     cursor = field.next;
   }
-  // Padding: OpenSSH pads only up to the next 8-byte boundary, so an
-  // already-aligned section carries NO padding — 0..255 bytes, and when
+  // Padding: 0..7 bytes (the section is already 8-byte aligned), and when
   // present the canonical increasing 1..N.
   const padLen = p.length - cursor;
-  if (padLen < 0 || padLen > 255) return 'unknown';
+  if (padLen > 7) return 'unknown';
   for (let i = 0; i < padLen; i++) {
     if (p[cursor + i] !== i + 1) return 'unknown';
   }
-  return kindOfTypeString(privType);
+  if (!validateOpenSshKeyFields(pubType, pubFields, fields.slice(0, fieldCount))) {
+    return 'unknown';
+  }
+  return kindOfTypeString(pubType);
 }
 
 /** openssh-key-v1 container. For encrypted containers the cipher/KDF names
@@ -417,26 +617,43 @@ function classifyOpenSSHContainer(inner: string): PrivateKeyKind {
   if (keyCount !== 1) return 'unknown';
   const pubBlob = sshString(u8, at + 4);
   if (pubBlob === null) return 'unknown';
-  const typeField = sshString(pubBlob.data, 0);
-  if (typeField === null) return 'unknown';
-  const pubType = utf8(typeField.data);
+  // The public blob must be exactly: type string + the type's public
+  // fields — no fewer, no extra.
+  const pubFields = sshFieldRun(pubBlob.data, 0, pubBlob.data.length);
+  if (pubFields === null || pubFields.length === 0) return 'unknown';
+  const pubType = utf8(pubFields[0]);
   if (pubType === null || kindOfTypeString(pubType) === 'unknown') return 'unknown';
-  return classifyOpenSSHPrivateSection(u8, pubBlob.next, pubType);
+  if (pubFields.length - 1 !== OPENSSH_PUBLIC_FIELDS[pubType]) return 'unknown';
+  return classifyOpenSSHPrivateSection(u8, pubBlob.next, pubType, pubFields.slice(1));
+}
+
+/** The single-envelope input contract: exactly ONE complete PEM envelope —
+ * BEGIN and END markers carrying the SAME label — with nothing but
+ * whitespace outside it. Leading junk, trailing junk, additional PEM
+ * blocks, split markers and BEGIN/END label mismatches all fail here, so
+ * an ambiguous input classifies as unknown instead of as whichever block
+ * a "find BEGIN anywhere, then the first END" scan happened to pick. The
+ * non-greedy body binds to the FIRST matching END marker; the end anchors
+ * make any further marker part of the match failure. */
+const PEM_ENVELOPE_RE =
+  /^[ \t\r\n]*-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----[ \t\r\n]*$/;
+
+function extractPemEnvelope(text: string): { label: string; inner: string } | null {
+  const match = PEM_ENVELOPE_RE.exec(text);
+  if (match === null) return null;
+  return { label: match[1] ?? '', inner: match[2] ?? '' };
 }
 
 /** Classify a private key from its PEM text (or the UTF-8 bytes of one).
- * Raw DER without a PEM header is not a form this module receives from
- * ssh2's parser, so it classifies as unknown. */
+ * Raw DER without a PEM envelope is not a form this module receives from
+ * ssh2's parser, so it classifies as unknown — as does any input that is
+ * not exactly one recognized, complete, internally consistent envelope. */
 export function classifyPrivateKey(raw: string | Uint8Array): PrivateKeyKind {
   const text = typeof raw === 'string' ? raw : (utf8(raw) ?? null);
   if (text === null) return 'unknown';
-  const begin = /-----BEGIN ([A-Z0-9 ]+)-----/.exec(text);
-  if (begin === null) return 'unknown';
-  const label = begin[1];
-  const endMarker = `-----END ${label}-----`;
-  const endAt = text.indexOf(endMarker, begin.index + begin[0].length);
-  if (endAt === -1) return 'unknown';
-  const inner = text.slice(begin.index + begin[0].length, endAt);
+  const envelope = extractPemEnvelope(text);
+  if (envelope === null) return 'unknown';
+  const { label, inner } = envelope;
 
   if (label === 'OPENSSH PRIVATE KEY') return classifyOpenSSHContainer(inner);
   if (label === 'ENCRYPTED PRIVATE KEY') return 'encrypted';
@@ -471,7 +688,7 @@ export function classifyPrivateKey(raw: string | Uint8Array): PrivateKeyKind {
   } catch {
     return 'unknown';
   }
-  return classifyDer(u8);
+  return classifyDer(u8, label);
 }
 
 /* --- user-facing assessment ------------------------------------------------ */

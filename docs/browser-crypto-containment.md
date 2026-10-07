@@ -22,18 +22,29 @@ Fail-closed at the lowest browser signing boundary, before elliptic receives
 any private key:
 
 - `src/shims/private-key-classify.ts` (new, dependency-free): structural
-  classification of the PEM forms that actually reach the boundary —
-  PKCS#1 RSA/DSA (exact INTEGER runs, SEQUENCE consuming the whole buffer),
-  SEC1 EC (version/OCTET STRING/optional-[0]/[1] shape), PKCS#8 (algorithm
-  OID **with the inner payload validated against it**: rsaEncryption →
-  PKCS#1 shape, id-Ed25519 → exactly OCTET STRING(32), id-ecPublicKey →
-  SEC1 shape, id-dsa → the PKCS#8 exponent-INTEGER form, PBES-family →
-  "encrypted"), raw `openssh-key-v1` containers, and RFC 1423 `Proc-Type`/
-  `DEK-Info` headers. DER length encodings must be minimal; anything
-  unrecognized or structurally inconsistent (trailing bytes, truncated
-  bodies, container halves that disagree) classifies as `unknown` and
-  callers fail closed. No ASN.1 library, no elliptic import, no ssh2 import
-  (no cycles).
+  classification of the PEM forms that actually reach the boundary.
+  **Input contract: exactly ONE complete PEM envelope** — BEGIN/END markers
+  with the same label, whitespace-only outside; leading junk, trailing junk,
+  additional blocks, split markers and label mismatches all classify as
+  `unknown` (ambiguity defense — never "whichever block the first regex
+  found"). **Label/DER agreement is enforced**: "RSA PRIVATE KEY" must hold
+  a PKCS#1 RSA body, "DSA PRIVATE KEY" a PKCS#1 DSA body, "EC PRIVATE KEY"
+  a SEC1 body, "PRIVATE KEY" a PKCS#8 body — a mismatch is `unknown`, never
+  the DER's own shape. DER INTEGER fields must be **meaningful, minimal,
+  positive** encodings: non-empty, non-zero, at most one leading 0x00 and
+  only as sign padding for a value whose next octet's high bit demands it
+  (legitimate padded keys pass; zero-length, zero, nonminimal and
+  negative-encoded fields refuse). PKCS#8 inner payloads are validated
+  **exactly** against the algorithm OID: rsaEncryption demands the full
+  RSA inner — a DSA-shaped payload under the RSA OID is `unknown`, not a
+  DSA key; id-Ed25519 → exactly OCTET STRING(32); id-ecPublicKey → SEC1
+  shape; id-dsa → a strict positive exponent INTEGER; PBES-family →
+  "encrypted". Raw `openssh-key-v1` containers and RFC 1423 `Proc-Type`/
+  `DEK-Info` headers are classified too. DER length encodings must be
+  minimal; anything unrecognized or structurally inconsistent (trailing
+  bytes, truncated bodies, container halves that disagree) classifies as
+  `unknown` and callers fail closed. No ASN.1 library, no elliptic import,
+  no ssh2 import (no cycles).
 - `src/shims/ssh2-crypto.ts`:
   - one-shot `sign(algo, data, key)`: named-digest calls classify the key and
     refuse **before** a signer exists — no trial signature, no
@@ -59,13 +70,30 @@ any private key:
 ## OpenSSH container classification — what it does and does not read
 
 For a **cipher=none** container the classifier parses the actual private
-section (check ints, type string, per-type fields, comment, canonical
-padding, exact consumption) and requires it to agree with the public header
-— the verdict reads the real key. For an **encrypted** container the
-ciphertext cannot be checked, so the cipher/KDF headers are advisory only:
-the kind is "encrypted" and the verdict is "indeterminate". The
-**authoritative** decision in every case is the re-classification at the
-signing boundary, on the PEM ssh2 actually produces after parsing/decryption.
+section and validates its real structure: check ints must agree, the private
+type string must match the public header, the public blob must be exactly
+type + the RFC 4253 public fields, and the per-type fields must carry
+meaningful content and AGREE with the public half — RSA: n/e byte-equal plus
+the necessary order relations (e,d,p,q < n, iqmp < p) over strict mpints;
+DSA: p/q/g/y byte-equal plus g,y < p and x < q; Ed25519: A = 32 bytes,
+secret = 64 bytes, and the private A must BE the public A; ECDSA: the curve
+name must match the type, Q must be an uncompressed 0x04 point of the
+curve's coordinate size and byte-equal the public Q, and the scalar must be
+a strict positive mpint no longer than the coordinate. The section must be
+8-byte aligned (OpenSSH's pad-to-8 while-loop) with 0..7 canonical
+increasing padding bytes — genuinely zero-pad-aligned sections pass — and
+the whole container must be consumed exactly. For an **encrypted** container
+the ciphertext cannot be checked, so the cipher/KDF headers are advisory
+only: the kind is "encrypted" and the verdict is "indeterminate" — never an
+authorization. The **authoritative** decision in every case is the
+re-classification at the signing boundary, on the PEM ssh2 actually produces
+after parsing/decryption.
+
+What this validation does NOT claim: it is structure, not secret math. No
+primality of p/q, no p·q = n, no scalar·G = Q, no proof that the encoded
+values form a cryptographically valid key is attempted — a passing verdict
+means "structurally the declared key type", and the guard's refusal classes
+(unrecognized/ECDSA/encrypted) are unaffected by that limitation.
 
 ## Early assessment contract (for the dial/UI owner)
 
@@ -89,11 +117,18 @@ path. No trial signing and no "sign once to find out" exists anywhere.
 
 ## Tests
 
-- `tests/crypto/shim-guard.test.ts` — runs in the default `npm test`:
-  classification of real ephemeral keys, both guard boundaries, RSA/Ed
-  positives, verification residuals, error hygiene, plus hardened DER and
-  container negatives (trailing bytes, non-minimal lengths, OID/payload
-  mismatches, spliced OpenSSH containers).
+- `tests/crypto/shim-guard.test.ts` — runs in the default `npm test` (50
+  tests): classification of real ephemeral keys, both guard boundaries,
+  RSA/Ed positives, verification residuals, error hygiene, plus negative
+  batteries — single-envelope violations (multi-block, leading/trailing
+  junk, mismatched labels, label/DER disagreement), strict INTEGER content
+  (zero-length/zero/nonminimal/negative + a legal-sign-pad positive
+  control), exact PKCS#8 inner (DSA-under-RSA-OID refused, false-OID inner
+  refused, DSA exponent strictness), and per-type OpenSSH container
+  negatives (Ed 32/64 and A-agreement, RSA mpint content + d ≥ n +
+  same-type splices, EC curve/Q/scalar agreement, 8-byte alignment and
+  0..7 padding, DSA x < q ordering). Every malformed input also asserts a
+  coded guard refusal with the elliptic probe still at zero.
 - **`tests/crypto/lab/browser/run-browser-lab.mjs` — the shipping acceptance
   pass.** Builds a bundle with the production vite pipeline (the real
   `vite.config.ts`, loaded unmodified — the node-polyfills `crypto` →
@@ -101,12 +136,28 @@ path. No trial signing and no "sign once to find out" exists anywhere.
   lab-only HTML entry), runs it in a real headless Chromium over CDP, and
   dials a real in-process ssh2 server through a WebSocket bridge using
   connection.ts's exact algorithm config (nistp256/DH14, AES-CTR,
-  ed25519/RSA host keys). Covers positive RSA/Ed25519 handshakes (plain +
-  passphrase-encrypted), ECDSA plaintext and encrypted refusals, malformed
-  key refusals, host-pin rejection before userauth, and the public-key
-  verification residual. An elliptic prototype probe counts ECDSA/EdDSA
-  signatures in the real bundled library (liveness proven by the ECDH
-  handshakes hitting the same wrapped prototype); every flow ends at zero.
+  ed25519/RSA host keys). The runner asserts an exact record manifest (no
+  flow may vanish), real elliptic counter deltas captured before each
+  negative dial (not a value compared with itself), stable coded guard
+  errors on every malformed direct-sign, and per-username server traces.
+  Flows: positive RSA/Ed25519 handshakes (plain + passphrase-encrypted,
+  every client signature verified server-side), ECDSA plaintext and
+  encrypted refusals, malformed direct-sign refusals, parser-first
+  malformed dials that stay honest about which layer refused (ssh2's
+  parser first — a key it accepts but the guard refuses dies as an
+  authentication failure with zero signed auth requests; a key it throws
+  on never reaches the server at all — the bridge dials TCP on the first
+  client bytes), and the host-pin refusal. The pin negative supplies a
+  DIFFERENT VALID host key's fingerprint to the same `digest === pin`
+  comparator the positives pass through — never a hardcoded false — and
+  the server must see zero auth attempts. An elliptic prototype probe
+  counts ECDSA/EdDSA signatures in the real bundled library (liveness
+  proven by the ECDH handshakes hitting the same wrapped prototype plus a
+  labeled throwaway-scalar self-check); every flow ends at zero. **Scope:
+  this lab exercises the shipped crypto/signing boundary through a cloned
+  connection config and test entry — not production `connection.ts`,
+  `webApi`, or the app's host-pin store; the web-client worker's own
+  connection/webApi tests are the separate evidence for those.**
 - `npm run test:crypto-lab` (`tests/crypto/lab/`): **supplemental** node
   evidence. Module hooks serve the compiled shim to real ssh2's
   `require('crypto')` and a counting probe to browserify-sign's
