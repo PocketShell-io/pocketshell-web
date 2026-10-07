@@ -64,7 +64,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+import traceback
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -138,7 +140,11 @@ def decrypt_envelope(envelope: str, passphrase: str) -> str:
     """The desktop's SyncCrypto, test-side: same envelope, python runtime."""
     fields = json.loads(envelope)
     assert fields['v'] == 1 and fields['kdf'] == 'pbkdf2-sha256', (
-        f'envelope fields: {sorted(fields)}; '
+        # the field NAMES are untrusted JSON metadata at this boundary (not yet
+        # a fixed schema) — the payload goes through the same withheld-or-capped
+        # renderer, raw OR single-pass decoded (a %XX-encoded name is not
+        # invisible to it); the refusal itself is unchanged
+        f'envelope fields: {safe_repr_payload(sorted(fields))}; '
         f"v={safe_diag_text(repr(fields.get('v')))}, kdf={safe_diag_text(repr(fields.get('kdf')))}"
     )
     key = PBKDF2HMAC(
@@ -149,6 +155,18 @@ def decrypt_envelope(envelope: str, passphrase: str) -> str:
     ).derive(passphrase.encode())
     plain = AESGCM(key).decrypt(base64.b64decode(fields['iv']), base64.b64decode(fields['ct']), None)
     return plain.decode()
+
+
+SYNC_ENVELOPE_FIELDS = {'v', 'kdf', 'iter', 'salt', 'iv', 'ct'}
+
+
+def assert_envelope_fields(envelope: dict) -> None:
+    """The sync-STRUCTURE verdict for one captured PUT's envelope: exactly the
+    fixed field set, ciphertext only. The refusal is the old inline assert's;
+    the payload is the key list through the safe renderer — the keys are
+    untrusted JSON names and appear only when they carry no declared secret
+    (raw or single-pass decoded)."""
+    assert set(envelope.keys()) == SYNC_ENVELOPE_FIELDS, safe_repr_payload(sorted(envelope.keys()))
 
 
 def assert_wire_custody(binary: bytes, texts: list[str], where: str) -> None:
@@ -420,6 +438,56 @@ def describe_connection_state(state: dict) -> str:
         f"state={safe_diag_text(str(state.get('state')))} "
         f"error={safe_diag_text('none' if error is None else str(error))}"
     )
+
+
+TRACEBACK_FRAME_CAP = 12     # per-exception frame cap for the final report
+try:
+    _EXC_GROUP_TYPES: tuple = (BaseExceptionGroup,)   # noqa: F821 - 3.11+
+except NameError:  # pragma: no cover - pre-3.11 runtimes
+    _EXC_GROUP_TYPES = ()
+
+
+def safe_traceback(exc: BaseException) -> str:
+    """The executable failure boundary's report over the WHOLE chain: every
+    linked exception (direct causes, handled-while contexts, exception-group
+    members; cyclic links deduplicated) renders its source locations —
+    file:line/function, never runtime data — with its message and any
+    `__notes__` through safe_diag_text, and deep recursion capped with an
+    explicit withheld marker. The raw exception is never re-raised above the
+    boundary, so Python's own printer (message, notes, chained causes
+    verbatim) is never reached; this rendering is what the failure looks
+    like."""
+    seen: set[int] = set()
+    lines: list[str] = []
+
+    def render(e: BaseException, heading: str) -> None:
+        if id(e) in seen:
+            lines.append(f'{heading} [chain loop withheld]')
+            return
+        seen.add(id(e))
+        lines.append(heading)
+        frames = traceback.extract_tb(e.__traceback__)
+        if len(frames) > TRACEBACK_FRAME_CAP:
+            lines.append(f'  ({len(frames) - TRACEBACK_FRAME_CAP} earlier frame(s) withheld)')
+        for frame in frames[-TRACEBACK_FRAME_CAP:]:
+            lines.append(f'  at {frame.filename}:{frame.lineno} in {frame.name}')
+        lines.append(f'  {type(e).__name__}: {safe_diag_text(str(e))}')
+        for note in getattr(e, '__notes__', None) or []:
+            lines.append(f'  note: {safe_diag_text(str(note))}')
+
+    def walk(e: BaseException, heading: str) -> None:
+        render(e, heading)
+        if isinstance(e, _EXC_GROUP_TYPES):
+            for i, member in enumerate(e.exceptions, 1):
+                walk(member, f'member {i} of the failure-group above:')
+        nxt = e.__cause__
+        if nxt is not None:
+            walk(nxt, 'the direct cause of the failure above:')
+        elif e.__context__ is not None:
+            walk(e.__context__, 'the failure above was raised while handling:')
+
+    walk(exc, 'the unhandled failure:')
+    return '\n'.join(lines)
 
 
 def _parse_url(url: str, where: str):
@@ -1172,8 +1240,12 @@ class FakeSync:
                 )
         elif req.method == 'PUT':
             parsed = json.loads(body)
+            # parsed['version'] is untrusted metadata (any JSON value — a
+            # secret-bearing string included — can fail this before the global
+            # HTTP custody verdict): the refusal payload goes through the safe
+            # renderer; the refusal itself is unchanged.
             assert parsed['version'] == self.versions[slot], (
-                f'{slot} base version {parsed["version"]} != {self.versions[slot]}'
+                f'{slot} base version {safe_repr_payload(parsed["version"])} != {self.versions[slot]}'
             )
             self.put_bodies.append(parsed)
             self.data[slot] = parsed['data']
@@ -1620,6 +1692,213 @@ async def failure_dump_negative_control() -> None:
           'label-safe, with honest diagnostics and failure propagation intact')
 
 
+async def failure_boundary_negative_control() -> None:
+    """The FINAL executable boundary and the untrusted-metadata assertion
+    payloads, through the ACTUAL functions (request-free, no browser):
+      - the ACTUAL entrypoint() — what `__main__` calls — with main() replaced
+        by synthetic driver failures carrying EVERY declared secret (raw,
+        +-encoded, percent-encoded, chained-cause and __notes__ placements)
+        must exit NONZERO with a report that keeps the failure's type and
+        source location but echoes no secret on stdout or stderr, and must
+        never re-raise the raw exception for Python's printer;
+      - a driver failure the run never retrieves (an orphan fixture-handler
+        task) reaches stderr only through the loop's SAFE exception handler —
+        the default would print the raw traceback as an independent bypass;
+      - an HONEST failure keeps its message and location readable;
+      - diagnostics dumping on failure still runs, cannot mask the report and
+        stays within the text policy;
+      - the ACTUAL decrypt_envelope refuses bad versions with poisoned field
+        names (raw and percent-encoded canary) without echoing them, honest
+        field names still listed;
+      - the ACTUAL sync-envelope shape check refuses a poisoned key set
+        without echoing it and an honest wrong shape with its names visible;
+      - the ACTUAL FakeSync version refusal withholds a secret-bearing
+        version string while an honest integer mismatch stays readable, and
+        still refuses before any record or fulfill."""
+    probes = tuple(s for s, _ in SECRET_LABELS) + ('BEGIN+OPENSSH+PRIVATE+KEY',)
+    enc_first = '%' + GOOGLE_TOKEN[0].encode().hex() + GOOGLE_TOKEN[1:]
+
+    def scan(text: str, what: str) -> None:
+        for probe in probes:
+            assert probe not in text, f'{what} echoed a declared secret'
+
+    original_main, original_page = main, PAGE
+    try:
+        # --- the ACTUAL executable boundary (its own thread + loop) ---------
+        def drive(poisoned, what: str) -> tuple[str, str]:
+            buf_err, buf_out, box = io.StringIO(), io.StringIO(), {}
+
+            def run():
+                try:
+                    with contextlib.redirect_stderr(buf_err), contextlib.redirect_stdout(buf_out):
+                        box['rc'] = entrypoint()
+                except BaseException as e:  # noqa: BLE001 - a broken boundary must fail the control
+                    box['error_type'] = type(e).__name__
+
+            globals()['main'] = poisoned  # the thread's entrypoint() must resolve THIS poison
+            thread = threading.Thread(target=run)
+            thread.start()
+            thread.join(120)
+            assert not thread.is_alive(), f'{what}: the boundary did not finish'
+            assert box.get('error_type') is None, f'{what}: the boundary itself crashed ({box["error_type"]})'
+            assert box.get('rc') == 1, f'{what}: the boundary did not exit nonzero'
+            err, out = buf_err.getvalue(), buf_out.getvalue()
+            scan(err + out, what)
+            assert 'E2E FAIL' in err and 'RuntimeError' in err, f'{what}: unclear failure report: {err[:200]}'
+            return err, out
+
+        for secret, label in SECRET_LABELS:
+            async def poisoned(_s=secret):
+                raise RuntimeError(f'driver failure carrying {_s}')
+
+            drive(poisoned, f'the raw {label} driver failure')
+        for form, what in ((quote_plus('BEGIN OPENSSH PRIVATE KEY zz'), 'a +-encoded private-key marker'),
+                           (enc_first, 'a percent-encoded sign-in')):
+            async def poisoned_encoded(_f=form):
+                raise RuntimeError(f'driver failure carrying {_f}')
+
+            drive(poisoned_encoded, f'{what} driver failure')
+
+        async def poisoned_chain():
+            try:
+                raise ValueError(f'inner driver state {CANARY}')
+            except ValueError as inner:
+                outer = RuntimeError(f'outer driver failure {GOOGLE_TOKEN}')
+                outer.add_note(f'handling note {KEY_PASSPHRASE}')
+                raise outer from inner
+
+        drive(poisoned_chain, 'the chained-cause + __notes__ driver failure')
+
+        async def poisoned_context():
+            try:
+                raise ValueError(f'context driver state {KEY_PASSPHRASE}')
+            except ValueError:
+                raise RuntimeError(f'outer driver failure {GOOGLE_TOKEN}')
+
+        drive(poisoned_context, 'the handled-while (context-chain) driver failure')
+
+        async def orphan_poisoned():
+            async def fixture_handler():
+                await asyncio.sleep(0.01)
+                raise RuntimeError(f'orphan fixture handler died with {CANARY}')
+
+            asyncio.ensure_future(fixture_handler())
+            await asyncio.sleep(0.1)
+            raise RuntimeError('the run itself failed')
+
+        err, _ = drive(orphan_poisoned, 'the never-retrieved fixture-handler failure')
+        assert 'loop failure, never retrieved' in err and '<redacted' in err, err[:400]
+
+        async def honest_main():
+            raise RuntimeError('honest dial timeout after 30s')
+
+        err, out = drive(honest_main, 'the honest driver failure')
+        assert 'honest dial timeout after 30s' in err, err
+        assert '.py:' in err, f'the report lost source locations: {err[:400]}'
+
+        class _BoundaryPage:
+            def __init__(self):
+                self.url = f'wss://direct.e2e.test/pipe?token={GOOGLE_TOKEN}'
+                self.shots: list = []
+
+            async def screenshot(self, path=None):
+                self.shots.append(path)
+
+            async def inner_text(self, selector):
+                return f'visible body {CANARY}'
+
+        page = _BoundaryPage()
+        globals()['PAGE'] = page
+        _, out = drive(honest_main, 'the failure dump riding the boundary')
+        assert len(page.shots) == 1, 'the boundary stopped dumping diagnostics on failure'
+
+        # --- the ACTUAL decrypt_envelope ------------------------------------
+        enc_name = CANARY.replace(CANARY[0], '%' + format(ord(CANARY[0]), '02x'), 1) + '-note'
+        for envelope, what in (
+            (json.dumps({'v': 2, 'kdf': 'pbkdf2-sha256', enc_name: 'x',
+                         'salt': 's', 'iter': 3, 'iv': 'i', 'ct': 'c'}),
+             'a percent-encoded canary field name'),
+            (json.dumps({'v': 2, 'kdf': 'pbkdf2-sha256', f'{CANARY}-note': 'x',
+                         'salt': 's', 'iter': 3, 'iv': 'i', 'ct': 'c'}),
+             'a raw canary field name'),
+        ):
+            threw, message = False, ''
+            try:
+                decrypt_envelope(envelope, 'unused')
+            except AssertionError as exc:
+                threw, message = True, str(exc)
+            assert threw, f'decrypt_envelope accepted a bad version ({what})'
+            scan(message, f'the decrypt_envelope payload with {what}')
+        threw, message = False, ''
+        try:
+            decrypt_envelope(json.dumps({'v': 2, 'kdf': 'sha1', 'salt': 's', 'iter': 3,
+                                         'iv': 'i', 'ct': 'c'}), 'unused')
+        except AssertionError as exc:
+            threw, message = True, str(exc)
+        assert threw and "'v'" in message and "'kdf'" in message and "'ct'" in message, message
+
+        # --- the ACTUAL sync-envelope shape check ---------------------------
+        threw, message = False, ''
+        try:
+            assert_envelope_fields({'v': 1, 'kdf': 'pbkdf2-sha256', 'iter': 3, 'salt': 's',
+                                    'iv': 'i', f'ct{CANARY}': 'x'})
+        except AssertionError as exc:
+            threw, message = True, str(exc)
+        assert threw, 'the envelope shape check accepted a poisoned shape'
+        scan(message, 'the envelope-shape payload')
+        threw, message = False, ''
+        try:
+            assert_envelope_fields({'v': 1})
+        except AssertionError as exc:
+            threw, message = True, str(exc)
+        assert threw and "'v'" in message, message
+        assert_envelope_fields({'v': 1, 'kdf': 'pbkdf2-sha256', 'iter': 3, 'salt': 's',
+                                'iv': 'i', 'ct': 'c'})  # the honest shape still passes
+
+        # --- the ACTUAL FakeSync version refusal ----------------------------
+        fake = FakeSync()
+        fake.versions['main'] = 4
+
+        class _VersionReq:
+            method = 'PUT'
+            url = 'https://sync.e2e.test/settings/main'
+
+            def __init__(self, body: str):
+                self.post_data = body
+
+        class _VersionRoute:
+            def __init__(self, body: str):
+                self.request = _VersionReq(body)
+                self.fulfilled = False
+
+            async def fulfill(self, **kw):
+                self.fulfilled = True
+
+        route = _VersionRoute(json.dumps({'version': f'base-4 {GOOGLE_TOKEN}', 'data': 'envelope'}))
+        threw, message = False, ''
+        try:
+            await fake.handle(route)
+        except AssertionError as exc:
+            threw, message = True, str(exc)
+        assert threw and not route.fulfilled and fake.put_bodies == [], \
+            'the version refusal must still fail before any record or fulfill'
+        scan(message, 'the FakeSync version-refusal payload')
+        assert 'main base version' in message and '!= 4' in message, message
+        route = _VersionRoute(json.dumps({'version': 3, 'data': 'envelope'}))
+        threw, message = False, ''
+        try:
+            await fake.handle(route)
+        except AssertionError as exc:
+            threw, message = True, str(exc)
+        assert threw and 'main base version 3 != 4' in message, message
+    finally:
+        globals()['main'] = original_main
+        globals()['PAGE'] = original_page
+    print('failure-boundary control: the ACTUAL executable boundary + safe loop handler + '
+          'untrusted-metadata payloads (decrypt_envelope fields, envelope shape, PUT version) '
+          'withheld every declared secret, kept honest diagnostics useful and failures nonzero')
+
+
 async def unlock_on_app(page) -> None:
     await page.goto(BASE + '/app', wait_until='networkidle')
     await page.fill('input[type=password]', SYNC_PASSPHRASE)
@@ -1661,10 +1940,12 @@ async def main() -> int:
     await diagnostics_negative_control()
     await capture_path_negative_control()
     await failure_dump_negative_control()
+    await failure_boundary_negative_control()
     osc52_clear_ack_negative_control()
     print('negative controls: custody oracle, gateway auth-frame recorder, the exact-surface URL policy,'
           ' the captured-HTTP policy, the complete-header capture path, custody diagnostics,'
-          ' the credential-safe failure dumps (dump/console verdict/store/gather)'
+          ' the credential-safe failure dumps (dump/console verdict/store/gather),'
+          ' the executable failure boundary + untrusted-metadata assertion payloads'
           ' and the OSC 52 ack matcher all bite')
 
     sync = FakeSync()
@@ -2003,8 +2284,7 @@ async def main() -> int:
     #    ciphertext only.
     for put in sync.put_bodies:
         assert set(put.keys()) == {'data', 'version'}
-        envelope = json.loads(put['data'])
-        assert set(envelope.keys()) == {'v', 'kdf', 'iter', 'salt', 'iv', 'ct'}, envelope.keys()
+        assert_envelope_fields(json.loads(put['data']))
     # 3. What left is decryptable with the passphrase and carries the merged
     #    list — host list AND the roaming key envelope (the key-slot restore
     #    proof: the redial below only works if THIS payload came back).
@@ -2056,11 +2336,48 @@ async def main() -> int:
     return 0
 
 
-if __name__ == '__main__':
+def _safe_loop_exception_handler(loop, context) -> None:
+    """The running loop's handler for failures nothing retrieved (a fixture
+    route/task dying beside the run's own failure): the DEFAULT handler prints
+    the raw exception and its traceback — an independent credential-bearing
+    bypass around the safe boundary below. Every field renders through the
+    safe family instead; this handler never raises."""
+    message = safe_diag_text(str(context.get('message') or 'unhandled loop failure'))
+    exc = context.get('exception')
+    detail = safe_exc(exc) if isinstance(exc, BaseException) else 'no exception object'
+    origin = context.get('task') or context.get('future') or context.get('handle')
+    what = type(origin).__name__ if origin is not None else 'unknown origin'
+    print(f'--- loop failure, never retrieved ({what}): {message}; {detail}', file=sys.stderr)
+
+
+async def _main_with_safe_loop_handler():
+    """main() with the loop's never-retrieved-failure logging pointed at the
+    safe renderers for the WHOLE run — fixture handlers fail inside this
+    loop, and their unclaimed errors are part of the run's output."""
+    asyncio.get_running_loop().set_exception_handler(_safe_loop_exception_handler)
+    return await main()
+
+
+def entrypoint() -> int:
+    """The executable failure boundary (`__main__` calls exactly this): the
+    process exit is OWNED here. On any failure the raw exception is NEVER
+    re-raised — Python's own printer would emit its message, notes and
+    chained causes verbatim, and no internal renderer reaches that output —
+    the report is safe_traceback over the whole chain, diagnostics still dump
+    (and can neither mask the report nor crash it), and the exit stays
+    nonzero and clear. Raw captured custody data is untouched; only this
+    output boundary changed."""
     try:
-        code = asyncio.run(main())
-    except BaseException:
-        if PAGE is not None:
-            asyncio.run(dump_diagnostics())
-        raise
-    raise SystemExit(code)
+        return asyncio.run(_main_with_safe_loop_handler())
+    except BaseException as exc:  # noqa: BLE001 - the boundary owns every failure's final rendering
+        try:
+            if PAGE is not None:
+                asyncio.run(dump_diagnostics())
+        except Exception as dump_exc:  # noqa: BLE001 - diagnostics never mask the failure
+            print(f'(failure diagnostics unavailable: {safe_exc(dump_exc)})', file=sys.stderr)
+        print(f'E2E FAIL: {safe_traceback(exc)}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(entrypoint())
