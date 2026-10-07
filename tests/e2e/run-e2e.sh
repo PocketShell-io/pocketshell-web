@@ -15,11 +15,15 @@
 #   behind IT. The fixture is protocol-shaped, NOT the Go production
 #   gateway; no production-gateway evidence is claimed from this run.
 # Every wire surface the browser touches is custody-scanned — HTTP requests
-# (parsed-URL policy, Authorization headers, bodies), the direct-relay and
-# gateway WebSocket dial URLs, and EVERY recorded relay/gateway frame
-# (binary AND text, the gateway's first/auth TEXT frame included) — with
-# offline negative controls proving the oracle, the recorder and the URL
-# policy bite.
+# through ONE captured-HTTP policy (the structured exact-surface URL rules
+# pinning scheme/host/effective port/path/query for the direct relay, gateway,
+# sync and broker fixtures; the method + exact-Bearer Authorization rule on
+# the account surfaces; a full secret-set scan of every header value and
+# body), the direct-relay and gateway WebSocket dial URLs through the same
+# URL policy, and EVERY recorded relay/gateway frame (binary AND text, the
+# gateway's first/auth TEXT frame included) — with offline negative controls
+# proving the oracle, the recorder, the URL policy, the captured-HTTP policy
+# and the credential-safe failure diagnostics bite.
 #
 # Usage: tests/e2e/run-e2e.sh
 # Requires: docker, /usr/bin/python3 with playwright + cryptography,

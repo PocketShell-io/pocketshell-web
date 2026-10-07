@@ -41,9 +41,11 @@ real (see run-e2e.sh):
                        browser puts on this wire — the first/auth frame
                        included — is preserved verbatim by the fixture's
                        recorder and fed through the SAME wire-custody oracle
-                       as the binary bytes and the HTTP captures (URLs,
-                       Authorization headers, bodies — see assert_url_custody
-                       and the wire-level assertions). Production-gateway
+                       as the binary bytes and the HTTP captures (exact
+                       surface rules + methods, Authorization headers, every
+                       header value, bodies — see assert_url_custody,
+                       assert_http_request_custody and the wire-level
+                       assertions). Production-gateway
                        claims are made elsewhere or not at all.
 
 The OSC 52 clipboard leg rides a REAL terminal: the folder-first workspace's
@@ -66,7 +68,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from playwright.async_api import async_playwright
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit
 
 BASE = sys.argv[1].rstrip('/')
 WORK = sys.argv[2]
@@ -209,66 +211,320 @@ def gateway_auth_negative_control() -> None:
         assert threw, f'gateway custody FAILED to reject a poisoned auth frame ({label} in an extra field)'
 
 
-# The Google sign-in's accepted surfaces, per the documented credential
-# boundary (docs/gateway-client.md): the Authorization header to the account
-# surfaces (sync + broker) and — legacy, until that transport migrates — the
-# DIRECT relay's QUERY STRING, which that relay itself authorizes. The
-# GATEWAY carries none of it (its admission is the broker-scoped routing
-# token, asserted at the auth frame), and no key/canary material rides ANY
-# surface. The policy decides on the PARSED hostname and query component: a
-# URL that merely CONTAINS an account hostname in its path or query, or a
-# suffix-spoofed hostname, is not an account surface.
+# --- fixture surfaces, as STRUCTURED rules -----------------------------------
+#
+# The Google sign-in's accepted placements, per the documented credential
+# boundary (docs/gateway-client.md) and the app's LIVE request builders
+# (src/api/sync.ts, src/api/gatewayToken.ts, src/terminal/connection.ts,
+# pocketshell-core gatewayTransport.ts):
+#
+#   sync + broker (account surfaces)
+#       https ONLY, exact host, effective port 443, an EXACT supported path,
+#       an allowed method, NO query, NO fragment, NO userinfo, and the
+#       sign-in ONLY as the exact `Authorization: Bearer <sign-in>` header —
+#       never in the URL. The paths/methods below mirror the live
+#       SyncService (GET /me, GET /settings, GET/PUT/DELETE /settings/{slot})
+#       and the broker exchange (POST /gateway/token, empty body).
+#   direct relay (legacy, documented exception)
+#       EXACTLY wss://direct.e2e.test/pipe with the live dial's query shape —
+#       `new URLSearchParams({host, port, token})`: those THREE fields, each
+#       exactly once, the sign-in as the value of the ONE `token` field and
+#       nowhere else in the URL. Any other scheme, port, path, param,
+#       duplicate or placement refuses.
+#   gateway
+#       EXACTLY wss://gateway.e2e.test/api/v1/hosts/{device}/ssh — no query,
+#       no fragment, no userinfo, and NONE of the Google sign-in anywhere
+#       (its admission is the broker-scoped routing token, asserted on the
+#       auth FRAME, never on the URL).
+#
+# A hostname alone is NOT origin authority: a URL that merely CONTAINS an
+# account hostname in its path or query, a suffix-spoofed hostname, or an
+# account hostname on the wrong scheme/port/path is not that surface and
+# grants nothing. Every other origin (the app's own pages/assets, the GIS
+# stub) carries no credential anywhere in its URL. No key/canary material
+# rides ANY surface.
 DIRECT_RELAY_HOST = 'direct.e2e.test'
-ACCOUNT_HOSTS = ('sync.e2e.test', 'gateway-broker.e2e.test')
+SYNC_HOST = 'sync.e2e.test'
+BROKER_HOST = 'gateway-broker.e2e.test'
+GATEWAY_HOST = 'gateway.e2e.test'
+
+ACCOUNT_SCHEME = 'https'
+ACCOUNT_PORT = 443
+# (host, exact path, allowed methods) — the live service's supported CRUD.
+ACCOUNT_HTTP_SURFACES = (
+    (SYNC_HOST, '/me', ('GET',)),
+    (SYNC_HOST, '/settings', ('GET',)),
+    (SYNC_HOST, '/settings/main', ('GET', 'PUT', 'DELETE')),
+    (SYNC_HOST, '/settings/keys', ('GET', 'PUT', 'DELETE')),
+    (BROKER_HOST, '/gateway/token', ('POST',)),
+)
+# The legacy direct-relay dial: the ONE URL exception, pinned to the exact
+# origin, path and query shape the live code produces.
+DIRECT_RELAY_DIAL = {
+    'scheme': 'wss',
+    'host': DIRECT_RELAY_HOST,
+    'port': 443,
+    'path': '/pipe',
+    'query_keys': ('host', 'port', 'token'),
+}
+GATEWAY_DIAL = {
+    'scheme': 'wss',
+    'host': GATEWAY_HOST,
+    'port': 443,
+    'path': f'/api/v1/hosts/{GW_DEVICE}/ssh',
+}
+
+DEFAULT_PORTS = {'http': 80, 'https': 443, 'ws': 80, 'wss': 443}
 
 
-def redacted_url(url: str) -> str:
-    """The URL with its query and fragment replaced — failure messages name
-    the surface without echoing whatever a hostile query carried."""
-    parts = urlsplit(url)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, '<redacted>', ''))
+def effective_port(parts) -> int | None:
+    """The port an honest client would CONNECT to: explicit, else the
+    scheme's default — `https://host/` and `https://host:443/` are the same
+    origin, `https://host:444/` is not."""
+    if parts.port is not None:
+        return parts.port
+    return DEFAULT_PORTS.get((parts.scheme or '').lower())
+
+
+def _scrub(text: str) -> str:
+    """A mention-safe rendering of an untrusted fragment: anything carrying
+    credential material becomes <redacted>."""
+    for secret, _ in SECRET_LABELS:
+        if secret in text:
+            return '<redacted>'
+    return text
+
+
+def safe_url(url: str) -> str:
+    """The STRUCTURAL URL for failure messages: scheme/host scrubbed against
+    the full secret set, port kept (digits), while path contents, query
+    values, userinfo and fragment are WITHHELD (segment counts, scrubbed
+    param names and presence flags only). A rejected secret can never be
+    repeated by a diagnostic, wherever it hid."""
+    try:
+        parts = urlsplit(url)
+        scheme = _scrub((parts.scheme or '?').lower())
+        host = _scrub((parts.hostname or '<no-host>').lower())
+        port = parts.port
+        netloc = f'{host}:{port}' if port is not None else host
+        segments = len([s for s in parts.path.split('/') if s])
+        bits = [f'path: {segments} segment(s), withheld']
+        if parts.username is not None or parts.password is not None:
+            bits.append('userinfo PRESENT')
+        if parts.query:
+            names = sorted({_scrub(p.split('=', 1)[0]) or '<unnamed>' for p in parts.query.split('&')})
+            bits.append(f'query params: {",".join(names)}')
+        if parts.fragment:
+            bits.append('fragment PRESENT')
+        return f'{scheme}://{netloc} ({"; ".join(bits)})'
+    except ValueError:
+        return f'<unparsable URL: {len(url)} chars, withheld>'
+
+
+def describe_authorization(authz: str) -> str:
+    """Shape/length only — never an untrusted Authorization word or token."""
+    if authz == f'Bearer {GOOGLE_TOKEN}':
+        return 'the exact expected Bearer'
+    if authz.startswith('Bearer '):
+        return f'a Bearer with an unexpected credential (length {len(authz)})'
+    if authz.strip() == '':
+        return 'empty'
+    return f'an unexpected shape (length {len(authz)})'
+
+
+def _parse_url(url: str, where: str):
+    """urlsplit with malformed-port/host forms rejected up front (they are
+    broken URLs, never honest surfaces)."""
+    try:
+        parts = urlsplit(url)
+        _ = parts.port, parts.hostname
+        return parts
+    except ValueError:
+        raise AssertionError(f'{where}: URL did not parse — withheld ({safe_url(url)})')
+
+
+def _assert_exact_origin(parts, url: str, where: str, *, scheme: str, host: str, port: int,
+                         path: str | None, allow_query: bool) -> None:
+    """Pin scheme, host, EFFECTIVE port, (optionally exact) path and forbid
+    userinfo/fragment — and query unless the rule allows one. Reasons are
+    structural; the URL is rendered through safe_url only."""
+    wrong = []
+    if (parts.scheme or '').lower() != scheme:
+        wrong.append(f'scheme is not {scheme}')
+    if (parts.hostname or '').lower() != host:
+        wrong.append(f'host is not {host}')
+    if effective_port(parts) != port:
+        wrong.append(f'effective port is not {port}')
+    if path is not None and parts.path != path:
+        wrong.append(f'path is not {path}')
+    if parts.username is not None or parts.password is not None:
+        wrong.append('userinfo present')
+    if parts.fragment:
+        wrong.append('fragment present')
+    if not allow_query and parts.query:
+        wrong.append('unexpected query')
+    assert not wrong, (
+        f'{where}: not the exact {scheme}://{host}:{port}{path or ""} surface '
+        f'({"; ".join(wrong)}; {safe_url(url)})'
+    )
+
+
+def _assert_direct_relay_query(parts, url: str, where: str) -> None:
+    """The legacy exception's exact query shape: the documented dial fields
+    (host, port, token), each exactly once, the sign-in as the value of the
+    ONE token field — and the sign-in must appear EXACTLY once in the whole
+    URL (no duplicate copy in another param, the path, fragment or
+    userinfo)."""
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    keys = [k for k, _ in pairs]
+    expected = list(DIRECT_RELAY_DIAL['query_keys'])
+    key_names = ','.join(_scrub(k) or '<unnamed>' for k in keys) or 'none'
+    assert sorted(keys) == sorted(expected), (
+        f'{where}: the legacy relay dial query must be exactly {expected}, each once '
+        f'(saw {len(keys)} param(s): {key_names}; {safe_url(url)})'
+    )
+    fields = dict(pairs)
+    assert fields['host'] and fields['port'], f'{where}: the relay dial must carry nonempty host and port fields ({safe_url(url)})'
+    assert fields['token'] == GOOGLE_TOKEN, (
+        f'{where}: the relay token field is not the exact sign-in ({safe_url(url)})'
+    )
+    assert url.count(GOOGLE_TOKEN) == 1, (
+        f'{where}: the sign-in must appear exactly once — as the token field ({safe_url(url)})'
+    )
 
 
 def assert_url_custody(url: str, where: str) -> None:
-    """The per-surface URL custody policy — the ONE policy the live HTTP
-    request URLs, the direct-relay dial URLs and the gateway dial URLs all
-    run through, and the negative controls with them:
-      - no credential/canary may ride ANY request URL, with exactly one
-        exception: the Google sign-in in the LEGACY direct relay's QUERY
-        string (never its path, never anywhere else);
-      - an account hostname appearing in a path or query is NOT an account
-        surface — the parsed origin decides."""
-    parts = urlsplit(url)
+    """The per-surface URL custody policy — the ONE structured policy the
+    live HTTP request URLs, the direct-relay dial URLs and the gateway dial
+    URLs all run through, and the negative controls with them:
+      - the documented surfaces (direct relay, gateway, sync, broker) are
+        pinned to their EXACT scheme/host/effective-port/path/query rules
+        above — an account hostname on the wrong scheme, port or path is a
+        refusal, not a match;
+      - the ONLY credential placement on any URL is the Google sign-in as
+        the ONE `token` field of the legacy direct relay's dial query;
+      - everywhere else, no credential/canary may appear in ANY part of the
+        URL — path, query, fragment, userinfo or host."""
+    parts = _parse_url(url, where)
     host = (parts.hostname or '').lower()
+    if host == DIRECT_RELAY_DIAL['host']:
+        _assert_exact_origin(
+            parts, url, where,
+            scheme=DIRECT_RELAY_DIAL['scheme'], host=DIRECT_RELAY_DIAL['host'],
+            port=DIRECT_RELAY_DIAL['port'], path=DIRECT_RELAY_DIAL['path'],
+            allow_query=True,
+        )
+        _assert_direct_relay_query(parts, url, where)
+    elif host == GATEWAY_DIAL['host']:
+        _assert_exact_origin(
+            parts, url, where,
+            scheme=GATEWAY_DIAL['scheme'], host=GATEWAY_DIAL['host'],
+            port=GATEWAY_DIAL['port'], path=GATEWAY_DIAL['path'],
+            allow_query=False,
+        )
+    elif host in {h for h, _, _ in ACCOUNT_HTTP_SURFACES}:
+        # An account-surface attempt: the exact account origin must hold, and
+        # the path must be one of the supported account paths.
+        _assert_exact_origin(
+            parts, url, where,
+            scheme=ACCOUNT_SCHEME, host=host, port=ACCOUNT_PORT,
+            path=None, allow_query=False,
+        )
+        supported = [p for h, p, _ in ACCOUNT_HTTP_SURFACES if h == host]
+        assert parts.path in supported, (
+            f'{where}: {host} path is not a supported account path '
+            f'(supported: {", ".join(supported)}; {safe_url(url)})'
+        )
     for secret, label in SECRET_LABELS:
-        if (
-            secret == GOOGLE_TOKEN
-            and host == DIRECT_RELAY_HOST
-            and secret in parts.query
-            and secret not in parts.path
-        ):
-            continue  # the documented legacy boundary: this relay authorizes its own query token
-        assert secret not in url, f'{where}: {label} rode the URL {redacted_url(url)}'
+        if secret == GOOGLE_TOKEN and host == DIRECT_RELAY_DIAL['host']:
+            continue  # exactly-once-as-the-token-field asserted by the rule above
+        assert secret not in url, f'{where}: {label} rode the URL ({safe_url(url)})'
+
+
+def assert_http_request_custody(method: str, url: str, headers: dict, body: str, where: str) -> None:
+    """The captured-HTTP policy — the ONE policy the live recorded-request
+    loop and the negative controls both run through, for EVERY captured HTTP
+    request (method, URL, headers, body):
+      - the URL through assert_url_custody (exact surface rules + the one
+        legacy relay exception);
+      - a request TO an account surface (exact origin AND path) must be an
+        allowed method and carry the sign-in as the EXACT
+        `Authorization: Bearer <sign-in>` — nothing else in that header;
+      - every OTHER header value is scanned against the FULL secret set on
+        every request, and the Authorization header of non-account requests
+        is scanned against the full set too (only the exact account bearer
+        is exempt — pinned by equality, so nothing can hide beside it);
+      - the body is scanned against the full secret set. The sync PUT
+        envelopes stay ciphertext (shape-checked and decrypted in the live
+        section) — no plaintext exception exists here."""
+    assert_url_custody(url, where)
+    parts = _parse_url(url, where)
+    host = (parts.hostname or '').lower()
+    surface = next(((h, p, methods) for h, p, methods in ACCOUNT_HTTP_SURFACES if h == host and p == parts.path), None)
+    authz = next((v for k, v in headers.items() if k.lower() == 'authorization'), '')
+    if surface is not None:
+        surface_host, surface_path, methods = surface
+        assert method in methods, (
+            f'{where}: {method} is not a supported method for {surface_host} {surface_path} '
+            f'(allowed: {", ".join(methods)}; {safe_url(url)})'
+        )
+        assert authz == f'Bearer {GOOGLE_TOKEN}', (
+            f'{where}: Authorization was {describe_authorization(authz)}, '
+            f'expected the exact Bearer ({safe_url(url)})'
+        )
+    else:
+        assert GOOGLE_TOKEN not in authz, (
+            f'{where}: the Google sign-in rode the Authorization header of a non-account request ({safe_url(url)})'
+        )
+    for key, value in headers.items():
+        if surface is not None and key.lower() == 'authorization':
+            continue  # pinned to the EXACT bearer by the equality above
+        name = _scrub(key)
+        for secret, label in SECRET_LABELS:
+            assert secret not in key, f'{where}: {label} rode a header NAME ({name}; {safe_url(url)})'
+            assert secret not in value, f'{where}: {label} rode the {name} header ({safe_url(url)})'
+    for secret, label in SECRET_LABELS:
+        assert secret not in body, f'{where}: {label} left the browser in the body ({safe_url(url)})'
+
+
+def _must_reject(what: str, fn) -> None:
+    """Run fn; it MUST raise AssertionError (the policy refused)."""
+    threw = False
+    try:
+        fn()
+    except AssertionError:
+        threw = True
+    assert threw, f'custody policy FAILED to reject {what}'
+
+
+def _must_accept(what: str, fn) -> None:
+    """Run fn; it MUST NOT raise (the policy accepted a documented honest
+    surface). The policy's own messages are label-safe, so echoing one here
+    cannot leak credential material."""
+    try:
+        fn()
+    except AssertionError as exc:
+        raise AssertionError(f'custody policy wrongly rejected {what}: {exc}') from exc
 
 
 def url_custody_negative_control() -> None:
-    """The SAME live policy, fed the shapes the old substring allowlist
-    accepted: attacker URLs carrying an account hostname in their path or
-    query, a suffix-spoofed hostname, and account/gateway URLs carrying the
-    sign-in in their query (the account surfaces take the sign-in from the
-    Authorization header only). Each must FAIL; the documented legacy
-    direct-relay query token and clean account/gateway URLs must PASS."""
+    """The SAME live URL policy, fed every shape that must refuse: the frozen
+    counterexamples (attacker URLs carrying an account hostname in path or
+    query, a suffix-spoofed hostname, account/gateway URLs with the sign-in
+    in their query) PLUS the exactness shapes — wrong scheme/port/path on the
+    direct exception and the account surfaces, duplicate token placements
+    (fragment, userinfo, a second field, an unexpected param), a missing
+    token field, and a canary on the legacy relay. The documented positives —
+    the exact relay dial (any field order, explicit default port), every
+    supported account path, and the clean gateway dial — must PASS."""
     def fails(url: str, what: str) -> None:
-        threw = False
-        try:
-            assert_url_custody(url, 'negative-control')
-        except AssertionError:
-            threw = True
-        assert threw, f'URL custody FAILED to reject {what}'
+        _must_reject(what, lambda: assert_url_custody(url, 'negative-control'))
 
     def passes(url: str, what: str) -> None:
-        assert_url_custody(url, 'negative-control')  # must not raise
+        _must_accept(what, lambda: assert_url_custody(url, 'negative-control'))
 
+    relay_q = 'host=127.0.0.1&port=22&token='
+    # attacker shapes around the account hostnames (frozen counterexamples)
     fails(f'https://attacker.e2e.test/sync.e2e.test?c={GOOGLE_TOKEN}',
           'an attacker URL with an account hostname in its path')
     fails(f'https://attacker.e2e.test/?upstream=sync.e2e.test&c={GOOGLE_TOKEN}',
@@ -282,10 +538,165 @@ def url_custody_negative_control() -> None:
           'a canary on the legacy relay (the exception covers the sign-in only)')
     fails(f'https://sync.e2e.test/me?x={"x" * 20}BEGIN OPENSSH PRIVATE KEY',
           'a private-key marker in an account URL')
-    passes(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}',
+    # the direct-relay exception is EXACT: scheme, port, path, shape
+    fails(f'http://direct.e2e.test/pipe?{relay_q}{GOOGLE_TOKEN}',
+          'a plain-http scheme on the legacy relay dial')
+    fails(f'wss://direct.e2e.test:444/pipe?{relay_q}{GOOGLE_TOKEN}',
+          'an effective port other than 443 on the legacy relay dial')
+    fails(f'wss://direct.e2e.test/untrusted?{relay_q}{GOOGLE_TOKEN}',
+          'a path other than /pipe on the legacy relay dial')
+    fails(f'wss://direct.e2e.test/pipe?{relay_q}{GOOGLE_TOKEN}#token={GOOGLE_TOKEN}',
+          'a duplicate copy of the sign-in in the fragment')
+    fails(f'wss://e2e:{GOOGLE_TOKEN}@direct.e2e.test/pipe?{relay_q}{GOOGLE_TOKEN}',
+          'the sign-in in userinfo')
+    fails(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}&token={GOOGLE_TOKEN}',
+          'a duplicated token field')
+    fails(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}&extra=1',
+          'an unexpected query field on the legacy relay dial')
+    fails(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22&c={GOOGLE_TOKEN}',
+          'the sign-in outside its token field')
+    fails(f'wss://direct.e2e.test/pipe?host=127.0.0.1&port=22',
+          'a relay dial without the token field')
+    fails(f'wss://direct.e2e.test/leak/{GOOGLE_TOKEN}?host=127.0.0.1&port=22&token={GOOGLE_TOKEN}',
+          'the sign-in in the relay dial path')
+    # the account surfaces are EXACT too: scheme, effective port, path, no query
+    fails('http://sync.e2e.test/me', 'a plain-http scheme on a sync surface')
+    fails('https://sync.e2e.test:444/me', 'an effective port other than 443 on a sync surface')
+    fails('https://sync.e2e.test/untrusted', 'an unsupported sync path')
+    fails('https://sync.e2e.test/me?x=1', 'a query on a sync surface')
+    fails('https://sync.e2e.test/me#frag', 'a fragment on a sync surface')
+    fails('https://e2e@sync.e2e.test/me', 'userinfo on a sync surface')
+    fails('http://gateway-broker.e2e.test/gateway/token', 'a plain-http scheme on the broker')
+    fails('https://gateway-broker.e2e.test:8443/gateway/token', 'a wrong port on the broker')
+    # the gateway dial is exact: no query, no other path
+    fails('wss://gateway.e2e.test/api/v1/hosts/other-device/ssh', 'a gateway path for another device')
+    fails('wss://gateway.e2e.test/evil', 'an unsupported gateway path')
+    # the documented positives
+    passes(f'wss://direct.e2e.test/pipe?{relay_q}{GOOGLE_TOKEN}',
            'the documented legacy direct-relay query token')
+    passes(f'wss://direct.e2e.test/pipe?port=22&host=127.0.0.1&token={GOOGLE_TOKEN}',
+           'the relay dial with its fields in any order')
+    passes(f'wss://direct.e2e.test:443/pipe?{relay_q}{GOOGLE_TOKEN}',
+           'the relay dial on the explicit default port')
+    passes('https://sync.e2e.test/me', 'a clean sync /me URL')
+    passes('https://sync.e2e.test/settings', 'a clean sync /settings URL')
     passes('https://sync.e2e.test/settings/main', 'a clean account URL')
+    passes('https://sync.e2e.test/settings/keys', 'a clean keys-slot URL')
+    passes('https://gateway-broker.e2e.test/gateway/token', 'a clean broker URL')
     passes('wss://gateway.e2e.test/api/v1/hosts/dev-e2e/ssh', 'a clean gateway URL')
+
+
+def http_custody_negative_control() -> None:
+    """The SAME captured-HTTP policy, fed the recorded-request shapes that
+    must refuse — method/scheme/port/path mismatches, wrong or missing
+    Authorization, the sign-in outside the account surfaces, EVERY
+    non-Google secret in the Authorization header and in ordinary headers
+    (on attacker origins AND on the account surfaces), and secrets in
+    bodies — plus the documented honest surface of every live request
+    builder, which must PASS."""
+    bearer = f'Bearer {GOOGLE_TOKEN}'
+
+    def fails(what: str, method: str, url: str, headers: dict, body: str = '') -> None:
+        _must_reject(what, lambda: assert_http_request_custody(method, url, headers, body, 'negative-control'))
+
+    def passes(what: str, method: str, url: str, headers: dict, body: str = '') -> None:
+        _must_accept(what, lambda: assert_http_request_custody(method, url, headers, body, 'negative-control'))
+
+    def bearer_headers(**extra):
+        return {'authorization': bearer, **extra}
+
+    # --- the documented honest surfaces (the live code's exact calls) -----
+    passes('GET /me with the exact Bearer', 'GET', 'https://sync.e2e.test/me', bearer_headers(accept='application/json'))
+    passes('GET /settings/main with the exact Bearer', 'GET', 'https://sync.e2e.test/settings/main', bearer_headers())
+    passes('PUT /settings/main envelope', 'PUT', 'https://sync.e2e.test/settings/main',
+           bearer_headers(**{'content-type': 'application/json'}), '{"data":"<envelope>","version":1}')
+    passes('PUT /settings/keys envelope', 'PUT', 'https://sync.e2e.test/settings/keys',
+           bearer_headers(**{'content-type': 'application/json'}), '{"data":"<envelope>","version":0}')
+    passes('DELETE /settings/main', 'DELETE', 'https://sync.e2e.test/settings/main', bearer_headers())
+    passes('the broker exchange: POST /gateway/token, empty body, exact Bearer',
+           'POST', 'https://gateway-broker.e2e.test/gateway/token', {'authorization': bearer})
+    passes('the app origin', 'GET', 'http://localhost:4173/config.js', {})
+    passes('a page navigation on the app origin', 'GET', 'http://localhost:4173/host/manualbox', {})
+    passes('the GIS client script', 'GET', 'https://accounts.google.com/gsi/client', {})
+    # --- surface exactness through the captured-HTTP policy ---------------
+    fails('the Google bearer on a plain-http sync surface', 'GET', 'http://sync.e2e.test/me', bearer_headers())
+    fails('the Google bearer on a wrong-port sync surface', 'GET', 'https://sync.e2e.test:444/me', bearer_headers())
+    fails('the Google bearer on an unsupported sync path', 'GET', 'https://sync.e2e.test/untrusted', bearer_headers())
+    fails('an unsupported method on /me', 'DELETE', 'https://sync.e2e.test/me', bearer_headers())
+    fails('POST is not a sync method', 'POST', 'https://sync.e2e.test/settings/main', bearer_headers(), '{}')
+    fails('GET is not the broker method', 'GET', 'https://gateway-broker.e2e.test/gateway/token', bearer_headers())
+    fails('a sync surface without the Authorization header', 'GET', 'https://sync.e2e.test/me', {})
+    fails('a wrong credential on a sync surface', 'GET', 'https://sync.e2e.test/me', {'authorization': 'Bearer someone-elses-token'})
+    fails('the sign-in in userinfo through the HTTP policy', 'GET', f'https://e2e:{GOOGLE_TOKEN}@sync.e2e.test/me', bearer_headers())
+    fails('the sign-in in a fragment through the HTTP policy', 'GET', f'https://sync.e2e.test/me#token={GOOGLE_TOKEN}', bearer_headers())
+    # --- the sign-in must never leave the account surfaces ----------------
+    fails('the sign-in in the Authorization header of a non-account request',
+          'GET', 'https://attacker.e2e.test/x', bearer_headers())
+    # --- EVERY non-Google secret, in EVERY header placement ---------------
+    for secret, label in ((CANARY, 'the config canary'), (KEY_PASSPHRASE, 'the key passphrase'),
+                          ('BEGIN OPENSSH PRIVATE KEY', 'a private-key marker'), (GOOGLE_TOKEN, 'the Google sign-in')):
+        fails(f'{label} in the Authorization header of an attacker request',
+              'GET', 'https://attacker.e2e.test/x', {'authorization': f'Bearer {secret}'})
+        fails(f'{label} in an ordinary header of an attacker request',
+              'GET', 'https://attacker.e2e.test/x', {'x-exfil': secret})
+        fails(f'{label} in an ordinary header of an account-surface request',
+              'GET', 'https://sync.e2e.test/me', bearer_headers(**{'x-trace': secret}))
+    # --- bodies ------------------------------------------------------------
+    fails('the canary in a request body', 'POST', 'https://attacker.e2e.test/x', {}, f'leak {CANARY}')
+    fails('the sign-in in a request body', 'POST', 'https://attacker.e2e.test/x', {}, f'token={GOOGLE_TOKEN}')
+    fails('the key passphrase in a sync PUT body', 'PUT', 'https://sync.e2e.test/settings/main',
+          bearer_headers(**{'content-type': 'application/json'}), f'{{"data":"{KEY_PASSPHRASE}"}}')
+
+
+def diagnostics_negative_control() -> None:
+    """The failure DIAGNOSTICS must never repeat the rejected credential:
+    feed the policies inputs poisoned in every placement (path, userinfo,
+    fragment, query value, query NAME, host, Authorization) and scan the
+    raised messages — and the safe_url/describe_authorization renderings —
+    for EVERY declared secret."""
+    poisons = [
+        f'https://attacker.e2e.test/leak/{GOOGLE_TOKEN}?x={CANARY}',
+        f'https://e2e:{GOOGLE_TOKEN}@attacker.e2e.test/',
+        f'https://attacker.e2e.test/x#{CANARY}',
+        f'https://attacker.e2e.test/?{KEY_PASSPHRASE}=1',
+        f'https://{GOOGLE_TOKEN}.attacker.io/',
+        f'wss://e2e:{GOOGLE_TOKEN}@direct.e2e.test/leak/{CANARY}#{KEY_PASSPHRASE}',
+    ]
+    for url in poisons:
+        rendered = safe_url(url)
+        for secret, label in SECRET_LABELS:
+            assert secret not in rendered, f'safe_url echoed {label} for a poisoned URL'
+        threw = False
+        try:
+            assert_url_custody(url, 'diagnostics-probe')
+        except AssertionError as exc:
+            threw = True
+            message = str(exc)
+            for secret, label in SECRET_LABELS:
+                assert secret not in message, f'the URL-policy failure message echoed {label}'
+        assert threw, 'the URL policy accepted a poisoned URL (diagnostics probe could not run)'
+    for authz in (f'Bearer {CANARY}', f'Bearer {GOOGLE_TOKEN} extra {KEY_PASSPHRASE}', CANARY, f'token={GOOGLE_TOKEN}'):
+        rendered = describe_authorization(authz)
+        for secret, label in SECRET_LABELS:
+            assert secret not in rendered, f'describe_authorization echoed {label}'
+    poisoned_requests = [
+        ('GET', f'https://sync.e2e.test/me?x={GOOGLE_TOKEN}', {}, ''),
+        ('GET', f'https://sync.e2e.test/leak/{KEY_PASSPHRASE}', {}, ''),
+        ('GET', 'https://attacker.e2e.test/x', {'authorization': f'Bearer {CANARY}'}, ''),
+        ('GET', 'https://attacker.e2e.test/x', {f'x-{CANARY}': KEY_PASSPHRASE}, ''),
+        ('PUT', 'https://sync.e2e.test/settings/main', {'authorization': f'Bearer {GOOGLE_TOKEN}'}, CANARY),
+        ('GET', f'wss://direct.e2e.test/wrong?token={GOOGLE_TOKEN}#{GOOGLE_TOKEN}', {}, ''),
+    ]
+    for method, url, headers, body in poisoned_requests:
+        threw = False
+        try:
+            assert_http_request_custody(method, url, headers, body, 'diagnostics-probe')
+        except AssertionError as exc:
+            threw = True
+            message = str(exc)
+            for secret, label in SECRET_LABELS:
+                assert secret not in message, f'the captured-HTTP failure message echoed {label}'
+        assert threw, 'the captured-HTTP policy accepted a poisoned request (diagnostics probe could not run)'
 
 
 def clear_ack_reached(terminal_text: str, ack: str) -> bool:
@@ -555,7 +966,7 @@ async def handle_broker(route):
     authz = (await req.header_value('authorization')) or ''
     assert authz == f'Bearer {GOOGLE_TOKEN}', (
         f'broker saw an unexpected Authorization header '
-        f'(shape: {authz.split(" ")[0] if authz else "empty"}, length {len(authz)})'
+        f'(shape: {describe_authorization(authz)})'
     )
     await route.fulfill(
         content_type='application/json',
@@ -653,8 +1064,11 @@ async def main() -> int:
     custody_negative_control()
     gateway_auth_negative_control()
     url_custody_negative_control()
+    http_custody_negative_control()
+    diagnostics_negative_control()
     osc52_clear_ack_negative_control()
-    print('negative controls: custody oracle, gateway auth-frame recorder, URL policy and OSC 52 ack matcher all bite')
+    print('negative controls: custody oracle, gateway auth-frame recorder, the exact-surface URL policy,'
+          ' the captured-HTTP policy, failure diagnostics and the OSC 52 ack matcher all bite')
 
     sync = FakeSync()
     relay = FakeRelay(FIXTURE_PORT)
@@ -931,37 +1345,26 @@ async def main() -> int:
     # --- wire-level assertions ----------------------------------------------
     # 0. The custody oracle's surfaces, stated exactly as implemented:
     #      - EVERY HTTP request the page made (captured with method, URL,
-    #        headers and body): the parsed-origin URL policy, the
-    #        Authorization rule (the sign-in may ride that header ONLY to
-    #        the account surfaces, and there as the exact bearer), and a
+    #        headers and body) through ONE captured-HTTP policy
+    #        (assert_http_request_custody): the structured exact-surface URL
+    #        rules (scheme/host/effective port/path/query — see
+    #        assert_url_custody), the method rule and the exact-Bearer
+    #        Authorization rule on the account surfaces only, a FULL
+    #        secret-set scan of every header value (the exact account bearer
+    #        is the single exempt value, pinned by equality), and a
     #        full-set body scan (the sync envelopes are additionally
     #        shape-checked and decrypted below);
     #      - the direct-relay and gateway WebSocket dial URLs, through the
-    #        same per-surface policy;
+    #        same structured per-surface policy (the gateway dial has NO
+    #        query — its admission token rides the auth frame);
     #      - EVERY recorded relay/gateway frame — binary AND text, the
     #        gateway's first/auth TEXT frame included — through the SAME
     #        oracle.
-    #    The negative controls above proved the oracle, the gateway recorder
-    #    and the URL policy bite; THIS run's coverage is the live recordings
-    #    going through them.
+    #    The negative controls above proved the oracle, the gateway recorder,
+    #    the URL policy, the captured-HTTP policy and the failure diagnostics
+    #    bite; THIS run's coverage is the live recordings going through them.
     for method, url, headers, body in http_log:
-        assert_url_custody(url, f'HTTP {method}')
-        host = (urlsplit(url).hostname or '').lower()
-        authz = headers.get('authorization', '')
-        if host in ACCOUNT_HOSTS:
-            assert authz == f'Bearer {GOOGLE_TOKEN}', (
-                f'{method} {redacted_url(url)} carried an unexpected Authorization header '
-                f'(shape: {authz.split(" ")[0] if authz else "empty"}, length {len(authz)})'
-            )
-        else:
-            assert GOOGLE_TOKEN not in authz, (
-                f'the Google sign-in rode the Authorization header of {method} {redacted_url(url)}'
-            )
-        assert all(GOOGLE_TOKEN not in v for k, v in headers.items() if k != 'authorization'), (
-            f'the Google sign-in rode a non-Authorization header of {method} {redacted_url(url)}'
-        )
-        for secret, label in SECRET_LABELS:
-            assert secret not in body, f'{label} left the browser in the body of {method} {redacted_url(url)}'
+        assert_http_request_custody(method, url, headers, body, f'HTTP {method}')
     for url in relay.urls:
         assert_url_custody(url, 'the direct-relay dial')
     for url in gateway.urls:
