@@ -18,21 +18,26 @@ stack_output() {
 SITE_BUCKET="${SITE_BUCKET:-$(stack_output SiteBucketName)}"
 CF_DISTRIBUTION_ID="${CF_DISTRIBUTION_ID:-$(stack_output SiteDistributionId)}"
 WS_URL="${WS_URL:-$(stack_output WsUrl)}"
-# Browser-direct relay (aws-infra sandbox/pocketshell-relay). Auto-detected
-# from its stack output once that stack exists; DIRECT_WS_URL=... overrides,
-# DIRECT_WS_URL='' forces empty (bridge only).
+# Browser-direct gateway (server code lives in the private
+# PocketShell-io/pocketshell-gateway repo; the retired aws-infra
+# sandbox/pocketshell-relay CFN stack still owns the host). The URL is the
+# fixed canonical hostname from the gateway migration — deliberately NOT
+# read from the stack's WsUrl output, which still names the legacy
+# relay.pocketshell.io alias. DIRECT_WS_URL=... overrides,
+# DIRECT_WS_URL='' forces empty (bridge only); no discovered stack also
+# leaves it empty (bridge only).
 if [ ! "${DIRECT_WS_URL+x}" = x ]; then
-  # `|| true` matters as much as the 2>/dev/null: with set -e, an assignment
-  # from a failing substitution (absent stack → aws exits 255) kills the
-  # script silently. That, not the guard below, is why every deploy since
-  # this block landed died before the build — locally and in CI.
-  DIRECT_WS_URL="$(aws cloudformation describe-stacks --region "$REGION" \
-    --stack-name pocketshell-relay \
-    --query "Stacks[0].Outputs[?OutputKey=='WsUrl'].OutputValue" --output text 2>/dev/null || true)"
-  # Bare `[ ... ] && ...` would kill the script under set -e whenever the
-  # stack is absent — the reason every deploy silently no-opped since this
-  # line landed. An empty relay output keeps the Lambda bridge.
-  if [ "$DIRECT_WS_URL" = "None" ]; then DIRECT_WS_URL=""; fi
+  DIRECT_WS_URL=""
+  # Plain `if aws ...`, not an assignment from $(...): with set -e an
+  # assignment from a failing substitution (absent stack → aws exits 255)
+  # kills the script silently — that is why every deploy once died before
+  # the build, locally and in CI. A role without
+  # cloudformation:DescribeStacks (the CI deploy role) also lands here.
+  if aws cloudformation describe-stacks --region "$REGION" \
+      --stack-name pocketshell-relay \
+      --query "Stacks[0].StackId" --output text >/dev/null 2>&1; then
+    DIRECT_WS_URL="wss://gateway.pocketshell.io/"
+  fi
 fi
 
 [ -n "$SITE_BUCKET" ] || { echo "SITE_BUCKET not set and stack not deployed" >&2; exit 1; }
