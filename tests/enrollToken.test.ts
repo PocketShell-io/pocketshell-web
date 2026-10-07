@@ -88,28 +88,6 @@ describe('enrollmentTokenExpiresAndClosedRequestCannotRepopulate', () => {
     expect(h.copy).not.toHaveBeenCalled(); // copy stays disabled after expiry
   });
 
-  it('expiry clears a stale manual-copy error: a dead token shows no copy hint', async () => {
-    // copyAgain is refused INSIDE the window: the token stays in the field
-    // behind the manual-copy hint. When the token then expires, the hint is
-    // stale — the dialog must not announce "copy it by hand" for a token it
-    // no longer holds, on top of the expired notice.
-    const blocked = harness(
-      () => Promise.resolve({ token: TOKEN_B, expiresAtMs: Date.now() + 5_000 }),
-      () => Promise.reject(new Error('blocked')),
-    );
-    blocked.controller.open();
-    await blocked.controller.generate(); // auto-copy rejects too: manual-copy state
-    await blocked.controller.copyAgain(); // the hint is now up
-    expect(blocked.latest().token).toBe(TOKEN_B);
-    expect(blocked.latest().error).toMatch(/blocked/);
-    expect(blocked.latest().expired).toBe(false);
-    // The timer fires: the stale hint dies WITH the token.
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(blocked.latest().token).toBe('');
-    expect(blocked.latest().expired).toBe(true);
-    expect(blocked.latest().error).toBe('');
-  });
-
   it('copyAgain refuses once expired and works before it', async () => {
     const h = harness(() => Promise.resolve({ token: TOKEN_B, expiresAtMs: Date.now() + 60_000 }));
     h.controller.open();
@@ -298,29 +276,49 @@ describe('clipboard completions are wall-clock bound too', () => {
     vi.useRealTimers();
   });
 
-  function harnessWithPendingCopy(resolvers: Array<() => void>, rejectFirst = false) {
-    let n = 0;
+  /** Per-write settle control: the k-th clipboard write is settled by
+   * `resolvers[k](false)` (RESOLVE) or `resolvers[k](true)` (REJECT) —
+   * every write gets its OWN promise and its OWN verdict, so a "late
+   * rejection" test can actually reject the write it names (the old
+   * reject-first counter rejected only write #0; every later write
+   * silently resolved). */
+  type WriteSettle = (reject: boolean) => void;
+  function harnessWithPendingCopy(resolvers: WriteSettle[]): ReturnType<typeof harness> {
     const h = harness(
       () => Promise.resolve({ token: TOKEN_A, expiresAtMs: Date.now() + 5_000 }),
       () =>
         new Promise<void>((resolve, reject) => {
-          // A blocked clipboard blocks EVERY write, not just the first: the
-          // rejection-labelled regressions must drive their pending write to
-          // an actual rejection, never a silent resolve (which would exercise
-          // the success branch and prove nothing about the refusal path).
-          const settle = () => {
-            n += 1;
-            if (rejectFirst) reject(new Error('blocked'));
-            else resolve();
-          };
-          resolvers.push(() => settle());
+          resolvers.push((rejectWrite: boolean) =>
+            rejectWrite ? reject(new Error('blocked')) : resolve(),
+          );
         }),
     );
     return h;
   }
 
+  /** The starting state the retirement regressions below require: an
+   * in-window MANUAL-copy failure has left the "copy it by hand" hint up
+   * over a still-copyable token. (The AUTO-copy's in-window rejection
+   * deliberately sets no error — the token just stays in the field.) */
+  async function establishManualCopyHint(
+    h: ReturnType<typeof harnessWithPendingCopy>,
+    resolvers: WriteSettle[],
+  ): Promise<void> {
+    h.controller.open();
+    const generating = h.controller.generate();
+    await vi.advanceTimersByTimeAsync(0); // mint landed, auto-copy pending
+    resolvers[0]!(true); // the AUTO-copy is refused inside the window
+    await generating;
+    expect(h.latest().token).toBe(TOKEN_A); // kept in the field for a manual copy
+    expect(h.latest().copied).toBe(false);
+    const firstRetry = h.controller.copyAgain();
+    resolvers[1]!(true); // the manual retry is refused inside the window
+    await firstRetry;
+    expect(h.latest().error).toContain('copy it by hand'); // the hint is up
+  }
+
   it('autoCopySuccessAfterWallClockExpiryRetiresInsteadOfCopied', async () => {
-    const resolvers: Array<() => void> = [];
+    const resolvers: WriteSettle[] = [];
     const h = harnessWithPendingCopy(resolvers);
     h.controller.open();
     const generating = h.controller.generate();
@@ -330,7 +328,7 @@ describe('clipboard completions are wall-clock bound too', () => {
     // The tab is backgrounded: the timer never fires, the wall clock passes
     // the broker's deadline while the write is still in flight.
     vi.setSystemTime(Date.now() + 6_000);
-    resolvers[0]!(); // the write RESOLVES now
+    resolvers[0]!(false); // the write RESOLVES now
     await generating;
     expect(h.latest().token).toBe(''); // retired, not left copyable
     expect(h.latest().expired).toBe(true);
@@ -340,13 +338,13 @@ describe('clipboard completions are wall-clock bound too', () => {
   });
 
   it('autoCopyRejectionAfterWallClockExpiryRetiresInsteadOfHinting', async () => {
-    const resolvers: Array<() => void> = [];
-    const h = harnessWithPendingCopy(resolvers, true);
+    const resolvers: WriteSettle[] = [];
+    const h = harnessWithPendingCopy(resolvers);
     h.controller.open();
     const generating = h.controller.generate();
     await vi.advanceTimersByTimeAsync(0);
     vi.setSystemTime(Date.now() + 6_000);
-    resolvers[0]!(); // the write REJECTS now
+    resolvers[0]!(true); // the write REJECTS now
     await generating;
     expect(h.latest().token).toBe('');
     expect(h.latest().expired).toBe(true);
@@ -357,17 +355,17 @@ describe('clipboard completions are wall-clock bound too', () => {
   });
 
   it('copyAgainSuccessAfterWallClockExpiryRetires', async () => {
-    const resolvers: Array<() => void> = [];
+    const resolvers: WriteSettle[] = [];
     const h = harnessWithPendingCopy(resolvers);
     h.controller.open();
     const generating = h.controller.generate();
     await vi.advanceTimersByTimeAsync(0); // mint landed, auto-copy pending
-    resolvers[0]!(); // the auto-copy lands inside the window
+    resolvers[0]!(false); // the auto-copy lands inside the window
     await generating;
     expect(h.latest().copied).toBe(true);
     const pending = h.controller.copyAgain(); // second write, pending
     vi.setSystemTime(Date.now() + 6_000); // clock passes the deadline, timer unfired
-    resolvers[1]!(); // the copyAgain write resolves
+    resolvers[1]!(false); // the copyAgain write resolves
     await pending;
     expect(h.latest().token).toBe('');
     expect(h.latest().expired).toBe(true);
@@ -375,22 +373,49 @@ describe('clipboard completions are wall-clock bound too', () => {
   });
 
   it('copyAgainRejectionAfterWallClockExpiryRetires', async () => {
-    const resolvers: Array<() => void> = [];
-    const h = harnessWithPendingCopy(resolvers, true);
-    h.controller.open();
-    const generating = h.controller.generate();
-    await vi.advanceTimersByTimeAsync(0);
-    resolvers[0]!(); // auto-copy rejects inside the window: manual-copy state
-    await generating;
-    expect(h.latest().token).toBe(TOKEN_A); // kept in the field for a manual copy
-    expect(h.latest().copied).toBe(false);
-    const pending = h.controller.copyAgain(); // manual retry, pending
-    vi.setSystemTime(Date.now() + 6_000);
-    resolvers[1]!(); // rejects late
+    // The required regression shape: FIRST an in-window manual-copy failure
+    // leaves the hint up, THEN the wall clock expires with the timers
+    // throttled, THEN that later write settles — truly REJECTED, like the
+    // copy it retried. Retirement must clear the stale hint with
+    // everything else: no token, no error, not copied, expired.
+    const resolvers: WriteSettle[] = [];
+    const h = harnessWithPendingCopy(resolvers);
+    await establishManualCopyHint(h, resolvers);
+    const pending = h.controller.copyAgain(); // the next manual write, in flight
+    vi.setSystemTime(Date.now() + 6_000); // the throttled timer never fires
+    resolvers[2]!(true); // the pending manual write is REJECTED late
     await pending;
-    expect(h.latest().token).toBe('');
+    expect(h.latest().token).toBe(''); // retired, not left copyable
     expect(h.latest().expired).toBe(true);
     expect(h.latest().copied).toBe(false);
     expect(h.latest().error).toBe(''); // the stale hint died with the token
+  });
+
+  it('staleManualCopyHintDiesWhenTheExpiryTimerFires', async () => {
+    // Retirement route: the timer itself. The hint outlives neither the
+    // token nor the field it hints at.
+    const resolvers: WriteSettle[] = [];
+    const h = harnessWithPendingCopy(resolvers);
+    await establishManualCopyHint(h, resolvers);
+    await vi.advanceTimersByTimeAsync(6_000); // the expiry timer fires
+    expect(h.latest().token).toBe('');
+    expect(h.latest().expired).toBe(true);
+    expect(h.latest().copied).toBe(false);
+    expect(h.latest().error).toBe('');
+  });
+
+  it('staleManualCopyHintDiesAtTheCopyEntryClockCheck', async () => {
+    // Retirement route: the wall clock passes the deadline with the timer
+    // unfired, and the next copy entry refuses and retires on the spot.
+    const resolvers: WriteSettle[] = [];
+    const h = harnessWithPendingCopy(resolvers);
+    await establishManualCopyHint(h, resolvers);
+    vi.setSystemTime(Date.now() + 6_000);
+    await h.controller.copyAgain(); // refused at the entry, retired here
+    expect(h.copy).toHaveBeenCalledTimes(2); // the refused retry started no write
+    expect(h.latest().token).toBe('');
+    expect(h.latest().expired).toBe(true);
+    expect(h.latest().copied).toBe(false);
+    expect(h.latest().error).toBe('');
   });
 });

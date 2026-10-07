@@ -8,11 +8,27 @@
 #   dumb WebSocket<->TCP relay pipe → real sessions on the container → the
 #   folder-first workspace's "Start a session here" → Shell → the shipping
 #   TerminalView xterm answering a remote OSC 52 yank in the browser
-#   clipboard (and refusing a remote "clear") → a full gateway-protocol dial
+#   clipboard (and refusing a remote "clear", acknowledged by the same
+#   command's real output) → a full gateway-protocol dial
 #   (broker exchange, auth frame with only the scoped token, ready, real SSH
 #   behind it) against a protocol-shaped WS fixture with the real sshd
 #   behind IT. The fixture is protocol-shaped, NOT the Go production
 #   gateway; no production-gateway evidence is claimed from this run.
+# Every wire surface the browser touches is custody-scanned — HTTP requests
+# through ONE captured-HTTP policy (the structured exact-surface URL rules
+# pinning scheme/host/effective port/path/query for the direct relay, gateway,
+# sync and broker fixtures, scanning RAW and DECODED URL components and every
+# decoded query name/value; the method + exact-Bearer Authorization rule on
+# the account surfaces; a full secret-set scan of every COMPLETE captured
+# header value and body — all_headers + the duplicate-preserving headers_array,
+# since the request.headers property omits security/cookie headers, every
+# capture awaited before the verdict, a second Authorization entry refused),
+# the direct-relay and gateway WebSocket dial URLs through the same
+# URL policy, and EVERY recorded relay/gateway frame (binary AND text, the
+# gateway's first/auth TEXT frame included) — with offline negative controls
+# proving the oracle, the recorder, the URL policy, the captured-HTTP policy,
+# the complete-header capture path and the credential-safe failure diagnostics
+# (broker handler and live method/where construction included) bite.
 #
 # Usage: tests/e2e/run-e2e.sh
 # Requires: docker, /usr/bin/python3 with playwright + cryptography,
