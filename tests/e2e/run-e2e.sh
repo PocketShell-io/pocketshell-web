@@ -80,7 +80,7 @@ Host manualbox
 
 Host keylesstest
   HostName 127.0.0.1
-  Port 3202
+  Port 3203
   User testuser
 
 Host *.pool.example.com !keep.pool.example.com

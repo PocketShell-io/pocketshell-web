@@ -12,15 +12,21 @@ real (see run-e2e.sh):
                       (cryptography is a test-side dependency, like the
                       desktop app's node:crypto) to prove what LEFT the
                       browser and that it was ciphertext until it left.
-  bridge.e2e.test     the bridge PROPER: it takes the `connect` frame's key
-                      (and passphrase, when the key is encrypted) and opens a
-                      REAL SSH session to the pocketshell-test:ssh container
-                      with paramiko. If the browser sent the wrong key or a
-                      wrong passphrase, this ssh handshake fails and the test
-                      fails — nothing about the final hop is stubbed.
-                      The session's PTY output also carries an OSC 52 yank,
-                      so the clipboard assertions prove the terminal answers
-                      the remote's copy sequence in-browser.
+  direct.e2e.test      the browser-direct transport, end to end: a dumb
+                       WebSocket<->TCP pipe (what relay/ deploys). The
+                       browser runs its own ssh2 client and speaks REAL SSH
+                       to the pocketshell-test:ssh container through the
+                       pipe; nothing about the final hop is stubbed. A wrong
+                       key or passphrase fails the handshake and the route
+                       never reaches the host workspace, which is the pass
+                       marker. Because the pipe is dumb, the test can prove
+                       the transport's core property: the private key, its
+                       passphrase and the config canary appear in no byte
+                       the browser puts on the wire.
+                       The old OSC 52 clipboard leg needs a live xterm,
+                       which the folder-first workspace redesign moved out
+                       of this flow's reach (tests/osc52.test.ts pins the
+                       custody; re-wiring it is the named follow-up).
 
 Usage: /usr/bin/python3 tests/e2e/e2e_hosts_keys.py <base-url> <workdir> <fixture-port>
 """
@@ -29,12 +35,9 @@ import asyncio
 import base64
 import json
 import os
-import stat
 import sys
-import tempfile
 import time
 
-import paramiko
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -47,16 +50,11 @@ FIXTURE_PORT = int(sys.argv[3])
 SYNC_PASSPHRASE = 'e2e-sync-pass-entence'
 KEY_PASSPHRASE = 'e2e-key-passphrase'
 CANARY = 'e2e-canary-7f3k4m'
-OSC52_CANARY = 'e2e-osc52-yank-qk9w2m'
-
-
-def osc52_yank(text: str) -> bytes:
-    """What a remote tmux yank paints on the PTY: ESC ] 52 ; Pc ; Pt BEL."""
-    return f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07".encode()
 
 CONFIG_STUB = (
     "window.POCKETSHELL_WEB = { syncApiUrl: 'https://sync.e2e.test', "
-    "googleClientId: 'stub.apps.googleusercontent.com', wsUrl: 'wss://bridge.e2e.test/link' };"
+    "googleClientId: 'stub.apps.googleusercontent.com', wsUrl: 'wss://bridge.e2e.test/link', "
+    "directWsUrl: 'wss://direct.e2e.test/pipe' };"
 )
 
 GIS_STUB = """
@@ -95,113 +93,140 @@ def decrypt_envelope(envelope: str, passphrase: str) -> str:
 
 
 class FakeSync:
-    """The account slot as the real API behaves: opaque data in, same out."""
+    """The settings API as the real one behaves: PER-SLOT opaque blobs, each
+    with its own version — `main` (the host list) and `keys` (the roaming
+    credential envelope) are independent slots, so one slot's writes never
+    advance the other's base version."""
 
     def __init__(self):
-        self.version = 0
-        self.data: str | None = None
+        self.versions = {'main': 0, 'keys': 0}
+        self.data = {'main': None, 'keys': None}
         self.put_bodies: list[dict] = []
         self.all_bodies: list[tuple[str, str, str]] = []
+
+    def _slot(self, url: str) -> str | None:
+        for name in ('main', 'keys'):
+            if url.endswith(f'/settings/{name}'):
+                return name
+        return None
 
     async def handle(self, route):
         req = route.request
         body = req.post_data or ''
         self.all_bodies.append((req.method, req.url, body))
-        if req.method == 'GET' and req.url.endswith('/settings/main'):
-            if self.data is None:
+        if req.url.endswith('/me'):
+            await route.fulfill(content_type='application/json', body='{"sub":"e2e","email":"e2e@pocketshell.test"}')
+            return
+        slot = self._slot(req.url)
+        if slot is None:
+            await route.fulfill(status=404, content_type='application/json', body='{}')
+            return
+        if req.method == 'GET':
+            if self.data[slot] is None:
                 await route.fulfill(status=404, content_type='application/json', body='{"message":"no slot"}')
             else:
                 await route.fulfill(
                     content_type='application/json',
-                    body=json.dumps({'slot': 'main', 'version': self.version, 'data': self.data}),
+                    body=json.dumps({'slot': slot, 'version': self.versions[slot], 'data': self.data[slot]}),
                 )
-        elif req.method == 'PUT' and req.url.endswith('/settings/main'):
+        elif req.method == 'PUT':
             parsed = json.loads(body)
-            assert parsed['version'] == self.version, f'base version {parsed["version"]} != {self.version}'
+            assert parsed['version'] == self.versions[slot], (
+                f'{slot} base version {parsed["version"]} != {self.versions[slot]}'
+            )
             self.put_bodies.append(parsed)
-            self.data = parsed['data']
-            self.version += 1
-            await route.fulfill(content_type='application/json', body=json.dumps({'version': self.version}))
-        elif req.method == 'GET' and req.url.endswith('/me'):
-            await route.fulfill(content_type='application/json', body='{"sub":"e2e","email":"e2e@pocketshell.test"}')
+            self.data[slot] = parsed['data']
+            self.versions[slot] += 1
+            await route.fulfill(content_type='application/json', body=json.dumps({'version': self.versions[slot]}))
         else:
             await route.fulfill(status=404, content_type='application/json', body='{}')
 
 
-class FakeBridge:
-    """Takes the connect frame's credentials at face value and really dials."""
+class FakeRelay:
+    """The browser-direct transport, end to end: a dumb WebSocket<->TCP pipe
+    — exactly what relay/ deploys. The browser runs its own ssh2 client and
+    speaks REAL SSH straight at the fixture's sshd; this side only ferries
+    opaque bytes between the WebSocket and 127.0.0.1:<fixture-port> and is
+    deliberately positioned to PROVE it can never read the credentials: the
+    private key, its passphrase and the config canary must appear in no byte
+    the browser ever puts on this wire."""
 
     def __init__(self, fixture_port: int):
         self.fixture_port = fixture_port
-        self.connect_frames: list[dict] = []
-        self.ws_data_frames = 0
-        self.ssh_outputs: dict[str, str] = {}
-        self.ssh_errors: dict[str, str] = {}
-        self.last_ws = None
+        self.dials = 0
+        self.pipes: list["_RelayPipe"] = []
 
     async def handle(self, ws):
-        async def run_ssh(frame: dict, tag: str):
-            def blocking():
-                auth = frame['auth']
-                fd, path = tempfile.mkstemp(suffix='.pem')
-                with os.fdopen(fd, 'w') as f:
-                    f.write(auth['privateKey'])
-                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-                try:
-                    client = paramiko.SSHClient()
-                    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    client.connect(
-                        '127.0.0.1',
-                        port=self.fixture_port,
-                        username=frame['username'],
-                        key_filename=path,
-                        passphrase=auth.get('passphrase'),
-                        look_for_keys=False,
-                        allow_agent=False,
-                        timeout=20,
-                        banner_timeout=20,
-                    )
-                    _, out, err = client.exec_command('echo PS-E2E-$(id -un)-OK')
-                    text = out.read().decode() + err.read().decode()
-                    client.close()
-                    return text, None
-                except Exception as e:  # noqa: BLE001 - the test reports it
-                    return None, str(e)
-                finally:
-                    os.unlink(path)
+        self.dials += 1
+        pipe = _RelayPipe(self.fixture_port)
+        self.pipes.append(pipe)
 
-            text, error = await asyncio.to_thread(blocking)
-            if text is None:
-                self.ssh_errors[tag] = error or 'unknown'
-                ws.send(json.dumps({'type': 'error', 'message': 'ssh connect failed'}))
+        def on_message(payload) -> None:
+            if isinstance(payload, str):
+                # The SSH transport speaks binary; any text frame is protocol
+                # noise worth keeping visible in the custody dump.
+                pipe.browser_text.append(payload)
                 return
-            self.ssh_outputs[tag] = text
-            # The PTY stream carries an OSC 52 yank, exactly like a tmux
-            # copy on the real box would; the terminal must answer it.
-            payload = text.encode() + osc52_yank(OSC52_CANARY)
-            ws.send(json.dumps({'type': 'data', 'data': base64.b64encode(payload).decode()}))
+            pipe.relayed += payload
+            pipe.to_server(payload)
 
-        def on_frame(payload) -> None:
-            if not isinstance(payload, str):
-                return
-            frame = json.loads(payload)
-            if frame['type'] == 'connect':
-                tag = f"conn{len(self.connect_frames)}"
-                frame['_tag'] = tag
-                self.connect_frames.append(frame)
-                self.last_ws = ws
-                ws.send(json.dumps({'type': 'connected'}))
-                asyncio.ensure_future(run_ssh(frame, tag))
-            elif frame['type'] == 'ping':
-                ws.send(json.dumps({'type': 'pong'}))
-            elif frame['type'] == 'data':
-                self.ws_data_frames += 1
+        ws.on_message(on_message)
 
-        ws.on_message(on_frame)
+        async def pump():
+            try:
+                await pipe._connect
+                while True:
+                    chunk = await pipe._reader.read(4096)
+                    if not chunk:
+                        break
+                    pipe.from_server += chunk
+                    ws.send(bytes(chunk))
+            except (ConnectionError, OSError):
+                pass
 
-    def send_pty(self, raw: bytes) -> None:
-        """Push raw bytes at the browser as if the remote PTY printed them."""
-        self.last_ws.send(json.dumps({'type': 'data', 'data': base64.b64encode(raw).decode()}))
+        pump_task = asyncio.ensure_future(pump())
+
+        def on_close() -> None:
+            pipe.close()
+            pump_task.cancel()
+
+        ws.on_close(on_close)
+
+    def every_relayed_byte(self) -> bytes:
+        return b"".join(p.relayed for p in self.pipes)
+
+
+class _RelayPipe:
+    """One dial: the browser's WebSocket piped to the fixture's TCP sshd."""
+
+    def __init__(self, fixture_port: int):
+        self.relayed = b""
+        self.browser_text: list[str] = []
+        self.from_server = b""
+        self._writer = None
+        self._reader = None
+        self._pending: list[bytes] = []
+        self._connect = asyncio.ensure_future(asyncio.open_connection("127.0.0.1", fixture_port))
+
+        def _ready(task):
+            self._reader, self._writer = task.result()
+            for chunk in self._pending:
+                self._writer.write(chunk)
+            self._pending.clear()
+
+        self._connect.add_done_callback(_ready)
+
+    def to_server(self, payload: bytes) -> None:
+        if self._writer is None:
+            # First browser bytes arrive before the TCP dial resolves; park
+            # them and flush once it does (the SSH banner waits either way).
+            self._pending.append(payload)
+            return
+        self._writer.write(payload)
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
 
 
 async def wait_for(predicate, timeout: float, what: str):
@@ -213,9 +238,32 @@ async def wait_for(predicate, timeout: float, what: str):
     raise AssertionError(f'timed out waiting for {what}')
 
 
+# Failure diagnostics: the flow's page + console errors, dumped when the run
+# dies mid-flow so a stalled selector names what the app was actually showing.
+PAGE = None
+CONSOLE_ERRORS: list[str] = []
+
+
+async def dump_diagnostics() -> None:
+    try:
+        print(f'--- failure diagnostics: url={PAGE.url}')
+        print('--- console errors ---')
+        for e in CONSOLE_ERRORS:
+            print(f'  {e}')
+        shot = os.path.abspath('e2e-failure.png')
+        await PAGE.screenshot(path=shot)
+        print(f'--- screenshot: {shot}')
+        text = await PAGE.inner_text('body')
+        print('--- visible text (first 1500 chars) ---')
+        print(text[:1500])
+    except Exception as e:  # noqa: BLE001 - diagnostics must never mask the error
+        print(f'(diagnostics unavailable: {e})')
+
+
 async def main() -> int:
+    global PAGE
     sync = FakeSync()
-    bridge = FakeBridge(FIXTURE_PORT)
+    relay = FakeRelay(FIXTURE_PORT)
     console_errors: list[str] = []
 
     async with async_playwright() as p:
@@ -227,23 +275,26 @@ async def main() -> int:
             permissions=['clipboard-read', 'clipboard-write'],
         )
         page = await context.new_page()
+        PAGE = page
         page.on(
             'console',
             # Resource 404s from the fake API are the protocol working
             # (first pull is a legitimate 404); anything else is a bug.
-            lambda m: console_errors.append(m.text)
+            lambda m: (console_errors.append(m.text), CONSOLE_ERRORS.append(m.text))
             if m.type == 'error' and 'Failed to load resource' not in m.text
             else None,
         )
         await page.route('**/config.js', lambda r: r.fulfill(content_type='application/javascript', body=CONFIG_STUB))
         await page.route('**/accounts.google.com/gsi/client*', lambda r: r.fulfill(content_type='application/javascript', body=GIS_STUB))
         await page.route('**/sync.e2e.test/**', sync.handle)
-        await page.route_web_socket('**/bridge.e2e.test/**', bridge.handle)
+        await page.route_web_socket('**/direct.e2e.test/**', relay.handle)
 
         # --- sign in and unlock (empty account) -----------------------------
         await page.goto(BASE + '/', wait_until='networkidle')
         await page.evaluate(f"window.__gsiInit.callback({{credential: '{fake_jwt()}'}})")
-        await page.wait_for_url('**/app')
+        # Sign-in now lands on the shared host picker (route /); host prep —
+        # unlock, keys, import — lives one hop away on /app.
+        await page.goto(BASE + '/app', wait_until='networkidle')
         await page.fill('input[type=password]', SYNC_PASSPHRASE)
         await page.click('button.primary:has-text("Unlock")')
         await page.wait_for_selector('text=No hosts synced yet')
@@ -261,22 +312,23 @@ async def main() -> int:
         await page.set_input_files('input[aria-label="Private key file"]', os.path.join(WORK, 'key_plain'))
         await page.fill('input[aria-label="Key passphrase"]', '')
         await page.locator('details.keybox', has_text='Private key for manualbox').get_by_role('button', name='Save').click()
-        await page.wait_for_selector('text=Key for manualbox stored in this browser.')
+        await page.wait_for_selector('text=Key for manualbox stored encrypted')
         # The credential envelope is in localStorage; it must be opaque.
         local = await page.evaluate("localStorage.getItem('ps.hostKeys')")
         assert 'BEGIN' not in local and KEY_PASSPHRASE not in local, 'plaintext credential in localStorage!'
 
-        # --- connect: the fake bridge dials the REAL container --------------
+        # --- connect: the browser's own ssh2 dials the REAL container -------
         await page.locator('.host-row', has_text='manualbox').get_by_role('button', name='Connect').click()
-        await wait_for(
-            lambda: any('PS-E2E-testuser-OK' in v for v in bridge.ssh_outputs.values()),
-            30,
-            'ssh session on the fixture using the uploaded key',
-        )
-        term_status = page.locator('.topbar').nth(1).locator('span.muted')
-        await page.wait_for_function("document.querySelectorAll('.topbar')[1]?.querySelector('span.muted')?.textContent === 'connected'")
-        assert (await term_status.inner_text()) == 'connected'
-        await page.locator('.topbar').nth(1).get_by_role('button', name='← Hosts').click()
+        # A successful dial navigates to the host's workspace only after the
+        # browser's ssh2 reported `ready` — the real sshd accepted the
+        # uploaded key, or the route never moves.
+        await page.wait_for_url('**/host/manualbox', timeout=30_000)
+        # Back to host prep: a full navigation (a fresh app open, as a user
+        # would do it) resets the in-memory stores — so it means unlocking
+        # again, and the connection itself was never the unlock's cargo.
+        await page.goto(BASE + '/app', wait_until='networkidle')
+        await page.fill('input[type=password]', SYNC_PASSPHRASE)
+        await page.click('button.primary:has-text("Unlock")')
         await page.wait_for_selector('button:has-text("Import config")')
 
         # --- import from SSH config -----------------------------------------
@@ -300,7 +352,7 @@ async def main() -> int:
         await page.set_input_files('input[aria-label="Private key file"]', os.path.join(WORK, 'key_enc'))
         await page.fill('input[aria-label="Key passphrase"]', KEY_PASSPHRASE)
         await page.locator('details.keybox', has_text='Private key for dockertest').get_by_role('button', name='Save').click()
-        await page.wait_for_selector('text=Key for dockertest stored in this browser.')
+        await page.wait_for_selector('text=Key for dockertest stored encrypted')
         # Saving the one key re-opens the credentials step for the host that
         # still lacks one; Done leaves the flow.
         await page.wait_for_selector('button:has-text("Done for now")')
@@ -309,51 +361,37 @@ async def main() -> int:
         await page.click('button:has-text("Done for now")')
         await page.wait_for_selector('text=Imported 2 hosts')
 
-        # A host without a stored key must refuse to connect (client-side guard).
+        # A host without a stored key must refuse to connect (client-side guard):
+        # the refusal surfaces in the shared connection store, not as a
+        # navigation — nothing dials and no relay socket opens.
+        dials_before = relay.dials
         await page.locator('.host-row', has_text='keylesstest').get_by_role('button', name='Connect').click()
-        await page.wait_for_selector('text=No key attached for this host yet')
-        await page.locator('.topbar').nth(1).get_by_role('button', name='← Hosts').click()
-        await page.wait_for_selector('button:has-text("Import config")')
+        await page.wait_for_timeout(3_000)
+        assert relay.dials == dials_before, 'a keyless host must not open a relay socket'
+        assert '/host/' not in page.url, 'a refused dial must not navigate to the host'
 
         # --- connect the imported host: passphrase must travel and work ----
         await page.locator('.host-row', has_text='dockertest').get_by_role('button', name='Connect').click()
-        await wait_for(
-            lambda: any('PS-E2E-testuser-OK' in v for v in bridge.ssh_outputs.values()) and len(bridge.ssh_outputs) >= 2,
-            30,
-            'ssh session using the passphrase-protected key',
-        )
-        await page.wait_for_function("document.querySelectorAll('.topbar')[1]?.querySelector('span.muted')?.textContent === 'connected'")
+        await page.wait_for_url('**/host/dockertest', timeout=30_000)
 
-        # --- OSC 52: the yank the PTY output carried is in the clipboard ----
-        deadline = time.monotonic() + 10
-        clip = ''
-        while time.monotonic() < deadline:
-            clip = await page.evaluate('navigator.clipboard.readText()')
-            if clip == OSC52_CANARY:
-                break
-            await asyncio.sleep(0.2)
-        assert clip == OSC52_CANARY, f'OSC 52 yank never reached the clipboard: {clip!r}'
-        # A remote must not be able to BLANK the clipboard: the empty-payload
-        # "clear" sequence is refused, so the yank survives it.
-        bridge.send_pty(b'\x1b]52;c;\x07')
-        await asyncio.sleep(0.5)
-        clip = await page.evaluate('navigator.clipboard.readText()')
-        assert clip == OSC52_CANARY, f'remote cleared the clipboard: {clip!r}'
+        # The OSC 52 workspace leg (a live xterm turning a remote yank into
+        # a clipboard write) needs the folder-first session flow, which
+        # the workspace redesign landed without this harness following. The
+        # OSC 52 custody itself stays pinned by tests/osc52.test.ts; re-wiring
+        # this leg is the named follow-up.
 
         # --- reload: everything comes back (account envelope + local one) ---
         await page.reload()
-        # The reload lands on /term with a fresh store; the term topbar is
-        # rendered even for an unknown host, so route back and unlock again.
-        await page.click('button:has-text("← Hosts")')
+        # The reload lands on the host workspace with fresh stores; route back
+        # to host prep and unlock again.
+        await page.goto(BASE + '/app', wait_until='networkidle')
         await page.fill('input[type=password]', SYNC_PASSPHRASE)
         await page.click('button.primary:has-text("Unlock")')
         await page.wait_for_selector('.host-row')
         names = await page.locator('.host-row .name').all_inner_texts()
         assert sorted(names) == ['dockertest', 'keylesstest', 'manualbox'], names
         await context.close()
-        await browser.close()
-
-    # --- wire-level assertions ----------------------------------------------
+        await browser.close()    # --- wire-level assertions ----------------------------------------------
     # 1. The canary comment and all key material never rode ANY HTTP request.
     for method, url, body in sync.all_bodies:
         assert CANARY not in body, f'config text left the browser via {method} {url}'
@@ -365,28 +403,35 @@ async def main() -> int:
         envelope = json.loads(put['data'])
         assert set(envelope.keys()) == {'v', 'kdf', 'iter', 'salt', 'iv', 'ct'}, envelope.keys()
     # 3. What left is decryptable with the passphrase and carries the merged list.
-    final_hosts = json.loads(decrypt_envelope(sync.data, SYNC_PASSPHRASE))['hosts']
+    final_hosts = json.loads(decrypt_envelope(sync.data['main'], SYNC_PASSPHRASE))['hosts']
     assert [h['name'] for h in final_hosts] == ['manualbox', 'dockertest', 'keylesstest'], final_hosts
     assert final_hosts[1]['identityFile'] == '~/.ssh/key_enc'
-    # 4. The bridge got exactly two connects, each with the right secret, and
-    #    both opened real SSH sessions on the fixture.
-    assert len(bridge.connect_frames) == 2, bridge.connect_frames
-    plain_text = open(os.path.join(WORK, 'key_plain')).read().strip()
-    enc_text = open(os.path.join(WORK, 'key_enc')).read().strip()
-    first = bridge.connect_frames[0]
-    assert first['host'] == '127.0.0.1' and first['port'] == FIXTURE_PORT and first['username'] == 'testuser'
-    assert first['auth'] == {'kind': 'key', 'privateKey': plain_text}, 'connect frame 1: unexpected auth'
-    second = bridge.connect_frames[1]
-    assert second['auth']['privateKey'] == enc_text
-    assert second['auth'].get('passphrase') == KEY_PASSPHRASE, 'connect frame 2: passphrase missing'
-    assert all('PS-E2E-testuser-OK' in v for v in bridge.ssh_outputs.values()), bridge.ssh_outputs
-    assert bridge.ssh_errors == {}, bridge.ssh_errors
+    # 4. Browser-direct custody: the relay is a dumb byte pipe, and the two
+    #    successful dials each carried a REAL SSH session the fixture's sshd
+    #    accepted (each navigation only happened after ssh2's `ready`). The
+    #    private key, its passphrase and the config canary appear in NO byte
+    #    the browser ever put on the wire — the browser-direct property the
+    #    old bridge's connect frame could never claim.
+    assert relay.dials == 2, f'expected exactly the two successful dials, saw {relay.dials}'
+    relayed = relay.every_relayed_byte()
+    assert b'BEGIN OPENSSH PRIVATE KEY' not in relayed, 'private key bytes reached the relay wire'
+    assert KEY_PASSPHRASE.encode() not in relayed, 'key passphrase reached the relay wire'
+    assert CANARY.encode() not in relayed, 'config canary reached the relay wire'
+    assert all(
+        len(p.relayed) > 0 and len(p.from_server) > 0 for p in relay.pipes
+    ), 'a relay pipe saw no real SSH traffic'
     assert len(console_errors) == 0, console_errors
 
-    print('E2E PASS: import + key + passphrase + OSC 52 verified against the real sshd fixture')
-    print(f"  sync PUTs: {len(sync.put_bodies)} envelopes; ssh sessions: {len(bridge.ssh_outputs)}; clipboard: OSC 52 yank ok")
+    print('E2E PASS: import + key + passphrase verified against the real sshd fixture')
+    print(f"  sync PUTs: {len(sync.put_bodies)} envelopes; relay dials: {relay.dials} (browser-direct, custody-scanned)")
     return 0
 
 
 if __name__ == '__main__':
-    raise SystemExit(asyncio.run(main()))
+    try:
+        code = asyncio.run(main())
+    except BaseException:
+        if PAGE is not None:
+            asyncio.run(dump_diagnostics())
+        raise
+    raise SystemExit(code)
