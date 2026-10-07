@@ -9,10 +9,26 @@
  * key string) and expects a synchronous 64-byte detached signature; WebCrypto
  * cannot answer synchronously, so this uses tweetnacl. Keys are seeded
  * straight from the PKCS8/SPKI DER (fixed prefixes, no ASN.1 parser needed).
+ *
+ * Private-key signing is fail-closed on ECDSA (GHSA-848j-6mx2-7j84): both
+ * the one-shot `sign` and the `createSign().sign` fallback classify the key
+ * structurally and refuse before elliptic can receive it. See the
+ * containment block below and ./private-key-classify.ts.
  */
 import cryptoBrowserify from 'crypto-browserify';
 import { Buffer as NodeBuffer } from 'node:buffer';
 import nacl from 'tweetnacl';
+import {
+  assessPrivateKeyAuth,
+  classifyPrivateKey,
+  ECDSA_REFUSAL_REASON,
+  type PrivateKeyAssessment,
+  type PrivateKeyKind,
+  type PrivateKeyVerdict,
+} from './private-key-classify';
+
+export { assessPrivateKeyAuth, classifyPrivateKey };
+export type { PrivateKeyAssessment, PrivateKeyKind, PrivateKeyVerdict };
 
 /* ssh2's key parser leans on node-internal Buffer fast paths (utf8Slice,
  * base64Slice, …) that no polyfilled Buffer implements — and ssh2 spins
@@ -57,11 +73,80 @@ export const createDiffieHellman = cryptoBrowserify.createDiffieHellman.bind(cry
 export const createDiffieHellmanGroup = cryptoBrowserify.createDiffieHellmanGroup.bind(cryptoBrowserify);
 export const createHash = cryptoBrowserify.createHash.bind(cryptoBrowserify);
 export const createHmac = cryptoBrowserify.createHmac.bind(cryptoBrowserify);
-export const createSign = cryptoBrowserify.createSign.bind(cryptoBrowserify);
 export const createVerify = cryptoBrowserify.createVerify.bind(cryptoBrowserify);
 export const getCiphers = cryptoBrowserify.getCiphers.bind(cryptoBrowserify);
 export const randomBytes = cryptoBrowserify.randomBytes.bind(cryptoBrowserify);
 export const randomFillSync = cryptoBrowserify.randomFillSync.bind(cryptoBrowserify);
+
+/* --- ECDSA signing containment (GHSA-848j-6mx2-7j84) ----------------------- */
+/**
+ * browserify-sign fulfills named-digest signing by parsing the private key
+ * and, for EC keys, delegating to elliptic's ECDSA — the implementation the
+ * open advisory flags (no patched elliptic release exists). Every ECDSA
+ * user-authentication signature therefore goes through this module, and the
+ * guard below refuses BEFORE any signer is constructed or any private-key
+ * material is handed to a third-party parser: the key is classified
+ * structurally (see ./private-key-classify) — no trial signature, no
+ * "sign once to find out", no regex-only allow.
+ *
+ * Scope: PRIVATE-key signing only. Host-key verification (crypto.verify /
+ * createVerify, public keys) and ECDH key exchange are untouched — elliptic
+ * remains in the bundle for those.
+ */
+
+/** Fail closed before elliptic can see a private key: allowed kinds are
+ * RSA/DSA/Ed25519 (and the null-digest Ed25519 path checks its own PKCS#8
+ * shape); ECDSA, still-encrypted and unrecognized keys all refuse. Errors
+ * are stable, must not contain key or passphrase material, and are the only
+ * thing that ever leaves this module about the key. */
+export function assertSignablePrivateKey(key: unknown): void {
+  if (typeof key !== 'string' && !(key instanceof Uint8Array)) {
+    // browserify-sign also accepts node KeyObjects; nothing in the browser
+    // bundle produces one, and a key we cannot structurally classify is not
+    // a key we sign with.
+    throw unsupportedFormatError(
+      'browser build refuses to sign with an unrecognizable private-key value',
+    );
+  }
+  switch (classifyPrivateKey(key)) {
+    case 'rsa':
+    case 'dsa':
+    case 'ed25519':
+      return;
+    case 'ecdsa':
+      throw unsupportedFormatError(
+        `browser build refuses ECDSA private-key signing: ${ECDSA_REFUSAL_REASON}`,
+        'ERR_BROWSER_ECDSA_UNSUPPORTED',
+      );
+    case 'encrypted':
+      throw unsupportedFormatError(
+        'browser build refuses to sign with a still-encrypted private key',
+      );
+    default:
+      throw unsupportedFormatError(
+        'browser build refuses to sign with an unrecognized private-key format',
+      );
+  }
+}
+
+function unsupportedFormatError(message: string, code = 'ERR_BROWSER_KEY_FORMAT_UNSUPPORTED'): Error {
+  const err = new Error(message);
+  (err as Error & { code: string }).code = code;
+  return err;
+}
+
+/** Guarded signer: the real browserify-sign instance with its `.sign`
+ * instance method wrapped, so every private-key handoff — including the
+ * one-shot `sign` fallback below — passes the refusal check first. */
+export function createSign(algorithm: string) {
+  const signer = cryptoBrowserify.createSign(algorithm);
+  const realSign = signer.sign;
+  signer.sign = function (this: unknown, key: unknown, ...rest: unknown[]) {
+    assertSignablePrivateKey(key);
+    return realSign.apply(this, [key, ...rest]);
+  };
+  return signer;
+}
 
 function unsupported(name: string): () => never {
   return () => {
@@ -112,7 +197,9 @@ function ed25519HasPrefix(der: Uint8Array, prefix: Uint8Array): boolean {
 }
 
 /** node crypto.sign: null algorithm = Ed25519 (raw 64-byte signature), named
- * digest = RSA (DER) through the same createSign path ssh2 would fall back to. */
+ * digest = RSA (DER) through the same createSign path ssh2 would fall back to.
+ * A named digest with an ECDSA/encrypted/unclassifiable private key refuses
+ * before createSign — and therefore elliptic — is ever reached. */
 export function sign(
   algorithm: string | null,
   data: Uint8Array | Buffer,
@@ -131,6 +218,7 @@ export function sign(
       // Buffer.isBuffer(sig) to decide whether Ed25519 exists at all.
       return NodeBuffer.from(nacl.sign.detached(new Uint8Array(data), kp.secretKey));
     }
+    assertSignablePrivateKey(key);
     const signer = createSign(algorithm);
     signer.update(NodeBuffer.from(data));
     return signer.sign(key);

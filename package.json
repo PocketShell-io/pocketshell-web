@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "typecheck": "vue-tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:crypto-lab": "node tests/crypto/lab/run-lab.mjs",
     "postinstall": "node scripts/patch-ssh2.cjs"
   },
   "dependencies": {
@@ -63,6 +64,7 @@
     "ws": "^8.21.3"
   },
   "overrides": {
-    "buffer": "$buffer"
+    "buffer": "$buffer",
+    "pbkdf2": "^3.1.7"
   }
 }
