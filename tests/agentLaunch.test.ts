@@ -36,9 +36,14 @@ describe('the 0.4.44 `pocketshell agent` contract, as captured', () => {
     expect(listed).toEqual(['claude', 'codex', 'opencode']);
     expect([...HELPER_BASELINE_KINDS]).toEqual(listed);
     // LAUNCHABLE_KINDS is what the app can spell; the gap is probed for.
-    expect([...LAUNCHABLE_KINDS]).toEqual([...listed, 'grok']);
+    // Grok AND Antigravity both sit outside the pinned baseline — spelling a
+    // command is not a promise the host's helper has it, so both REQUIRE the
+    // capability probe (kindNeedsNewerHelper is what routes them there).
+    expect([...LAUNCHABLE_KINDS]).toEqual([...listed, 'grok', 'antigravity']);
     for (const kind of HELPER_BASELINE_KINDS) expect(kindNeedsNewerHelper(kind)).toBe(false);
     expect(kindNeedsNewerHelper('grok')).toBe(true);
+    expect(kindNeedsNewerHelper('antigravity')).toBe(true);
+    for (const kind of ['grok', 'antigravity'] as const) expect(isLaunchableKind(kind)).toBe(true);
   });
 
   it('refuses grok on a host whose captured help has no such subcommand', () => {
@@ -55,6 +60,27 @@ describe('the 0.4.44 `pocketshell agent` contract, as captured', () => {
     expect(launchBlocker({ kind: 'grok', dir: '/srv/app' }, onPinnedHost)).toBe(
       kindUnavailableReason('grok', onPinnedHost),
     );
+  });
+
+  it('refuses antigravity the same way — provable presence or nothing', () => {
+    // The pinned 0.4.44 capture has no antigravity subcommand either: the
+    // kind is launchable-in-principle and host-gated in practice, exactly
+    // like grok, with the same too-old reason naming the pinned floor.
+    expect(groupHelp).not.toMatch(/^ {2}antigravity\b/m);
+    const onPinnedHost = { subcommands: [...HELPER_BASELINE_KINDS] };
+    expect(kindUnavailableReason('antigravity', onPinnedHost)).toMatch(/too old to start Antigravity/);
+    expect(kindUnavailableReason('antigravity', onPinnedHost)).toContain(
+      `newer than ${HELPER_VERSION_WITHOUT_GROK}`,
+    );
+    expect(launchBlocker({ kind: 'antigravity', dir: '/srv/app' }, onPinnedHost)).toBe(
+      kindUnavailableReason('antigravity', onPinnedHost),
+    );
+    // The probes the catalog demands: once a host's help LISTS the
+    // subcommand, the same gate answers available (null = no blocker) —
+    // the probe, not the version floor, is what admits the kind.
+    const onProbedHost = { subcommands: [...HELPER_BASELINE_KINDS, 'antigravity'] };
+    expect(kindUnavailableReason('antigravity', onProbedHost)).toBeNull();
+    expect(launchBlocker({ kind: 'antigravity', dir: '/srv/app' }, onProbedHost)).toBeNull();
   });
 
   it('marks --dir required, which is the bug this module fixes', () => {

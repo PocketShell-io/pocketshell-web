@@ -20,6 +20,7 @@ import type { ClientChannel, SFTPWrapper } from 'ssh2';
 import { Buffer } from 'node:buffer';
 import { connectWebSocketDuplex, WebSocketDuplex } from './wsduplex';
 import { dialGateway } from './gatewayDuplex';
+import { assessPrivateKeyAuth } from '../shims/ssh2-crypto';
 import {
   decodePublicKeyBlob,
   normalizeSha256Fingerprint,
@@ -174,6 +175,21 @@ export class SshConnection {
       }
     }
     const auth = this.authOf(opts.auth);
+    // Browser signing containment, EARLY and verdict-only: a key the
+    // structural classifier REFUSES (ECDSA — the browser crypto stack must
+    // never run its ECDSA signer) fails the dial here with the safe reason,
+    // before any socket and any signature. `encrypted` and `unknown` are
+    // INDETERMINATE, never authorization to skip anything: they proceed to
+    // ssh2's real key parser (which can decrypt/convert) and to the signing
+    // boundary's own authoritative re-classification, which is what actually
+    // refuses what ssh2 puts on the wire path. No trial signature happens
+    // anywhere in either gate.
+    if ('privateKey' in auth && auth.privateKey) {
+      const assessed = assessPrivateKeyAuth(auth.privateKey);
+      if (assessed.verdict === 'refused') {
+        throw new Error(`This host's SSH key can't sign from the browser: ${assessed.reason}`);
+      }
+    }
     this.closedByUs = false;
     this.onClosed = opts.onClosed ?? null;
     this.hostKeyError = null;
