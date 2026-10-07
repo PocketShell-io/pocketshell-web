@@ -14,7 +14,12 @@
  * bundled elliptic (prototype wrap). Liveness is proven two ways: the
  * genKeyPair wrap is hit by every positive ECDH handshake, and a one-time
  * probe self-check signs with a throwaway secp256k1 test key (test-harness
- * only, never a userauth sign, never a user key).
+ * only, never a userauth sign, never a user key). Every negative flow
+ * captures the counter BEFORE its dial and asserts a real zero delta —
+ * refusals must be the stable coded guard errors, malformed flows through
+ * a real dial stay honest about which layer refused (parser vs guard), and
+ * the host-pin negative supplies a DIFFERENT VALID fingerprint to the same
+ * comparator the positives pass through.
  */
 import { Client } from 'ssh2';
 import { Duplex } from 'node:stream';
@@ -24,6 +29,7 @@ import * as elliptic from 'elliptic';
 interface Fixture {
   wsPort: number;
   hostPin: string; // base64(sha256(host key blob)) — the out-of-band pin
+  wrongHostPin: string; // base64(sha256(DIFFERENT host key blob)) — valid but wrong
   production: {
     kex: string[];
     cipher: string[];
@@ -138,7 +144,13 @@ interface DialOptions {
   fixture: Fixture;
   pem: string;
   passphrase?: string;
-  acceptHostKey?: boolean;
+  /** Out-of-band pin compared against the sha256 fingerprint of the host
+   * key. The SAME comparator runs for every dial; supplying a different
+   * VALID fingerprint is how refusal is exercised — never a hardcoded
+   * false. Defaults to the fixture's real pin. */
+  pin?: string;
+  /** Distinct per-flow usernames: the server trace self-identifies. */
+  username?: string;
   command?: string;
 }
 
@@ -147,7 +159,8 @@ interface DialOptions {
  * out-of-band fingerprint and a mismatch refuses BEFORE userauth. */
 function dial(opts: DialOptions): Promise<{ negotiated: Record<string, string>; execEcho: string }> {
   const { fixture, pem, passphrase } = opts;
-  const acceptHostKey = opts.acceptHostKey ?? true;
+  const pin = opts.pin ?? fixture.hostPin;
+  const username = opts.username ?? 'shipping-lab';
   const command = opts.command ?? 'ps-crypto-probe';
   return new Promise((resolve, reject) => {
     const conn = new Client();
@@ -186,27 +199,33 @@ function dial(opts: DialOptions): Promise<{ negotiated: Record<string, string>; 
 
     const ws = new WebSocket(`ws://127.0.0.1:${fixture.wsPort}`);
     ws.onopen = () => {
-      conn.connect({
-        sock: new WsDuplex(ws) as never,
-        username: 'shipping-lab',
-        privateKey: pem,
-        passphrase,
-        tryKeyboard: false,
-        readyTimeout: 20_000,
-        algorithms: {
-          kex: fixture.production.kex,
-          cipher: fixture.production.cipher,
-          serverHostKey: fixture.production.serverHostKey,
-        },
-        hostVerifier: (key: Uint8Array, verify: (ok: boolean) => void) => {
-          // the pin decision mirrors connection.ts: out-of-band fingerprint,
-          // byte-exact, fail closed
-          void import('node:crypto').then(({ createHash }) => {
-            const digest = createHash('sha256').update(Buffer.from(key)).digest('base64');
-            verify(acceptHostKey && digest === fixture.hostPin);
-          });
-        },
-      });
+      try {
+        conn.connect({
+          sock: new WsDuplex(ws) as never,
+          username,
+          privateKey: pem,
+          passphrase,
+          tryKeyboard: false,
+          readyTimeout: 20_000,
+          algorithms: {
+            kex: fixture.production.kex,
+            cipher: fixture.production.cipher,
+            serverHostKey: fixture.production.serverHostKey,
+          },
+          hostVerifier: (key: Uint8Array, verify: (ok: boolean) => void) => {
+            // the pin decision mirrors connection.ts: out-of-band fingerprint,
+            // byte-exact, fail closed — one comparator for correct AND wrong pins
+            void import('node:crypto').then(({ createHash }) => {
+              const digest = createHash('sha256').update(Buffer.from(key)).digest('base64');
+              verify(digest === pin);
+            });
+          },
+        });
+      } catch (err) {
+        // ssh2 throws SYNCHRONOUSLY on unparseable keys, inside this event
+        // handler — route it into the dial's rejection, never let it escape
+        fail(err);
+      }
     };
     ws.onerror = () => fail(new Error('lab WebSocket connection failed'));
   });
@@ -228,15 +247,15 @@ async function runFlows(): Promise<{
     const out = document.getElementById('lab-out');
     if (out) out.textContent += `${ok ? 'PASS' : 'FAIL'} ${name}: ${detail}\n`;
   };
-  const ecSignCallsAt = () => probe.ecSignCalls;
 
-  const handshake = async (name: string, keyName: string, extra: Partial<DialOptions> = {}) => {
+  const handshake = async (name: string, keyName: string, username: string, extra: Partial<DialOptions> = {}) => {
     const key = fixture.keys[keyName];
     try {
       const { negotiated, execEcho } = await dial({
         fixture,
         pem: key.pem,
         passphrase: key.passphrase,
+        username,
         ...extra,
       });
       record(
@@ -250,36 +269,51 @@ async function runFlows(): Promise<{
   };
 
   // -- positives: real ssh2 parseKey + userauth sign boundary in the bundle
-  await handshake('positive: RSA OpenSSH handshake (production kex)', 'rsa');
-  await handshake('positive: encrypted RSA handshake (bcrypt decrypt)', 'rsaEnc');
-  await handshake('positive: Ed25519 handshake', 'ed');
-  await handshake('positive: encrypted Ed25519 handshake', 'edEnc');
+  await handshake('positive: RSA OpenSSH handshake (production kex)', 'rsa', 'lab-pos-rsa');
+  await handshake('positive: encrypted RSA handshake (bcrypt decrypt)', 'rsaEnc', 'lab-pos-rsa-enc');
+  await handshake('positive: Ed25519 handshake', 'ed', 'lab-pos-ed');
+  await handshake('positive: encrypted Ed25519 handshake', 'edEnc', 'lab-pos-ed-enc');
 
-  // -- ECDSA refusals, plaintext and encrypted-with-correct-passphrase
+  // -- ECDSA refusals, plaintext and encrypted-with-correct-passphrase.
+  // The elliptic counter is captured BEFORE each dial; the delta after the
+  // refusal must be exactly zero (not a value compared with itself).
   for (const [name, keyName] of [
     ['refusal: plaintext ECDSA user key', 'ecdsa'],
     ['refusal: encrypted ECDSA user key (correct passphrase)', 'ecdsaEnc'],
   ] as const) {
     const key = fixture.keys[keyName];
+    const ecBefore = probe.ecSignCalls;
     try {
-      await dial({ fixture, pem: key.pem, passphrase: key.passphrase });
+      await dial({ fixture, pem: key.pem, passphrase: key.passphrase, username: 'lab-ecdsa' });
       record(name, false, 'dial unexpectedly succeeded');
+      record(`${name} — elliptic never signed`, false, 'flow did not refuse');
     } catch (err) {
       const message = (err as Error).message;
-      record(name, /ECDSA|authentication methods/i.test(message), message);
+      const refused = /ECDSA|authentication methods/i.test(message);
+      const delta = probe.ecSignCalls - ecBefore;
+      record(name, refused, message);
+      record(`${name} — elliptic never signed`, refused && delta === 0, `ecSignCalls delta=${delta}`);
     }
-    record(
-      `${name} — elliptic never signed`,
-      probe.ecSignCalls === ecSignCallsAt(),
-      `ecSignCalls=${probe.ecSignCalls}`,
-    );
   }
 
-  // -- malformed / unknown keys refuse at the boundary (no parseKey crash,
-  //    no signer, no elliptic)
+  // -- malformed / unknown keys refuse at the boundary with the STABLE CODED
+  //    guard errors only: any other error kind fails the record, and the
+  //    elliptic delta around each attempt must be zero.
+  const GUARD_CODES = new Set(['ERR_BROWSER_KEY_FORMAT_UNSUPPORTED', 'ERR_BROWSER_ECDSA_UNSUPPORTED']);
+  const ecAtLoopStart = probe.ecSignCalls;
   for (const [name, pem] of Object.entries(fixture.malformed)) {
+    const before = probe.ecSignCalls;
     let detail = '';
-    let refused = false;
+    let codedGuardRefusal = false;
+    const checkCode = (err: Error) => {
+      const code = (err as Error & { code?: string }).code;
+      if (code !== undefined && GUARD_CODES.has(code)) {
+        codedGuardRefusal = true;
+        detail = `coded guard refusal ${code}`;
+      } else {
+        detail = `WRONG ERROR KIND (no guard code): ${err.name}: ${err.message}`;
+      }
+    };
     try {
       const { sign } = await import('crypto');
       const result = (sign as (a: string, d: Uint8Array, k: string) => Buffer | Error)(
@@ -287,30 +321,86 @@ async function runFlows(): Promise<{
         new TextEncoder().encode('malformed probe'),
         pem,
       );
-      if (result instanceof Error) {
-        refused = true;
-        detail = `${result.name}: ${result.message}`;
-      } else {
-        detail = 'MALFORMED KEY PRODUCED A SIGNATURE';
-      }
+      if (result instanceof Error) checkCode(result);
+      else detail = 'MALFORMED KEY PRODUCED A SIGNATURE';
     } catch (err) {
-      refused = true;
-      detail = `threw ${(err as Error).message}`;
+      checkCode(err as Error);
     }
-    record(`refusal: malformed ${name}`, refused, detail);
+    const delta = probe.ecSignCalls - before;
+    record(
+      `refusal: malformed ${name}`,
+      codedGuardRefusal && delta === 0,
+      `${detail}; ecSignCalls delta=${delta}`,
+    );
   }
   record(
-    'malformed refusals left elliptic untouched',
-    true,
-    `ecSignCalls=${probe.ecSignCalls}`,
+    'malformed refusals left elliptic untouched (whole loop)',
+    probe.ecSignCalls === ecAtLoopStart,
+    `ecSignCalls=${probe.ecSignCalls}, loop start=${ecAtLoopStart}`,
   );
 
-  // -- host-pin rejection happens before userauth (server counts auths)
+  // -- parser-first malformed flows through a REAL dial. ssh2's parser gets
+  //    the key FIRST; the assertions stay honest about which layer refused:
+  //    a key the parser ACCEPTS but the guard refuses must end as an
+  //    authentication failure with zero elliptic deltas (the runner pins
+  //    zero SIGNED auth requests server-side), and a key the parser rejects
+  //    must fail with a key-parse error, also with zero deltas.
+  const beforeParserAccepted = probe.ecSignCalls;
   try {
-    await dial({ fixture, pem: fixture.keys.rsa.pem, acceptHostKey: false });
-    record('hostpin: mismatched pin refuses the dial', false, 'dial unexpectedly succeeded');
+    await dial({
+      fixture,
+      pem: fixture.malformed['RSA PKCS#1 with trailing DER bytes'],
+      username: 'lab-parser-accepts',
+    });
+    record('parser-first: parsed-but-guarded key dial refused', false, 'dial unexpectedly succeeded');
   } catch (err) {
-    record('hostpin: mismatched pin refuses the dial', true, (err as Error).message);
+    const message = (err as Error).message;
+    const delta = probe.ecSignCalls - beforeParserAccepted;
+    // the guard's refusal surfaces either verbatim or wrapped by ssh2 as
+    // "Error signing data with key: …", which aborts userauth — either way
+    // the dial must fail, name the guard, and leave elliptic untouched
+    record(
+      'parser-first: parsed-but-guarded key dial refused',
+      /refuses to sign|authentication methods failed/i.test(message) && delta === 0,
+      `${message}; ecSignCalls delta=${delta}`,
+    );
+  }
+
+  const beforeParserRejected = probe.ecSignCalls;
+  try {
+    await dial({
+      fixture,
+      pem: fixture.malformed['SEC1 truncated body'],
+      username: 'lab-parser-rejects',
+    });
+    record('parser-first: unparseable key dial rejected before auth', false, 'dial unexpectedly succeeded');
+  } catch (err) {
+    const message = (err as Error).message;
+    const delta = probe.ecSignCalls - beforeParserRejected;
+    record(
+      'parser-first: unparseable key dial rejected before auth',
+      /key/i.test(message) && delta === 0,
+      `${message}; ecSignCalls delta=${delta}`,
+    );
+  }
+
+  // -- host-pin refusal through the REAL comparator: the pin supplied is a
+  //    DIFFERENT VALID host key's fingerprint; the same `digest === pin`
+  //    equality that authenticates the positives now mismatches. The server
+  //    must see zero auth attempts (runner-side), and the error is the host
+  //    key verification failure.
+  const beforePin = probe.ecSignCalls;
+  try {
+    await dial({ fixture, pem: fixture.keys.rsa.pem, pin: fixture.wrongHostPin, username: 'lab-pin-wrong' });
+    record('hostpin: wrong-fingerprint pin refuses the dial', false, 'dial unexpectedly succeeded');
+  } catch (err) {
+    const message = (err as Error).message;
+    const delta = probe.ecSignCalls - beforePin;
+    record(
+      'hostpin: wrong-fingerprint pin refuses the dial',
+      /host denied|host key|verification failed/i.test(message) && delta === 0,
+      `${message}; ecSignCalls delta=${delta}`,
+    );
   }
 
   // -- public-key verification residual (public half only, documented scope):

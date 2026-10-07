@@ -56,6 +56,7 @@ export class BrowserLabHarness {
   /** Ephemeral keys + crafted malformed PEMs the browser flows consume. */
   buildFixtures() {
     const hostPem = this.sshgen('ed25519', { label: 'host' });
+    const wrongHostPem = this.sshgen('ed25519', { label: 'host-wrong' });
     const pass = 'shipping-lab-passphrase';
     const key = (pem, passphrase) => (passphrase === undefined ? { pem } : { pem, passphrase });
     const rsaPem = this.sshgen('rsa', { bits: 2048, label: 'user-rsa' });
@@ -84,17 +85,15 @@ export class BrowserLabHarness {
       },
     };
     fixtures.keys.rsa.spki = rsa.publicKey.export({ format: 'pem', type: 'spki' }).toString();
-    // the out-of-band pin: sha256 over the host key's wire blob, like the
-    // app's fingerprint pins
-    const parsedHost = ssh2Utils.parseKey(hostPem);
-    const blob = typeof parsedHost.getPublicSSH === 'function'
-      ? parsedHost.getPublicSSH()
-      : null;
-    if (!blob) throw new Error('could not derive host key blob for the pin');
-    fixtures.hostPin = require('node:crypto')
-      .createHash('sha256')
-      .update(blob)
-      .digest('base64');
+    // out-of-band pins: sha256 over each host key's wire blob, like the
+    // app's fingerprint pins. wrongHostPin is a DIFFERENT valid host key's
+    // fingerprint so the refusal flow exercises the real comparator with a
+    // well-formed but incorrect value (never a hardcoded false).
+    fixtures.hostPin = fingerprintOf(hostPem);
+    fixtures.wrongHostPin = fingerprintOf(wrongHostPem);
+    if (fixtures.wrongHostPin === fixtures.hostPin) {
+      throw new Error('harness: wrong-host pin must differ from the real pin');
+    }
     return fixtures;
   }
 
@@ -102,11 +101,12 @@ export class BrowserLabHarness {
     // -- real ssh2 server: verifies client signatures with real node crypto
     const hostKeys = [fixtures.hostPem];
     this.sshServer = new SshServer({ hostKeys }, (client) => {
-      const trace = { authRequests: [], accepted: false };
+      const trace = { authRequests: [], accepted: false, username: null };
       this.connections.push(trace);
       this.activeConnection = trace;
       client.on('error', () => { /* teardown noise from negative dials */ });
       client.on('authentication', (ctx) => {
+        trace.username ??= ctx.username;
         const entry = {
           method: ctx.method,
           sigPresent: Boolean(ctx.signature && ctx.blob),
@@ -164,23 +164,35 @@ export class BrowserLabHarness {
         return;
       }
       this.wsSockets.add(ws);
-      const tcp = net.connect(this.sshPort, '127.0.0.1');
-      this.tcpSockets.add(tcp);
-      tcp.on('data', (chunk) => {
-        if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
-      });
-      tcp.on('error', () => ws.close());
-      tcp.on('close', () => ws.close());
+      // LAZY bridge: the SSH-side TCP connection is dialed on the FIRST
+      // client bytes, not on the WebSocket handshake. ssh2's client sends
+      // its banner immediately once connected, so real dials always speak
+      // first — while a dial whose ssh2 config throws synchronously (e.g.
+      // an unparseable key) never writes anything and never reaches the
+      // SSH server at all. That makes "refused before any network
+      // exchange" a deterministic, observable fact.
+      let tcp = null;
+      const ensureTcp = () => {
+        if (tcp !== null) return tcp;
+        tcp = net.connect(this.sshPort, '127.0.0.1');
+        this.tcpSockets.add(tcp);
+        tcp.on('data', (chunk) => {
+          if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
+        });
+        tcp.on('error', () => ws.close());
+        tcp.on('close', () => ws.close());
+        return tcp;
+      };
       ws.on('message', (data, isBinary) => {
         if (!isBinary) {
           ws.close(1003, 'binary-only transport');
           return;
         }
-        tcp.write(data);
+        ensureTcp().write(data);
       });
       const teardown = () => {
         ws.close();
-        tcp.destroy();
+        if (tcp !== null) tcp.destroy();
       };
       ws.on('close', teardown);
       ws.on('error', teardown);
@@ -198,6 +210,7 @@ export class BrowserLabHarness {
         res.end(JSON.stringify({
           wsPort: this.wsPort,
           hostPin: fixtures.hostPin,
+          wrongHostPin: fixtures.wrongHostPin,
           production: {
             // the actual config connection.ts dials with (connection.ts:293-297)
             kex: ['ecdh-sha2-nistp256', 'diffie-hellman-group14-sha256'],
@@ -243,6 +256,14 @@ export class BrowserLabHarness {
     await new Promise((resolve) => this.httpServer?.close(() => resolve(null)));
     rmSync(this.keyDir, { recursive: true, force: true });
   }
+}
+
+/** sha256(base64) fingerprint over a PEM host key's SSH wire blob. */
+function fingerprintOf(pem) {
+  const parsed = ssh2Utils.parseKey(pem);
+  const blob = typeof parsed.getPublicSSH === 'function' ? parsed.getPublicSSH() : null;
+  if (!blob) throw new Error('could not derive host key blob for the pin');
+  return require('node:crypto').createHash('sha256').update(blob).digest('base64');
 }
 
 function truncatePem(pem) {
