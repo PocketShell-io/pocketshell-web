@@ -64,16 +64,23 @@ fixture Google sign-in). The final custody pass runs ONCE, after ALL THREE
 browser contexts are closed (main, broken-broker, tampered-advisory): every
 socket of every store, every late frame, every captured HTTP request of all
 three contexts — fail-closed (a failed request capture refuses the run).
-The gateway auth frames are additionally pinned to the transport's exact
-wire contract (the FIRST frame sent is ONE text auth — exactly
-type/v/token/device_id, its device the dialed URL's device; every other
-sent frame binary; at most the one ready advisory) and their tokens are
+Auth frames are enumerated over EVERY final store by one aggregator (exact
+store set, exact per-store gateway counts — the broken-broker store's
+required ZERO catches a socket recorded during its close) and pinned to the
+transport's exact wire contract (the FIRST frame sent is ONE text auth —
+exactly type/v/token/device_id, its device the dialed URL's device; every
+other sent frame binary; at most the one ready advisory); their tokens are
 RS256-SIGNATURE-VERIFIED against the fixture broker's OWNED key with the
-exact production claim contract — never the Google sign-in. An offline
-negative-control suite injects each secret into each surface and must see
-the oracle reject it: URL placements, captured HTTP shapes, wire frames,
-auth frames, token signatures, the live capture path, the CLEAR-ack
-matcher and the zero-auth oracle.
+exact production claim contract — never the Google sign-in. The zero-auth
+oracle counts REAL 'Accepted publickey for' records only — journal
+diagnostics, banners and changed-auth lines are never calibration — and
+every blocking docker read is time-bounded. An offline negative-control
+suite injects each secret into each surface and must see the oracle reject
+it: URL placements (including cross-origin account paths), captured HTTP
+shapes, wire frames, auth frames, token signatures, the live capture path,
+the CLEAR-ack matcher, the zero-auth oracle, the sshd-record extraction and
+the final all-stores aggregator; separate runner-level controls exercise
+the actual marker parser and the actual bounded-execution/cleanup helpers.
 
 Usage: e2e_gateway_prod.py <base-url> <workdir> <fixtures-json>
 """
@@ -82,6 +89,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -121,6 +129,36 @@ gateway_broker.ISSUER = BROKER_URL  # tokens minted in-process carry the live is
 # GW_E2E_OFFLINE_CONTROLS_ONLY=1 runs ONLY the offline controls (no browser,
 # no network, no Docker) and exits 0 — the static calibration surface.
 OFFLINE_ONLY = os.environ.get('GW_E2E_OFFLINE_CONTROLS_ONLY') == '1'
+
+# The composed run's WORK DEADLINE, exported by the runner as seconds of work
+# budget remaining when the harness starts. The harness enforces it
+# GRACEFULLY: phase gates refuse to start major legs near expiry, the whole
+# flow is awaited under an asyncio umbrella, every browser-context close is
+# time-bounded, and teardown proceeds on expiry. The bash-side hard bound
+# (the owned process group, stopped TERM->KILL) stays 90s behind this
+# deadline — it exists only for a wedged harness, never for normal teardown.
+WORK_DEADLINE_MONO = time.monotonic() + float(os.environ.get('GW_E2E_DEADLINE_SECS') or 3600)
+
+
+def work_time_left() -> float:
+    return WORK_DEADLINE_MONO - time.monotonic()
+
+
+def assert_time_left(what: str, min_left: float = 45.0) -> None:
+    left = work_time_left()
+    assert left > min_left, (
+        f'WORK DEADLINE EXHAUSTED: {left:.0f}s of harness budget left — refusing to start {what}; '
+        f'the run fails closed and teardown proceeds')
+
+
+async def close_context(ctx, label: str) -> None:
+    """A bounded context close: post-close quiescence is a REQUIRED state for
+    the final custody scan — a wedged close is a named failure, never a
+    silent hang that the final scan waits on forever."""
+    try:
+        await asyncio.wait_for(ctx.close(), 30)
+    except asyncio.TimeoutError:
+        raise AssertionError(f'the {label} browser context did not close within its 30s bound')
 
 SECRETS_AS_TEXT = [
     CANARY,
@@ -171,10 +209,12 @@ def safe_url(url: str) -> str:
 #
 #   sync + broker (account surfaces)
 #       the EXACT https origins the fixture config pins (SYNC_URL /
-#       BROKER_URL — scheme, host, effective port), exact supported paths,
-#       allowed methods, NO query/fragment/userinfo, and the sign-in ONLY as
-#       the exact `Authorization: Bearer <sign-in>`; every header value and
-#       every body scanned against the FULL secret set on every request.
+#       BROKER_URL — scheme, host, effective port), each path bound ONLY to
+#       its OWN configured origin (a path of one account surface on the
+#       other's origin is NOT the surface — it refuses), allowed methods,
+#       NO query/fragment/userinfo, and the sign-in ONLY as the exact
+#       `Authorization: Bearer <sign-in>`; every header value and every body
+#       scanned against the FULL secret set on every request.
 #   gateway
 #       EXACTLY ws://<GATEWAY_URL netloc>/api/v1/hosts/<known device>/ssh —
 #       no query, no fragment, no userinfo, and NONE of the sign-in anywhere
@@ -232,15 +272,16 @@ def assert_url_custody_prod(url: str, where: str) -> None:
     """The ONE URL policy for the live HTTP request URLs and the recorded
     WebSocket dial URLs: EXACT scheme + host + effective-port + path/query
     contracts per surface (a same-host wrong-scheme or wrong-port URL is NOT
-    the surface — it refuses); the legacy relay's ONE query-token placement;
-    everywhere else the FULL secret set must appear in NO part of the URL,
-    raw or decoded."""
+    the surface — it refuses); account paths are bound to their OWN origin —
+    a path of one account surface on the other's origin is an unconfigured
+    URL; the legacy relay's ONE query-token placement; everywhere else the
+    FULL secret set must appear in NO part of the URL, raw or decoded."""
     parts = urlsplit(url)
     host = (parts.hostname or '').lower()
     legacy = _same_origin(parts, urlsplit(LEGACY_URL))
     gateway = _same_origin(parts, urlsplit(GATEWAY_URL))
     account = next(((o, p, m) for o, p, m in ACCOUNT_HTTP_SURFACES
-                    if (o.hostname or '').lower() == host and effective_port(o) == effective_port(parts)), None)
+                    if _same_origin(parts, o) and parts.path == p), None)
     app = _same_origin(parts, urlsplit(BASE))
 
     if legacy:
@@ -269,7 +310,10 @@ def assert_url_custody_prod(url: str, where: str) -> None:
             raise AssertionError(f'{where}: gateway dial carries query/fragment/userinfo ({safe_url(url)})')
     elif account is not None:
         origin, path, methods = account
-        if not _same_origin(parts, origin) or parts.path not in (p for _, p, _ in ACCOUNT_HTTP_SURFACES):
+        # EXACT origin+path membership (the selection above already demands
+        # both — restated as the contract this branch enforces): a path is
+        # never pooled across origins.
+        if parts.path != path or not _same_origin(parts, origin):
             raise AssertionError(f'{where}: not the exact account surface ({safe_url(url)})')
         if parts.query or parts.fragment or parts.username is not None:
             raise AssertionError(f'{where}: account URL carries query/fragment/userinfo ({safe_url(url)})')
@@ -301,9 +345,8 @@ def assert_http_request_custody_prod(method: str, url: str, headers: dict, body:
     Authorization entry is refused."""
     assert_url_custody_prod(url, where)
     parts = urlsplit(url)
-    host = (parts.hostname or '').lower()
     surface = next(((o, p, m) for o, p, m in ACCOUNT_HTTP_SURFACES
-                    if (o.hostname or '').lower() == host and effective_port(o) == effective_port(parts) and p == parts.path), None)
+                    if _same_origin(parts, o) and p == parts.path), None)
     authz = next((v for k, v in headers.items() if k.lower() == 'authorization'), '')
     if header_entries is not None:
         authz_entry_values = [v for k, v in header_entries if k.lower() == 'authorization']
@@ -380,6 +423,14 @@ def http_custody_negative_control_prod() -> None:
         (f'{legacy_origin.scheme}://{legacy_origin.netloc}/pipe?host=127.0.0.1&port=22&token={G}&x=1',),
         # account surface on the wrong scheme/port/path
         (f'http://{urlsplit(SYNC_URL).hostname}:444/me',),
+        # a path of ANOTHER account surface on this origin — paths are bound
+        # to their OWN origin (the reviewer's exact counterexample: the
+        # broker origin configures ONLY /gateway/token, so /me there is an
+        # unconfigured URL, not a credential-free pass)
+        (f'{BROKER_URL}/me',),
+        (f'{BROKER_URL}/settings/main',),
+        # the broker's path on the sync origin
+        (f'{SYNC_URL}/gateway/token',),
         # sign-in in an account URL instead of the header
         (f'{SYNC_URL}/me?token={G}',),
         # the sign-in on a gateway dial URL
@@ -402,6 +453,8 @@ def http_custody_negative_control_prod() -> None:
         ('GET', f'{SYNC_URL}/me', {'Authorization': G}, '', 'bearer without scheme'),
         ('DEL', f'{SYNC_URL}/settings/main', {'Authorization': f'Bearer {G}'}, '', 'unsupported method'),
         ('POST', f'{BROKER_URL}/gateway/token', {'Authorization': f'Bearer {G}'}, 'payload', 'non-empty broker body'),
+        ('GET', f'{BROKER_URL}/me', {'Authorization': f'Bearer {G}'}, '',
+         'sign-in to a foreign path on the broker origin (a non-account request)'),
         ('GET', f'http://{urlsplit(BASE).netloc}/', {'Authorization': f'Bearer {G}'}, '', 'sign-in on a non-account request'),
         ('GET', f'http://{urlsplit(BASE).netloc}/', {'X-Config': CANARY}, '', 'canary in a header'),
         ('GET', f'http://{urlsplit(BASE).netloc}/', {'X-Pass': KEY_PASSPHRASE}, '', 'passphrase in a header'),
@@ -1090,25 +1143,47 @@ def fp_for(mode: str, keytype: str) -> str:
     raise KeyError((mode, keytype))
 
 
+ACCEPTED_PUBLICKEY_RE = re.compile(r'Accepted publickey for \S+ from \S+')
+
+
+def _accepted_publickey_lines(raw: str) -> list:
+    """ONLY real accepted-publickey records (`Accepted publickey for <user>
+    from <ip> ...`). Journal diagnostics ('-- No entries --', headers),
+    banners, unrelated lines and changed-auth lines (password, none) are
+    NEVER auth records — arbitrary nonempty log output cannot stand in for
+    an accepted authentication."""
+    return [l for l in raw.splitlines() if ACCEPTED_PUBLICKEY_RE.search(l)]
+
+
 def sshd_accepted(container: str) -> list:
-    """The container's ACTUAL accepted-publickey log lines. An UNREADABLE log
-    raises — an empty read is only honest when the log was really read; a
-    silent [] must never stand in for zero accepted auth."""
-    probe = subprocess.run(
-        ['docker', 'exec', container, 'sh', '-c',
-         "grep 'Accepted publickey' /var/log/sshd.log 2>/dev/null || journalctl -u sshd 2>/dev/null || true"],
-        capture_output=True, text=True,
-    )
+    """The container's ACTUAL accepted-publickey records. EVERY branch's
+    output is filtered to real records — a journal's '-- No entries --' or
+    any other diagnostic can never calibrate. An UNREADABLE log raises
+    (docker exec failure, or neither the in-container log nor docker logs
+    readable) — a broken read is never zero. Each blocking docker call is
+    time-bounded; an overdue read fails closed."""
+    try:
+        probe = subprocess.run(
+            ['docker', 'exec', container, 'sh', '-c',
+             "grep 'Accepted publickey' /var/log/sshd.log 2>/dev/null || journalctl -u sshd --no-pager 2>/dev/null || true"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise AssertionError(f'{container}: the sshd log read exceeded its 30s bound ({e}) — fail closed')
     if probe.returncode != 0:
         raise AssertionError(
             f'{container}: the sshd log is not readable (docker exec failed: {probe.stderr.strip()[:120]}) — '
             f'the zero-auth oracle refuses an unreadable log')
-    if probe.stdout.strip():
-        return probe.stdout.strip().splitlines()
-    logs = subprocess.run(['docker', 'logs', container], capture_output=True, text=True)
+    lines = _accepted_publickey_lines(probe.stdout)
+    if lines:
+        return lines
+    try:
+        logs = subprocess.run(['docker', 'logs', container], capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired as e:
+        raise AssertionError(f'{container}: the docker-logs fallback exceeded its 30s bound ({e}) — fail closed')
     if logs.returncode != 0:
         raise AssertionError(f'{container}: neither the in-container sshd log nor docker logs are readable')
-    return [l for l in (logs.stdout + logs.stderr).splitlines() if 'Accepted publickey' in l]
+    return _accepted_publickey_lines(logs.stdout + logs.stderr)
 
 
 def zero_auth_snapshot_or_raise(run_id: str, watched: tuple) -> dict:
@@ -1166,6 +1241,173 @@ def zero_auth_oracle_control() -> None:
     print('prod zero-auth oracle control: added accepted auth and missing fixture coverage both caught')
 
 
+def sshd_log_extraction_control() -> None:
+    """The ACTUAL extraction + snapshot path (the real sshd_accepted /
+    zero_auth_snapshot_or_raise over a stubbed docker layer): journal
+    diagnostics ('-- No entries --', banners, unrelated output) yield ZERO
+    records and REFUSE to calibrate the zero-auth snapshot; real
+    Accepted-publickey lines calibrate; changed-auth lines never count; an
+    unreadable log and a read past its bound fail closed; and every docker
+    call carries its 30s time bound."""
+    real_run = subprocess.run
+
+    class _Done:
+        def __init__(self, rc, out, err=''):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    state = {'exec': (0, '', ''), 'logs': (0, '', '')}
+
+    def fake_run(cmd, **kw):
+        if cmd[:2] == ['docker', 'exec']:
+            assert kw.get('timeout') == 30, f'the sshd log read lost its time bound: {sorted(kw)}'
+            rc, out, err = state['exec']
+            return _Done(rc, out, err)
+        if cmd[:2] == ['docker', 'logs']:
+            assert kw.get('timeout') == 30, f'the docker-logs fallback lost its time bound: {sorted(kw)}'
+            rc, out, err = state['logs']
+            return _Done(rc, out, err)
+        return real_run(cmd, **kw)
+
+    real_line = ('Oct  8 00:00:00 fixture sshd[4242]: Accepted publickey for testuser '
+                 'from 127.0.0.1 port 5501 ssh2: ED25519 SHA256:AAAA')
+    try:
+        subprocess.run = fake_run
+        # journal diagnostics are NOT calibration: zero real records -> the
+        # snapshot must REFUSE (the reviewer's exact counterexample)
+        state.update(exec=(0, '-- No entries --\n', ''), logs=(0, 'unrelated container output\n', ''))
+        assert sshd_accepted('control-multi') == [], 'journal diagnostics were counted as auth records'
+        threw = False
+        try:
+            zero_auth_snapshot_or_raise('control', ('multi',))
+        except AssertionError as e:
+            threw = 'readiness probe' in str(e)
+        assert threw, 'a diagnostics-only log CALIBRATED the zero-auth snapshot'
+        # real records calibrate (banner noise alongside is tolerated)
+        state.update(exec=(0, f'banner line\n{real_line}\n', ''))
+        assert sshd_accepted('control-multi') == [real_line]
+        assert zero_auth_snapshot_or_raise('control', ('multi',)) == {'multi': 1}
+        # changed-auth and unrelated lines never count
+        state.update(exec=(0, 'Accepted password for root from 1.2.3.4 port 22 ssh2\n'
+                             'Failed publickey for invalid from 1.2.3.4 port 22 ssh2\n'
+                             'Server listening on 0.0.0.0 port 22.\n', ''))
+        assert sshd_accepted('control-multi') == [], 'changed-auth/unrelated lines were counted'
+        # an unreadable log fails closed
+        state.update(exec=(1, '', 'docker: no such container'))
+        threw = False
+        try:
+            sshd_accepted('control-multi')
+        except AssertionError as e:
+            threw = 'not readable' in str(e)
+        assert threw, 'an unreadable sshd log did not fail closed'
+        # a read past its bound fails closed
+        def overdue(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw.get('timeout'))
+        subprocess.run = overdue
+        threw = False
+        try:
+            sshd_accepted('control-multi')
+        except AssertionError as e:
+            threw = '30s bound' in str(e)
+        assert threw, 'an overdue sshd log read did not fail closed'
+    finally:
+        subprocess.run = real_run
+    print('prod sshd-extraction control: diagnostics/changed-auth refused, real records calibrate, '
+          'unreadable/overdue reads fail closed, time bounds present')
+
+
+EXPECTED_FINAL_STORES = ('main', 'broken-broker', 'tampered-advisory')
+
+
+def assert_gateway_frames_all_stores(stores: dict, expect_counts: dict) -> list:
+    """THE final auth-frame enumeration, over EVERY final store — run once,
+    post-quiescence (all three browser contexts closed): the EXACT expected
+    set of stores (a missing store is a failed oracle, never an unchecked
+    one), the exact expected gateway-socket count per store — INCLUDING the
+    broken-broker store, whose required zero means a socket recorded DURING
+    that context's close is caught here, not escaped — and the full frame
+    contract (first frame = the ONE signature-verified text auth, binary
+    after, at most the one ready advisory) on every gateway socket of every
+    store. Returns the flat gateway list in store order."""
+    assert tuple(stores) == EXPECTED_FINAL_STORES, (
+        f'the final scan must enumerate exactly {EXPECTED_FINAL_STORES}, got {tuple(stores)}')
+    assert set(expect_counts) == set(EXPECTED_FINAL_STORES), expect_counts
+    flat: list = []
+    for label in EXPECTED_FINAL_STORES:
+        recs = gateway_sockets(stores[label])
+        assert len(recs) == expect_counts[label], (
+            f'{label}: expected exactly {expect_counts[label]} gateway sockets post-quiescence, saw {len(recs)}')
+        for rec in recs:
+            assert_gateway_socket_frames(rec, f'gateway {label} {safe_url(rec.url)}')
+        flat.extend(recs)
+    return flat
+
+
+def final_aggregator_control() -> None:
+    """The ACTUAL final aggregator, fed the honest three-store set and
+    poisoned variants: a LATE broken-broker socket (the review's escape —
+    recorded during that context's close) is refused; a poisoned auth frame
+    in any store is refused; a missing store is refused; the honest set
+    passes with the flat gateway list in store order."""
+    import gateway_fixture_broker as broker_mod
+
+    device = sorted(KNOWN_DEVICES)[0]
+    url = f'{GATEWAY_URL}/api/v1/hosts/{device}/ssh'
+    token = broker_mod.mint_scoped_token(BROKER_URL)['token']
+    auth = json.dumps({'type': 'auth', 'v': 1, 'token': token, 'device_id': device}, separators=(',', ':'))
+    ready = json.dumps({'type': 'ready', 'v': 1, 'device_id': device,
+                        'ssh_host_key': 'ssh-ed25519 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY'}, separators=(',', ':'))
+
+    def honest_rec() -> SocketRecord:
+        rec = SocketRecord(url)
+        rec.sent.append((True, auth))
+        rec.sent.append((False, b'\x16\x03\x01ssh-client-bytes'))
+        rec.received.append((True, ready))
+        rec.received.append((False, b'\x00\x0bssh-server-bytes'))
+        return rec
+
+    def honest_stores() -> dict:
+        return {
+            'main': [honest_rec(), SocketRecord(f'{LEGACY_URL}/pipe?host=127.0.0.1&port=22&token=x')],
+            'broken-broker': [],
+            'tampered-advisory': [honest_rec()],
+        }
+
+    expect = {'main': 1, 'broken-broker': 0, 'tampered-advisory': 1}
+    got = assert_gateway_frames_all_stores(honest_stores(), expect)  # honest set passes
+    assert len(got) == 2, f'the flat gateway list is wrong: {len(got)}'
+    # a LATE broken-broker socket (e.g. recorded during that context's close)
+    stores = honest_stores()
+    stores['broken-broker'].append(honest_rec())
+    threw = False
+    try:
+        assert_gateway_frames_all_stores(stores, expect)
+    except AssertionError as e:
+        threw = 'broken-broker' in str(e)
+    assert threw, 'a late broken-broker socket was NOT caught by the final aggregator'
+    # a poisoned auth frame in the tampered store (a second auth)
+    stores = honest_stores()
+    bad = honest_rec()
+    bad.sent.append((True, auth))
+    stores['tampered-advisory'] = [bad]
+    threw = False
+    try:
+        assert_gateway_frames_all_stores(stores, expect)
+    except AssertionError:
+        threw = True
+    assert threw, 'a second auth frame escaped the final aggregator'
+    # a MISSING store is a failed oracle, never an unchecked one
+    stores = honest_stores()
+    del stores['broken-broker']
+    threw = False
+    try:
+        assert_gateway_frames_all_stores(stores, expect)
+    except AssertionError:
+        threw = True
+    assert threw, 'a missing store passed the final enumeration'
+    print('prod final-aggregator control: all three stores enumerated; late broken-broker socket, '
+          'poisoned frame and missing store refused')
+
+
 async def main() -> int:
     global PAGE
     custody_negative_control()
@@ -1176,17 +1418,28 @@ async def main() -> int:
     scoped_token_verification_control()
     gateway_socket_frame_control()
     zero_auth_oracle_control()
-    print('prod captured-HTTP/URL policy control + CLEAR-ack matcher control: poisoned placements rejected, honest surfaces accepted')
+    sshd_log_extraction_control()
+    final_aggregator_control()
+    print('offline controls: 9 suites (custody, captured-HTTP/URL policy, capture path, CLEAR ack, '
+          'scoped token, gateway frames, zero-auth oracle, sshd extraction, final aggregator)')
     if OFFLINE_ONLY:
         print('offline controls complete (no browser, no network, no Docker)')
         return 0
 
+    assert_time_left('the composed browser+Go flow', min_left=60)
     # NOTE: the sync fake — a minimal per-slot opaque store (the vault is not
     # the transport under proof; its custody is the web harness's proven leg).
     routes_page = await async_playwright().start()
     browser = await routes_page.chromium.launch()
     try:
-        return await run_flow(browser, routes_page)
+        # The composed deadline: the WHOLE flow is awaited under an umbrella
+        # bound to the remaining work budget — an expiry cancels the flow and
+        # fails the run (never an unbounded browser session).
+        return await asyncio.wait_for(run_flow(browser, routes_page), timeout=max(1.0, work_time_left()))
+    except asyncio.TimeoutError:
+        print('WORK DEADLINE EXHAUSTED — the composed flow is refused (fail closed); teardown proceeds', flush=True)
+        await dump_diagnostics()
+        raise
     except BaseException:
         # Diagnostics on the LIVE loop (asyncio.run will close it once this
         # propagates — a second asyncio.run cannot reach Playwright).
@@ -1194,8 +1447,8 @@ async def main() -> int:
         raise
     finally:
         try:
-            await browser.close()
-            await routes_page.stop()
+            await asyncio.wait_for(browser.close(), 30)
+            await asyncio.wait_for(routes_page.stop(), 30)
         except Exception:  # noqa: BLE001 — teardown must not mask the failure
             pass
 
@@ -1339,14 +1592,16 @@ window.google = { accounts: { id: {
     # for the servers the NEGATIVE legs aim at (edrsa: wrong-pin; sshrsa: the
     # kex-failure finding) or leave untouched (multi/reverse). The negatives
     # must add ZERO accepted userauth lines on any of them — asserted against
-    # the sshd logs' actual Accepted lines below (server-side truth, not
-    # client-side inference).
+    # the sshd logs' actual Accepted-publickey RECORDS below (server-side
+    # truth, not client-side inference).
+    assert_time_left('the calibrated zero-auth snapshot')
     zero_auth_watch = ('edrsa', 'sshrsa', 'multi', 'reverse')
     zero_auth_snapshot = zero_auth_snapshot_or_raise(FIX['runId'], zero_auth_watch)
-    print(f'zero-auth oracle snapshot (accepted userauth lines, all reads healthy): {zero_auth_snapshot}')
+    print(f'zero-auth oracle snapshot (accepted userauth records, all reads healthy): {zero_auth_snapshot}')
 
     # --- the negative legs (same context) -----------------------------------
     step('gateway mode dials complete; starting the in-browser negatives')
+    assert_time_left('the in-browser negative legs')
     # 1. keyless gateway host: refused BEFORE any socket.
     socks_before = len(gateway_sockets(main_store))
     await add_host(page, 'gw-keyless', 'keyless.gw.e2e.test', '22', 'testuser',
@@ -1410,7 +1665,7 @@ window.google = { accounts: { id: {
 
     # 3. ECDSA user key: the shipping signing guard refuses before a socket.
     ecdsa_key = os.path.join(WORK, 'user_ecdsa')
-    subprocess.run(['ssh-keygen', '-t', 'ecdsa', '-N', '', '-f', ecdsa_key, '-q'], check=True)
+    subprocess.run(['ssh-keygen', '-t', 'ecdsa', '-N', '', '-f', ecdsa_key, '-q'], check=True, timeout=60)
     socks_before = len(gateway_sockets(main_store))
     await add_host(page, 'gw-ecdsakey', 'ecdsakey.gw.e2e.test', '22', 'testuser',
                    device=FIX['modes']['edrsa']['device'], gwurl=GATEWAY_URL)
@@ -1431,7 +1686,7 @@ window.google = { accounts: { id: {
     assert len(gateway_sockets(main_store)) == socks_before, 'an ECDSA-key dial opened a gateway socket'
     print(f'ECDSA-key refusal surfaced: {ecdsa_error[:100]}')
 
-    await context.close()
+    await close_context(context, 'main')
 
     # --- broker-exchange failure: NO Google fallback, NO gateway socket ----
     step('in-browser negatives complete; starting the broken-broker leg')
@@ -1475,13 +1730,20 @@ window.google = { accounts: { id: {
     # The failed exchange surfaced WITHOUT any Google-shaped auth attempt:
     # no gateway socket exists at all, so there was no fallback frame either.
     print(f'broken-broker refusal surfaced (zero gateway sockets): {broker_error[:80]}')
-    await ctx2.close()
+    await close_context(ctx2, 'broken-broker')
+    # POST-CLOSE QUIESCENCE: the zero-socket assertion above ran BEFORE this
+    # close — a socket recorded DURING the close must not escape. It is
+    # re-asserted here, and the final aggregator below would still hold it to
+    # the frame contract even if it existed.
+    assert gateway_sockets(store2) == [], (
+        'a gateway socket was recorded during the broken-broker context close')
 
     # --- wire assertions I: socket counts + the calibrated zero-auth oracle -
     # The tampered-advisory leg below re-dials gw-edrsa SUCCESSFULLY (a
     # positive — it adds one accepted userauth on that server), so the
     # NEGATIVES' zero-added-auth proof must close here, before that leg.
     step('broken-broker leg complete; running the pre-tamper wire assertions')
+    assert_time_left('the pre-tamper wire assertions')
     gw_recs = gateway_sockets(main_store)
     legacy_recs = legacy_sockets(main_store)
     # 5 positive gateway dials + 1 wrong-pin attempt = exactly 6 sockets; the
@@ -1501,6 +1763,7 @@ window.google = { accounts: { id: {
 
     # --- production verifier negatives (server side, real WS route) --------
     step('wire assertions complete; probing the production verifier negatives')
+    assert_time_left('the production verifier negative probes')
     import websockets
     import gateway_fixture_broker as broker_mod
     broker_mod.ISSUER = BROKER_URL
@@ -1545,7 +1808,7 @@ window.google = { accounts: { id: {
     req = urllib.request.Request(
         f'http://127.0.0.1:{urlsplit(GATEWAY_URL).port}/identity/v1/devices/{FIX["modes"]["sshrsa"]["device"]}/revoke',
         method='POST', headers={'Authorization': f'Bearer {good}'})
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         assert resp.status == 200
     reply = await ws_probe(good, FIX['modes']['sshrsa']['device'])
     assert reply.get('type') == 'error', reply
@@ -1553,6 +1816,7 @@ window.google = { accounts: { id: {
 
     # --- the lying ready advisory cannot change the pin ---------------------
     step('verifier negatives complete; starting the tampered-advisory leg')
+    assert_time_left('the tampered-advisory leg')
     # The gateway's ready.ssh_host_key is its enrollment record — registry
     # metadata the gateway CONTROLS. Tamper that record out-of-band (a REAL
     # but WRONG key line — the multi server's RSA key), restart the gateway
@@ -1581,7 +1845,10 @@ window.google = { accounts: { id: {
     assert dev['SSHHostKey'].startswith('ssh-ed25519 '), dev['SSHHostKey']
     dev['SSHHostKey'] = rsa_line
     json.dump(reg, open(registry_file, 'w'))
-    subprocess.run(['bash', FIX['gatewayRestart']], check=True)
+    # The restart script kills ONLY this run's exact gateway PID and writes
+    # the EXACT new PID to the run's pid file; the whole restart is
+    # time-bounded — an overdue restart fails closed.
+    subprocess.run(['bash', FIX['gatewayRestart']], check=True, timeout=120)
     # The agent reconnects with backoff; wait until the gateway serves the
     # (tampered) device again before re-dialing.
     await wait_for(lambda: _ready_probe(FIX['modes']['edrsa']['device']), 60,
@@ -1610,17 +1877,16 @@ window.google = { accounts: { id: {
         f'the tampered advisory did not surface: {ready_texts[:1]}'
     )
     print('tampered-advisory leg: ready advertised the WRONG (rsa) key — the pin held, the dial succeeded')
-    await tamper_ctx.close()
+    await close_context(tamper_ctx, 'tampered-advisory')
 
     # --- FINAL custody scan: ALL THREE contexts, post-quiescence ------------
     # Every context is now closed, so no late frame, no late HTTP task and no
     # third-context traffic can escape: this ONE pass scans every socket of
     # every store (dial URL policy; binary AND text, sent AND received),
-    # every auth frame, and every captured HTTP request of all three
-    # contexts (joined fail-closed).
+    # auth frames from EVERY store, and every captured HTTP request of all
+    # three contexts (joined fail-closed).
     step('tampered-advisory leg complete; final custody scan over ALL THREE browser contexts (post-quiescence)')
-    tampered_recs = [s for s in store3 if urlsplit(GATEWAY_URL).netloc in s.url]
-    assert len(tampered_recs) == 1, f'expected exactly 1 tampered-advisory gateway socket, saw {len(tampered_recs)}'
+    assert_time_left('the final custody scan')
     for store, label in ((main_store, 'main'), (store2, 'broken-broker'), (store3, 'tampered-advisory')):
         for rec in store:
             # The recorded dial URL through the ONE structured URL policy:
@@ -1631,13 +1897,19 @@ window.google = { accounts: { id: {
             assert_url_custody_prod(rec.url, f'{label} socket')
             assert_wire_custody(rec.all_binary(), rec.all_text(), f'{label} {safe_url(rec.url)}')
 
-    # Auth frames: exactly one TEXT auth frame per gateway socket (the FIRST
-    # frame sent), exact shape, its device the dialed URL's device, its token
-    # a signature-VERIFIED live broker-scoped RS256 credential; every other
-    # sent frame binary; at most the one ready advisory back. Includes the
-    # tampered-advisory context's socket.
-    for rec in gw_recs + tampered_recs:
-        assert_gateway_socket_frames(rec, f'gateway {safe_url(rec.url)}')
+    # Auth frames: enumerated over EVERY final store by the aggregator (the
+    # exact expected store set, exact per-store gateway counts — including
+    # the broken-broker store's required ZERO, so a late close-recorded
+    # socket is caught — and the full frame contract with the
+    # signature-verified auth on every gateway socket of every store). Flat
+    # order: 6 main sockets (4 positive dials + wrong-pin + ssh-rsa), then
+    # the 1 tampered-advisory redial.
+    final_gateway = assert_gateway_frames_all_stores(
+        {'main': main_store, 'broken-broker': store2, 'tampered-advisory': store3},
+        {'main': 6, 'broken-broker': 0, 'tampered-advisory': 1})
+    gw_recs = final_gateway[:6]
+    tampered_recs = final_gateway[6:]
+
     # The wrong-pin socket got ready (advisory) but never a session: its SSH
     # stream died at the pin refusal — it carries NO exec/shell data beyond
     # the kex. Positive sockets DID carry real traffic both ways. Socket
@@ -1701,7 +1973,8 @@ window.google = { accounts: { id: {
     print(f"  custody: ALL THREE contexts (main, broken-broker, tampered-advisory), post-quiescence — every socket "
           f"scanned (dial URLs through the exact-surface policy; binary+text, sent+received) against "
           f"{len(SECRETS_AS_TEXT)} secret forms + full key bodies; {len(http_captures)} captured requests scanned")
-    print('  auth frames: exactly one per gateway socket (incl. the tampered redial), each the FIRST frame, '
+    print('  auth frames: enumerated over ALL THREE final stores (incl. the tampered redial and the '
+          'broken-broker store\'s required zero), exactly one per gateway socket, each the FIRST frame, '
           'exact-shape, RS256-SIGNATURE-VERIFIED against the fixture broker key, never the sign-in')
     return 0
 
