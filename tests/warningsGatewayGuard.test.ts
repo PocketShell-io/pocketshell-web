@@ -248,3 +248,99 @@ describe('the warnings sweep never uploads custody-protected keys to the bridge'
     }
   });
 });
+
+describe('nullLinkDirectHostNeverUploadsCredentials — the sweep matches the DIAL, not the shape', () => {
+  /** Extra host shapes the presence rules exist for: a materialized
+   * `link: null` (the dial ignores it and goes DIRECT), a malformed gateway
+   * marker (null), and a conflicting entry (link AND gateway). */
+  function seedPresence(): void {
+    const hosts = useHostsStore();
+    hosts.pulled = true;
+    hosts.passphrase = 'sync-pass';
+    const nullLink = entry('null-link');
+    (nullLink as Record<string, unknown>)['link'] = null;
+    const malformedGateway = entry('gw-malformed', { gateway: null as never });
+    const undefinedGateway = entry('gw-undefined');
+    (undefinedGateway as Record<string, unknown>)['gateway'] = undefined;
+    const conflicting = entry('conflicted', {
+      link: { relayUrl: 'wss://link-relay.example', hostId: 'host-1' } as never,
+      gateway: GATEWAY_TARGET,
+    });
+    hosts.hosts = [nullLink, malformedGateway, undefinedGateway, conflicting];
+    const secrets: Record<string, HostSecret> = {
+      'null-link': { privateKeyPem: PLAIN_KEY },
+      'gw-malformed': { privateKeyPem: GATEWAY_KEY },
+      'gw-undefined': { privateKeyPem: GATEWAY_KEY },
+      conflicted: { privateKeyPem: GATEWAY_KEY },
+    };
+    hosts.secrets = secrets;
+    hosts.secretHosts = Object.keys(secrets);
+  }
+
+  it('a host whose link is null dials DIRECT — the bridge never receives its key or password', async () => {
+    seedPresence();
+    const warnings = useWarningsStore();
+    const hosts = useHostsStore();
+    const getSecret = vi.spyOn(hosts, 'getHostSecret');
+    const { opens, open } = spyBridgeOpens();
+    try {
+      expect(await warnings.linkFor('null-link')).toBeNull();
+      expect(getSecret).not.toHaveBeenCalledWith('null-link');
+      await warnings.sweep();
+      // With BOTH urls configured the null-link host must not appear at the
+      // bridge at all — no key frame, no password frame, nothing.
+      expect(opens).toEqual([]);
+      expect(getSecret).not.toHaveBeenCalledWith('null-link');
+      expect(warnings.byHost['null-link']).toBeUndefined();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('malformed and conflicting gateway markers exclude a host from every bridge path', async () => {
+    seedPresence();
+    const warnings = useWarningsStore();
+    const hosts = useHostsStore();
+    const getSecret = vi.spyOn(hosts, 'getHostSecret');
+    const { opens, open } = spyBridgeOpens();
+    try {
+      // Presence, not truthiness: null and undefined-valued markers exclude.
+      for (const name of ['gw-malformed', 'gw-undefined', 'conflicted']) {
+        expect(await warnings.linkFor(name)).toBeNull();
+      }
+      await warnings.sweep();
+      await warnings.ack('gw-malformed', 'some-session');
+      await warnings.ackAll('conflicted');
+      for (const name of ['gw-malformed', 'gw-undefined', 'conflicted']) {
+        expect(getSecret).not.toHaveBeenCalledWith(name);
+        expect(warnings.byHost[name]).toBeUndefined();
+      }
+      expect(opens).toEqual([]);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('on a legacy deployment (no direct relay) the null-link host keeps the historical sweep', async () => {
+    seedPresence();
+    config.directWsUrl = '';
+    const warnings = useWarningsStore();
+    const hosts = useHostsStore();
+    const getSecret = vi.spyOn(hosts, 'getHostSecret');
+    const { opens, open } = spyBridgeOpens();
+    try {
+      const link = await warnings.linkFor('null-link');
+      expect(link).not.toBeNull();
+      expect(link!.auth).toEqual({ kind: 'key', privateKey: PLAIN_KEY });
+      await warnings.sweep();
+      // The malformed/conflicting gateway shapes stay excluded even here;
+      // only the null-link (direct-transported) host sweeps.
+      expect(opens).toEqual([{ url: config.wsUrl, authKind: 'key' }]);
+      expect(getSecret).not.toHaveBeenCalledWith('gw-malformed');
+      expect(getSecret).not.toHaveBeenCalledWith('gw-undefined');
+      expect(getSecret).not.toHaveBeenCalledWith('conflicted');
+    } finally {
+      open.mockRestore();
+    }
+  });
+});

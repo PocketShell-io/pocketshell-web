@@ -26,9 +26,9 @@
  */
 import type { PocketShellApi, Unsubscribe } from '@ui/app/api';
 import type { ConnectionState } from '@pocketshell/core';
-import type { CloneProgress, HostEntry } from '@pocketshell/core';
-import { normalizeGatewayTarget } from '@pocketshell/core';
+import type { CloneProgress, GatewayTransportTarget, HostEntry } from '@pocketshell/core';
 import { SshConnection } from '../terminal/connection';
+import { resolveTransportIntent } from './transportIntent';
 import { LinkSshConnection } from '../terminal/linkConnection';
 import { getGatewayToken } from '../api/gatewayToken';
 import { useAuthStore } from '../stores/auth';
@@ -144,8 +144,16 @@ async function connectHost(payload: {
   if (!entry) {
     return { ok: false, error: `No synced host for ${payload.user ? `${payload.user}@` : ''}${payload.host}:${wantedPort}` };
   }
+  // The dial's transport is decided HERE — before the vault is touched, any
+  // token minted, or any socket opened. The entry's shape and the payload's
+  // raw transport markers decide together; a malformed marker, a conflict
+  // between the two transports, or a payload intent that disagrees with the
+  // matched entry refuses outright, and nothing below runs: no secret read,
+  // no broker request, no legacy-bridge, direct or gateway socket.
+  const intent = resolveTransportIntent({ entry, payload });
+  if (intent.kind === 'refuse') return { ok: false, error: intent.reason };
   const secret = await store.getHostSecret(entry.name);
-  if (entry.link) {
+  if (intent.kind === 'link') {
     // A link host (no inbound SSH) needs exactly one secret: the shared
     // relay token, stored in the vault's password slot.
     if (!secret || (secret.password ?? '') === '') {
@@ -156,8 +164,8 @@ async function connectHost(payload: {
     }
     return connectViaLink(entry, secret.password!);
   }
-  if (entry.gateway) {
-    return connectViaGateway(entry, secret, payload.user);
+  if (intent.kind === 'gateway') {
+    return connectViaGateway(entry, intent.target, secret, payload.user);
   }
   if (!secret || ((secret.privateKeyPem ?? '') === '' && (secret.password ?? '') === '')) {
     return {
@@ -283,13 +291,10 @@ async function connectViaLink(
  */
 async function connectViaGateway(
   entry: HostEntry,
+  target: GatewayTransportTarget,
   secret: { privateKeyPem?: string; keyPassphrase?: string } | undefined,
   fallbackUser: string,
 ): Promise<{ ok: true; connectionId: string } | { ok: false; error: string }> {
-  const target = normalizeGatewayTarget(entry.gateway);
-  if (!target) {
-    return { ok: false, error: `Host ${entry.name} has a broken gateway configuration — edit the host and re-enter its device id.` };
-  }
   if (!secret || (secret.privateKeyPem ?? '') === '') {
     return {
       ok: false,

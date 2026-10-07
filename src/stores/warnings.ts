@@ -11,6 +11,7 @@ import {
 import { config } from '../config';
 import { useAuthStore } from './auth';
 import { useHostsStore } from './hosts';
+import { resolveTransportIntent } from '../platform/transportIntent';
 
 /**
  * Unacknowledged crash/OOM warnings per host, per issue #1: the hosts list
@@ -33,18 +34,24 @@ import { useHostsStore } from './hosts';
  * secret is so much as decrypted (`linkFor` is the one gate every bridge
  * run passes; the sweep queue filters too):
  *
- *  - GATEWAY hosts (`entry.gateway`): the key exists to authenticate
- *    end-to-end THROUGH the gateway; it never travels to any other
- *    infrastructure. There is no fallback — a gateway host simply has no
- *    bridge sweep (docs/gateway-client.md, maturity limits).
+ *  - GATEWAY hosts (a `gateway` marker by OWN-PROPERTY PRESENCE — a null,
+ *    malformed or even undefined-valued marker is still a marker): the key
+ *    exists to authenticate end-to-end THROUGH the gateway; it never travels
+ *    to any other infrastructure, and no readable-target requirement
+ *    softens the exclusion — a broken marker excludes too. There is no
+ *    fallback — a gateway host simply has no bridge sweep
+ *    (docs/gateway-client.md, maturity limits).
+ *  - REFUSED shapes (a link/gateway conflict, an unreadable target): the
+ *    dial refuses them, so the sweep must not bridge for them either.
  *  - ORDINARY browser-direct hosts: when a direct relay is configured
  *    (`config.directWsUrl`), every plain host dials end-to-end from the
- *    browser and its key must stay out of the Lambda. Only a deployment
- *    with NO direct relay (`directWsUrl === ''`) has — by that same
- *    configuration — chosen the Lambda bridge as its host transport, and
- *    keeps the historical sweep for its non-gateway hosts. Link hosts are
- *    unchanged: their bridge-frame secret is the shared link token, not a
- *    private key.
+ *    browser and its key must stay out of the Lambda — including a host
+ *    carrying a materialized `link: null`, whose dial ignores the null and
+ *    goes direct. Only a deployment with NO direct relay
+ *    (`directWsUrl === ''`) has — by that same configuration — chosen the
+ *    Lambda bridge as its host transport, and keeps the historical sweep
+ *    for its non-gateway hosts. Link hosts are unchanged: their bridge-frame
+ *    secret is the shared link token, not a private key.
  *
  * Nothing here ever falls back to another transport on failure: a sweep
  * miss stays a miss, and no code path in this store dials the gateway.
@@ -80,10 +87,12 @@ export const useWarningsStore = defineStore('host-warnings', {
       const host = hosts.hosts.find((h) => h.name === name);
       if (host === undefined) return null;
       // Credential custody — BEFORE the secret is loaded (see class doc):
-      // gateway hosts never; plain hosts only when this deployment has no
-      // direct relay and the bridge is their actual transport.
-      if (host.gateway !== undefined) return null;
-      if (host.link === undefined && config.directWsUrl !== '') return null;
+      // the same validated transport policy the dial runs, presence-first, so
+      // a malformed gateway marker or a conflicting entry is excluded even
+      // though its value would look falsy — and a host whose dial would
+      // ignore a null link and go direct is never treated as a link host
+      // here either.
+      if (!this.eligibleForBridge(host)) return null;
       const bridgeAuth = bridgeAuthOf(await hosts.getHostSecret(name));
       if (bridgeAuth === null) return null;
       return {
@@ -135,11 +144,21 @@ export const useWarningsStore = defineStore('host-warnings', {
     },
 
     /** The custody rule in one place, shared by the queue, the prune, and
-     * (via linkFor) every ack. Static per host + config — no secret access. */
+     * (via linkFor) every ack. Static per host + config — no secret access.
+     * The gate is the dial's own transport resolution: a GATEWAY marker
+     * (by presence — null, malformed, even an own property holding
+     * `undefined`) and any REFUSED shape (conflict, unreadable target)
+     * exclude a host outright; a LINK host stays eligible because its
+     * bridge-frame secret is the shared relay token, never a private key;
+     * an ordinary host is eligible ONLY when the deployment has no direct
+     * relay — the configuration itself chose the Lambda bridge — and that
+     * includes a materialized `link: null`, whose dial goes DIRECT and so
+     * must not bridge credentials. */
     eligibleForBridge(host: HostEntry | undefined): boolean {
       if (host === undefined) return false;
-      if (host.gateway !== undefined) return false;
-      return host.link !== undefined || config.directWsUrl === '';
+      const intent = resolveTransportIntent({ entry: host });
+      if (intent.kind === 'link') return true;
+      return intent.kind === 'none' && config.directWsUrl === '';
     },
 
     /** One host's list, quiet on any failure: null (no `a`, timeout, bridge
