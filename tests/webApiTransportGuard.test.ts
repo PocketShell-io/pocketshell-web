@@ -35,21 +35,31 @@ vi.mock('../src/api/sync', () => ({
   },
 }));
 
-const { mintCalls, GOOGLE_TOKEN, BROKER_TOKEN } = vi.hoisted(() => ({
+const { mintCalls, mintFailure, mintExchange, GOOGLE_TOKEN, BROKER_TOKEN } = vi.hoisted(() => ({
   mintCalls: [] as unknown[],
+  mintFailure: { active: false },
+  mintExchange: (opts: unknown) => {
+    mintCalls.push(opts);
+    if (mintFailure.active) {
+      return Promise.reject(new Error('The account service did not answer the credential exchange in time.'));
+    }
+    return Promise.resolve({ token: 'broker-minted.scoped.jwt', expiresAtMs: Date.now() + 300_000 });
+  },
   GOOGLE_TOKEN: 'google-signin-sentinel',
   BROKER_TOKEN: 'broker-minted.scoped.jwt',
 }));
 
 vi.mock('../src/api/gatewayToken', () => ({
-  getGatewayToken: (opts: unknown) => {
-    mintCalls.push(opts);
-    return Promise.resolve({ token: BROKER_TOKEN, expiresAtMs: Date.now() + 300_000 });
+  getGatewayToken: mintExchange,
+  mintScopedProxyAdmission: async (opts: unknown) => {
+    const minted = await mintExchange(opts);
+    return { credential: 'pocketshell-scoped-proxy-admission-v1', ...minted };
   },
   GatewayTokenError: class GatewayTokenError extends Error {},
 }));
 
 import { config } from '../src/config';
+import { SCOPED_PROXY_UNCONFIGURED_MESSAGE } from '../src/terminal/scopedProxyDuplex';
 import { useAuthStore } from '../src/stores/auth';
 import { useHostPinsStore } from '../src/stores/hostPins';
 import { useHostsStore } from '../src/stores/hosts';
@@ -82,8 +92,10 @@ beforeEach(() => {
   setActivePinia(createPinia());
   localStorage.clear();
   mintCalls.length = 0;
+  mintFailure.active = false;
   config.wsUrl = 'wss://legacy-bridge.example';
   config.directWsUrl = 'wss://direct-relay.example';
+  config.scopedProxyUrl = 'wss://scoped-proxy.example';
   config.syncApiBase = 'https://accounts.example';
   useAuthStore().idToken = GOOGLE_TOKEN;
 });
@@ -236,10 +248,13 @@ describe('positive controls — valid intents still dial their own transport', (
     const result = await webApi.ssh.connect({ host: 'gw-ok.example', user: 'u' });
     expect(result.ok).toBe(true);
     expect(mintCalls).toHaveLength(1);
-    // The dial's idToken is the BROKER token — the Google sign-in never rides it.
+    // The dial's gatewayToken is the BROKER token — the Google sign-in never
+    // rides it, and the raw sign-in is not a field on the dial at all.
     const dial = vi.mocked(SshConnection.prototype.connect).mock.calls.at(-1)![0];
-    expect(dial.idToken).toBe(BROKER_TOKEN);
-    expect(dial.idToken).not.toBe(GOOGLE_TOKEN);
+    expect(dial.gatewayToken).toBe(BROKER_TOKEN);
+    expect(dial.gatewayToken).not.toBe(GOOGLE_TOKEN);
+    expect(dial).not.toHaveProperty('idToken');
+    expect(JSON.stringify(dial)).not.toContain(GOOGLE_TOKEN);
     expect(dial.gateway?.deviceId).toBe(GATEWAY_TARGET.deviceId);
   });
 
@@ -251,14 +266,62 @@ describe('positive controls — valid intents still dial their own transport', (
     expect(vi.mocked(SshConnection.prototype.connect)).not.toHaveBeenCalled();
   });
 
-  it('an ordinary entry still dials direct — unchanged control', async () => {
+  it('an ordinary entry dials the SCOPED DIRECT PROXY with a fresh typed admission — never a URL token', async () => {
     seed();
     const result = await webApi.ssh.connect({ host: 'plain.example', user: 'u' });
     expect(result.ok).toBe(true);
+    expect(mintCalls).toHaveLength(1);
     const dial = vi.mocked(SshConnection.prototype.connect).mock.calls.at(-1)![0];
-    expect(dial.url).toBe(config.directWsUrl);
+    expect(dial.scopedProxy?.serverUrl).toBe(config.scopedProxyUrl);
+    expect(dial.scopedProxy?.admission.credential).toBe('pocketshell-scoped-proxy-admission-v1');
+    expect(dial.scopedProxy?.admission.token).toBe(BROKER_TOKEN);
+    // The old query-token dial surface is gone from the option type entirely.
+    expect(dial).not.toHaveProperty('url');
+    expect(dial).not.toHaveProperty('idToken');
+    // The raw sign-in appears nowhere on the dial.
+    expect(JSON.stringify(dial)).not.toContain(GOOGLE_TOKEN);
     expect(dial.gateway).toBeUndefined();
     expect(vi.mocked(LinkSshConnection.prototype.connect)).not.toHaveBeenCalled();
+  });
+
+  it('an ordinary entry on a deployment WITHOUT the scoped proxy refuses with the fixed sentence — zero mints, zero sockets', async () => {
+    seed();
+    config.scopedProxyUrl = '';
+    const result = await webApi.ssh.connect({ host: 'plain.example', user: 'u' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe(SCOPED_PROXY_UNCONFIGURED_MESSAGE);
+    expect(mintCalls).toEqual([]);
+    expect(vi.mocked(SshConnection.prototype.connect)).not.toHaveBeenCalled();
+    expect(vi.mocked(LinkSshConnection.prototype.connect)).not.toHaveBeenCalled();
+    config.scopedProxyUrl = 'wss://scoped-proxy.example';
+  });
+
+  it('a failed admission exchange ends the ordinary dial — no socket, no fallback', async () => {
+    seed();
+    mintFailure.active = true;
+    try {
+      const result = await webApi.ssh.connect({ host: 'plain.example', user: 'u' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatch(/was not contacted/);
+      expect(vi.mocked(SshConnection.prototype.connect)).not.toHaveBeenCalled();
+      expect(vi.mocked(LinkSshConnection.prototype.connect)).not.toHaveBeenCalled();
+    } finally {
+      mintFailure.active = false;
+    }
+  });
+
+  it('the missing-key refusal fires BEFORE the broker mint on an ordinary host', async () => {
+    const hosts = useHostsStore();
+    hosts.pulled = true;
+    hosts.passphrase = 'sync-pass';
+    const keyless = entry('keyless');
+    hosts.hosts = [keyless];
+    hosts.secrets = {};
+    hosts.secretHosts = [];
+    const result = await webApi.ssh.connect({ host: 'keyless.example', user: 'u' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/No key attached/);
+    expect(mintCalls).toEqual([]);
   });
 });
 

@@ -1,16 +1,22 @@
 import { SshConnection, type PtyChannel } from './connection';
-import type { TerminalSession, SessionHandlers } from './session';
+import type { TerminalSession, SessionHandlers, SessionDialSpec } from './session';
 import type { BridgeOpenOptions } from './bridge';
 
 /**
- * Browser-direct SSH: the browser runs the SSH client itself and the relay
- * (relay/ — a dumb WebSocket↔TCP pipe, deployable as a free Cloudflare
- * Worker) only ferries ciphertext toward host:port. The private key never
- * leaves the browser; the relay has nothing to read even in principle.
+ * Browser-direct SSH: the browser runs the SSH client itself and reaches the
+ * host through the deployment's versioned scoped direct proxy
+ * (`/proxy/v1/ssh`) — the proxy ferries opaque ciphertext toward host:port
+ * and admits the dial with a broker-minted scoped token in the first text
+ * frame. The private key never leaves the browser; the sign-in never rides
+ * the URL, a header, or any frame; the proxy has nothing to read even in
+ * principle.
  *
- * This is the sessions workspace's single-tab shape: one SshConnection, one
- * login-shell PTY. The workspace view drives SshConnection directly when it
- * needs exec channels and several session tabs at once.
+ * The admission is minted FRESH per actual open through the async provider —
+ * never per keystroke, never per exec on an already-open session, and never
+ * from a stored token. This is the sessions workspace's single-tab shape:
+ * one SshConnection, one login-shell PTY. The workspace view drives
+ * SshConnection directly when it needs exec channels and several session
+ * tabs at once.
  */
 export class DirectSshSession implements TerminalSession {
   private readonly conn = new SshConnection();
@@ -18,17 +24,22 @@ export class DirectSshSession implements TerminalSession {
   private closedByUs = false;
 
   constructor(
-    private readonly url: string,
-    private readonly idToken: string,
+    private readonly dial: Extract<SessionDialSpec, { kind: 'direct' }>,
     private readonly handlers: SessionHandlers,
   ) {}
 
-  /** Dial the relay, run the SSH handshake through it, start a shell, and
-   * resolve once the shell is live — the `connected` equivalent. */
+  /** Mint a fresh admission, dial the scoped proxy, run the SSH handshake
+   * through it, start a shell, and resolve once the shell is live — the
+   * `connected` equivalent. A failed mint or admission fails the session
+   * with zero sockets and zero fallback. */
   async open(opts: BridgeOpenOptions): Promise<void> {
+    const admission = await this.dial.dialOf();
     await this.conn.connect({
-      url: this.url,
-      idToken: this.idToken,
+      scopedProxy: {
+        serverUrl: this.dial.serverUrl,
+        admission,
+        ...(this.dial.allowInsecureWs ? { allowInsecureWs: true } : {}),
+      },
       host: opts.host,
       port: opts.port,
       user: opts.user,

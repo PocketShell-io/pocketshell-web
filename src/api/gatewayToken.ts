@@ -249,6 +249,61 @@ export async function getGatewayToken(opts: GatewayTokenOptions): Promise<Gatewa
   return { token, expiresAtMs };
 }
 
+// --- the scoped direct-proxy admission credential ---------------------------
+//
+// The versioned direct-SSH proxy (`/proxy/v1/ssh`) admits a dial with the
+// SAME broker mint as the gateway's management surface — but the dial's
+// credential must be impossible to confuse with the raw sign-in (a string)
+// or with any other bearer. So the minted token is wrapped in a DISTINCT
+// typed credential whose brand field only this module produces: a raw
+// Google ID token does not type as an admission, and an admission does not
+// type where a string bearer is expected. The proxy authenticates ACCOUNT
+// ADMISSION only — it is never an SSH credential; the SSH private key
+// travels only inside the end-to-end encrypted SSH session.
+
+/** The literal brand no other value can carry. */
+export type ScopedProxyAdmissionBrand = 'pocketshell-scoped-proxy-admission-v1';
+
+export interface ScopedProxyAdmission {
+  readonly credential: ScopedProxyAdmissionBrand;
+  /** The broker JWT — bounded, RS256, gateway-scoped (see module header). */
+  readonly token: string;
+  /** Unix milliseconds. Bounded: at most now + 5 min + skew. */
+  readonly expiresAtMs: number;
+}
+
+/** Wrap a fresh broker mint as the typed admission credential. No I/O of
+ * its own — call it right after `getGatewayToken`, per actual dial. */
+export function scopedProxyAdmissionOf(minted: GatewayToken): ScopedProxyAdmission {
+  return { credential: 'pocketshell-scoped-proxy-admission-v1', token: minted.token, expiresAtMs: minted.expiresAtMs };
+}
+
+/**
+ * One-stop mint for one actual proxy dial: exchange the sign-in at the
+ * trusted broker and return the typed admission. Rejects on every exchange
+ * failure — the caller must treat "no admission" as "no dial", never fall
+ * back to the raw sign-in, the legacy unversioned relay, or the bridge.
+ */
+export async function mintScopedProxyAdmission(opts: GatewayTokenOptions): Promise<ScopedProxyAdmission> {
+  return scopedProxyAdmissionOf(await getGatewayToken(opts));
+}
+
+/** How much life an admission must still have to be put on the wire — a
+ * token inside this margin is too close to expiry to admit a session. */
+export const ADMISSION_FRESH_MARGIN_MS = 30_000;
+
+/** True when the admission still has usable life. A stale admission is
+ * NEVER dialled — the caller remints (a fresh dial means a fresh mint). */
+export function admissionFresh(admission: ScopedProxyAdmission, nowMs: number, marginMs = ADMISSION_FRESH_MARGIN_MS): boolean {
+  return (
+    admission?.credential === 'pocketshell-scoped-proxy-admission-v1' &&
+    typeof admission.token === 'string' &&
+    admission.token !== '' &&
+    Number.isFinite(admission.expiresAtMs) &&
+    admission.expiresAtMs - nowMs > marginMs
+  );
+}
+
 /** Read the body with a hard size cap; oversized answers are a violation. */
 async function responseText(response: Response): Promise<string> {
   const reader = response.body?.getReader();

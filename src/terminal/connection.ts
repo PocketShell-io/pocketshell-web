@@ -5,7 +5,10 @@
  * SshService offers its renderer, minus the process boundary.
  *
  * Two transports feed the same engine:
- *  - legacy bridge/relay: a dumb WebSocket keyed by `?host=&port=&token=`;
+ *  - scoped direct proxy: the deployment's versioned `/proxy/v1/ssh` route
+ *    (see scopedProxyDuplex.ts) — the browser speaks SSH through it and
+ *    admits with a broker-minted scoped token in the first text frame; the
+ *    sign-in never rides the URL;
  *  - gateway: the PocketShell gateway's per-host WebSocket (see
  *    gatewayDuplex.ts) — real SSH end-to-end through the gateway, key-only
  *    auth, fail-closed against the out-of-band host-key fingerprint pin.
@@ -18,8 +21,9 @@
 import { Client as SSHClient } from 'ssh2';
 import type { ClientChannel, SFTPWrapper } from 'ssh2';
 import { Buffer } from 'node:buffer';
-import { connectWebSocketDuplex, WebSocketDuplex } from './wsduplex';
-import { dialGateway } from './gatewayDuplex';
+import { WebSocketDuplex } from './wsduplex';import { dialGateway } from './gatewayDuplex';
+import { dialScopedProxy } from './scopedProxyDuplex';
+import type { ScopedProxyAdmission } from '../api/gatewayToken';
 import { assessPrivateKeyAuth } from '../shims/ssh2-crypto';
 import {
   decodePublicKeyBlob,
@@ -117,26 +121,51 @@ export interface GatewayConnectTarget {
   socketFactory?: (url: string) => WebSocket;
 }
 
+/**
+ * The scoped direct-proxy dial: the trusted deployment-advertised origin
+ * plus the broker-minted admission credential for THIS dial. The origin
+ * never comes from host metadata; the credential is the distinct typed
+ * admission (never the raw sign-in, never an SSH credential). Host/port
+ * ride the URL query exactly once each; the token rides ONLY the first
+ * text frame (scopedProxyDuplex.ts owns the wire contract).
+ */
+export interface ScopedProxyConnectTarget {
+  serverUrl: string;
+  admission: ScopedProxyAdmission;
+  /** Development escape hatch for ws:// endpoints — never in production. */
+  allowInsecureWs?: boolean;
+  /** Injectable socket (tests drive an in-memory proxy). */
+  socketFactory?: (url: string) => WebSocket;
+  handshakeTimeoutMs?: number;
+}
+
 export interface ConnectOptions {
-  /** The relay's wss:// base URL; host/port/token ride the query string.
-   * Legacy bridge dials only — a gateway dial ignores it entirely. */
-  url: string;
-  idToken: string;
   host: string;
   port: number;
   user: string;
   auth: BridgeAuth;
+  /** Ordinary browser-direct dial: the versioned scoped direct proxy.
+   * Absent on gateway dials. The legacy unversioned query-token relay is
+   * GONE — there is no `url`/`idToken` direct dial any more, and no
+   * fallback in either direction. */
+  scopedProxy?: ScopedProxyConnectTarget;
   /** Set: reach the host through the PocketShell gateway instead of the
-   * legacy query-string bridge. Key auth only — a password has no place on
-   * a transport whose whole point is the user's own key. */
+   * scoped direct proxy. Key auth only — a password has no place on a
+   * transport whose whole point is the user's own key. */
   gateway?: GatewayConnectTarget;
+  /** The BROKER token for the gateway auth frame — minted fresh for this
+   * dial, never the raw sign-in. Gateway dials only. */
+  gatewayToken?: string;
   onStatus?: (status: string) => void;
   /** The SSH transport died (network, relay, server). Channels will each
    * deliver their own exit; this is for the connection-level indicator. */
   onClosed?: () => void;
-  /** Host-key pinning (TOFU) for legacy dials. Absent = accept the
-   * presented key. Gateway dials do NOT use this — they verify against the
-   * pinned fingerprint and refuse without one. */
+  /** Host-key pinning (TOFU) for scoped direct dials — the same user
+   * known-hosts policy the legacy direct dial always had; the credential
+   * switch did not change it. Absent = accept the presented key (the
+   * long-standing bridge-era default for programmatic callers). Gateway
+   * dials do NOT use this — they verify against the pinned fingerprint
+   * and refuse without one. */
   knownHosts?: KnownHostsHooks;
 }
 
@@ -157,13 +186,14 @@ export class SshConnection {
     return this.conn !== null && !this.closedByUs;
   }
 
-  /** Dial through the gateway (or the legacy relay), run the SSH handshake
-   * through it, resolve when the connection is authenticated and usable —
-   * the shell's `ready`. */
+  /** Dial through the gateway or the scoped direct proxy, run the SSH
+   * handshake through it, resolve when the connection is authenticated and
+   * usable — the shell's `ready`. */
   async connect(opts: ConnectOptions): Promise<void> {
     const gw = opts.gateway;
     // Gateway preconditions refuse BEFORE any socket exists: no fingerprint,
-    // no dial; a password is not a gateway credential.
+    // no dial; a password is not a gateway credential; and the auth frame
+    // carries a broker-minted token only — never the raw sign-in.
     if (gw) {
       if (normalizeSha256Fingerprint(gw.pinnedFingerprint) === null) {
         throw new Error(
@@ -173,6 +203,16 @@ export class SshConnection {
       if (opts.auth.kind !== 'key' || (opts.auth.privateKey ?? '') === '') {
         throw new Error('Gateway connections authenticate with your SSH key — attach a key for this host.');
       }
+      if (typeof opts.gatewayToken !== 'string' || opts.gatewayToken === '') {
+        throw new Error('The gateway dial has no minted admission credential — no socket was opened.');
+      }
+    }
+    const scoped = opts.scopedProxy;
+    // Exactly one transport per dial: an ordinary direct dial MUST name the
+    // scoped proxy — the legacy query-token relay no longer exists, and no
+    // caller can re-introduce it by omission.
+    if (!gw && !scoped) {
+      throw new Error('This browser-direct dial has no scoped direct-proxy target — update PocketShell and reconnect.');
     }
     const auth = this.authOf(opts.auth);
     // Browser signing containment, EARLY and verdict-only: a key the
@@ -199,19 +239,27 @@ export class SshConnection {
       const dial = await dialGateway({
         serverUrl: gw.serverUrl,
         deviceId: gw.deviceId,
-        idToken: opts.idToken,
+        idToken: opts.gatewayToken!,
         allowInsecureWs: gw.allowInsecureWs,
         socketFactory: gw.socketFactory,
         onStatus: opts.onStatus,
       });
       sock = dial.duplex;
     } else {
-      const query = new URLSearchParams({
+      // The scoped direct proxy: URL carries host/port ONLY; the minted
+      // admission rides the first text frame (never the URL, never a
+      // header). A failed admission fails the dial — no fallback.
+      const dial = await dialScopedProxy({
+        serverUrl: scoped!.serverUrl,
         host: opts.host,
-        port: String(opts.port),
-        token: opts.idToken,
+        port: opts.port,
+        admission: scoped!.admission,
+        allowInsecureWs: scoped!.allowInsecureWs,
+        socketFactory: scoped!.socketFactory,
+        handshakeTimeoutMs: scoped!.handshakeTimeoutMs,
+        onStatus: opts.onStatus,
       });
-      sock = await connectWebSocketDuplex(`${opts.url}?${query.toString()}`);
+      sock = dial.duplex;
     }
     sock.on('close', () => {
       if (!this.closedByUs) this.onClosed?.();

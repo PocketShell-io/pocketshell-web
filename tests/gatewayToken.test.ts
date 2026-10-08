@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { config } from '../src/config';
-import { gatewayTokenUrl, getGatewayToken, GatewayTokenError } from '../src/api/gatewayToken';
+import {
+  admissionFresh,
+  gatewayTokenUrl,
+  getGatewayToken,
+  GatewayTokenError,
+  mintScopedProxyAdmission,
+  scopedProxyAdmissionOf,
+} from '../src/api/gatewayToken';
 
 vi.hoisted(() => {
   const memoryStorage = () => {
@@ -326,5 +333,45 @@ describe('gateway token exchange', () => {
     expect(() => gatewayTokenUrl('ws://account.example')).toThrow(GatewayTokenError);
     expect(() => gatewayTokenUrl('')).toThrow(GatewayTokenError);
     expect(() => gatewayTokenUrl('https://user:pw@account.example')).toThrow(GatewayTokenError);
+  });
+});
+
+describe('the scoped direct-proxy admission credential', () => {
+  it('mintScopedProxyAdmission performs the SAME bounded exchange and wraps the mint in the DISTINCT typed credential', async () => {
+    const mock = fetchMock(() => jsonResponse(brokerBody()));
+    const admission = await mintScopedProxyAdmission({ googleIdToken: GOOGLE, syncApiBase: BASE, nowMs: () => NOW, fetchImpl: mock.fetch });
+    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls[0]!.url).toBe(URL_TRUSTED);
+    expect(admission.credential).toBe('pocketshell-scoped-proxy-admission-v1');
+    expect(admission.token).toBe(BROKER);
+    expect(admission.token).not.toBe(GOOGLE);
+    expect(admission.expiresAtMs).toBe((NOW_SEC + 300) * 1000);
+  });
+
+  it('a failed exchange rejects the mint — there is no admission to dial with and no fallback', async () => {
+    const mock = fetchMock(() => jsonResponse({ error: 'unauthorized' }, 401));
+    await expect(
+      mintScopedProxyAdmission({ googleIdToken: GOOGLE, syncApiBase: BASE, nowMs: () => NOW, fetchImpl: mock.fetch }),
+    ).rejects.toThrow(GatewayTokenError);
+  });
+
+  it('admissionFresh refuses stale, wrong-branded, and unreadable credentials', () => {
+    const fresh = scopedProxyAdmissionOf({ token: BROKER, expiresAtMs: NOW + 120_000 });
+    expect(admissionFresh(fresh, NOW)).toBe(true);
+    // Inside the margin: too close to expiry to admit a session — remint.
+    expect(admissionFresh(fresh, NOW + 100_000)).toBe(false);
+    // Exactly at expiry and past it: never usable.
+    expect(admissionFresh(fresh, NOW + 120_000)).toBe(false);
+    expect(admissionFresh(fresh, NOW + 999_999)).toBe(false);
+    // A raw-string credential or a foreign brand never types as an admission.
+    expect(admissionFresh(GOOGLE as never, NOW)).toBe(false);
+    expect(admissionFresh({ credential: 'something-else', token: BROKER, expiresAtMs: NOW + 120_000 } as never, NOW)).toBe(false);
+  });
+
+  it('scopedProxyAdmissionOf never wraps an echoed sign-in — the exchange layer refuses that upstream', async () => {
+    const mock = fetchMock(() => jsonResponse(brokerBody({ token: GOOGLE })));
+    await expect(
+      getGatewayToken({ googleIdToken: GOOGLE, syncApiBase: BASE, nowMs: () => NOW, fetchImpl: mock.fetch }),
+    ).rejects.toThrow(GatewayTokenError);
   });
 });

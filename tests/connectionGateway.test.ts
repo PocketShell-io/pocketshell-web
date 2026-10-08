@@ -195,13 +195,12 @@ function gatewayConnect(overrides: {
   auth?: { kind: 'key'; privateKey: string; passphrase?: string } | { kind: 'password'; password: string };
   /** What rides the gateway auth frame. The web app mints this via
    * getGatewayToken — it is NOT the Google sign-in. */
-  idToken?: string;
+  gatewayToken?: string;
 } = {}): Promise<SshConnection> {
   const conn = new SshConnection();
   return conn
     .connect({
-      url: '',
-      idToken: overrides.idToken ?? ID_TOKEN,
+      gatewayToken: overrides.gatewayToken ?? ID_TOKEN,
       host: 'label-host',
       port: 22,
       user: 'tester',
@@ -281,7 +280,7 @@ describe('the gateway connection over a real ssh2 host', () => {
     // the property the custody rule needs.
     const brokerToken = 'broker-minted-gateway-jwt.payload.signature';
     const googleToken = 'original-google-signin-token.never-for-the-gateway';
-    const conn = await gatewayConnect({ idToken: brokerToken });
+    const conn = await gatewayConnect({ gatewayToken: brokerToken });
     try {
       // Consume one exec so the session is real, not just handshaken.
       const outcome = await conn.exec('a warnings');

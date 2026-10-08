@@ -8,8 +8,11 @@
  * and decrypted traffic never leave the browser.
  */
 import { useAuthStore } from '../stores/auth';
+import { useHostPinsStore } from '../stores/hostPins';
 import { useHostsStore } from '../stores/hosts';
 import { config } from '../config';
+import { mintScopedProxyAdmission } from '../api/gatewayToken';
+import { SCOPED_PROXY_UNCONFIGURED_MESSAGE } from '../terminal/scopedProxyDuplex';
 import {
   buildRequest,
   filterResponseHeaders,
@@ -98,11 +101,14 @@ async function answer(msg: FwdRequest): Promise<FwdReply> {
 async function dispatch(msg: FwdRequest, target: ForwardTarget, search: string): Promise<FwdReply> {
   const hosts = useHostsStore();
   const auth = useAuthStore();
+  const pins = useHostPinsStore();
   if (!auth.signedIn) {
     return htmlReply(msg.id, 503, 'Sign in to PocketShell in another tab first — this page is served through your SSH connection.');
   }
-  if (config.directWsUrl === '') {
-    return htmlReply(msg.id, 503, 'This deployment has no browser-direct relay configured.');
+  // The scoped direct proxy is the one browser-direct transport: without it
+  // this deployment has no forwarding (no legacy query-token fallback).
+  if (config.scopedProxyUrl === '') {
+    return htmlReply(msg.id, 503, SCOPED_PROXY_UNCONFIGURED_MESSAGE);
   }
   const entry = hosts.hosts.find((h) => h.name === target.host);
   if (entry === undefined) {
@@ -124,16 +130,44 @@ async function dispatch(msg: FwdRequest, target: ForwardTarget, search: string):
   }
   let host = channels.get(entry.name)?.channel;
   if (host === undefined) {
-    // specOf re-reads everything at dial time so reconnects pick up a fresh
-    // Google token and any host-list edits made since.
+    // specOf re-reads everything at DIAL time (the HostChannel asks for it
+    // only when a dial actually happens — never per request on a healthy
+    // SSH session), so a reconnect picks up edits, lock state and a fresh
+    // broker mint; a locked tab, a sign-out or a removed secret refuses
+    // inside admissionOf BEFORE the broker is asked and cancels the
+    // reconnect — no socket, no fallback.
     const spec = (): ForwardDialSpec => ({
       hostname: entry.hostname,
       port: entry.port,
       user: entry.user,
-      privateKey: secret.privateKeyPem ?? '',
-      passphrase: secret.keyPassphrase,
-      relayUrl: config.directWsUrl,
-      idToken: auth.getIdToken(),
+      privateKey: hosts.secrets[target.host]?.privateKeyPem ?? '',
+      passphrase: hosts.secrets[target.host]?.keyPassphrase,
+      scopedProxyUrl: config.scopedProxyUrl,
+      ...(config.gatewayAllowInsecureWs ? { allowInsecureWs: true } : {}),
+      admissionOf: async () => {
+        if (!auth.signedIn) {
+          throw new Error('Sign in to PocketShell in another tab first — this page is served through your SSH connection.');
+        }
+        if (config.scopedProxyUrl === '') {
+          throw new Error(SCOPED_PROXY_UNCONFIGURED_MESSAGE);
+        }
+        const current = hosts.secrets[target.host];
+        if (current?.privateKeyPem === undefined || current.privateKeyPem === '') {
+          throw new Error('No key attached for this host any more — the dial was refused before anything was sent.');
+        }
+        if (!hosts.unlocked) {
+          throw new Error('PocketShell is locked in the app tab — the dial was refused before anything was sent.');
+        }
+        return mintScopedProxyAdmission({ googleIdToken: auth.idToken });
+      },
+      // The host key is verified against THIS browser's independently saved
+      // pins before SSH userauth — accept-and-pin on first contact (the
+      // web's programmatic posture, the same one the host list dials use),
+      // hard refusal on any mismatch against a saved pin.
+      knownHosts: {
+        lookup: (h, p) => pins.lookup(h, p),
+        pin: (h, p, pin) => pins.pin(h, p, pin),
+      },
     });
     host = new HostChannel(spec);
     channels.set(entry.name, { sig, channel: host });

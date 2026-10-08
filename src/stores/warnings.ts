@@ -166,15 +166,18 @@ export const useWarningsStore = defineStore('host-warnings', {
      * link target) exclude a host outright; a LINK host stays eligible
      * because its bridge-frame secret is the shared relay token, never a
      * private key (linkFor enforces exactly that via linkBridgeAuthOf);
-     * an ordinary host is eligible ONLY when the deployment has no direct
-     * relay — the configuration itself chose the Lambda bridge — and that
-     * includes a materialized `link: null`, whose dial goes DIRECT and so
-     * must not bridge credentials. */
+     * an ordinary host is eligible ONLY when the deployment has no non-
+     * bridge direct transport at all — neither the scoped direct proxy nor
+     * the legacy direct relay. A scoped deployment's plain hosts dial the
+     * scoped proxy (their keys never cross any relay), so they are exactly
+     * as bridge-ineligible as direct-relay hosts always were; a
+     * `link: null` ordinary host on a no-direct-transport deployment keeps
+     * the historical bridge posture. */
     eligibleForBridge(host: HostEntry | undefined): boolean {
       if (host === undefined) return false;
       const intent = resolveTransportIntent({ entry: host });
       if (intent.kind === 'link') return true;
-      return intent.kind === 'none' && config.directWsUrl === '';
+      return intent.kind === 'none' && config.directWsUrl === '' && config.scopedProxyUrl === '';
     },
 
     /** One host's list, quiet on any failure: null (no `a`, timeout, bridge

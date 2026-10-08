@@ -7,12 +7,28 @@ export interface AppConfig {
   syncApiUrl: string;
   googleClientId: string;
   wsUrl: string;
-  /** Browser-direct relay (wss://...). Empty = use the Lambda bridge. */
+  /** Browser-direct relay (wss://...). Empty = use the Lambda bridge.
+   * LEGACY: no shipping dialer uses this any more — browser-direct SSH
+   * rides the versioned scoped proxy below. Kept so a deployment's legacy
+   * posture stays readable (the warnings sweep's custody rule ties to it). */
   directWsUrl: string;
+  /**
+   * The versioned scoped direct-proxy endpoint (a bare wss:// origin, the
+   * public gateway) — the deployment's ADVERTISED capability for
+   * browser-direct SSH. Ordinary sessions, single-tab sessions and /fwd/
+   * forwarding dial `{scopedProxyUrl}/proxy/v1/ssh?host=…&port=…` and admit
+   * with a broker-minted scoped token in the FIRST text frame; the sign-in
+   * never rides the URL, a header, or any frame. Empty = this deployment
+   * offers no scoped direct proxy: every direct-transport dial refuses with
+   * the fixed update-required sentence — there is NO fallback to the legacy
+   * unversioned query-token relay or the Lambda bridge.
+   */
+  scopedProxyUrl: string;
   /** The PocketShell gateway a "via gateway" host dials by default. */
   gatewayServerUrl: string;
-  /** Development ONLY: allow ws:// gateway URLs (a local/docker gateway).
-   * Never set this in production — it admits unencrypted gateway dials. */
+  /** Development ONLY: allow ws:// gateway and scoped-direct-proxy URLs
+   * (a local/docker gateway or proxy). Never set this in production — it
+   * admits unencrypted transport dials. */
   gatewayAllowInsecureWs: boolean;
   /**
    * The trusted account-service base the browser exchanges the sign-in at
@@ -47,6 +63,7 @@ export const config: AppConfig = {
   gatewayServerUrl: raw.gatewayServerUrl ?? GATEWAY_DEFAULT_SERVER_URL,
   gatewayAllowInsecureWs: raw.gatewayAllowInsecureWs ?? false,
   syncApiBase: raw.syncApiBase ?? TRUSTED_SYNC_API_BASE,
+  scopedProxyUrl: raw.scopedProxyUrl ?? '',
 };
 
 export function isConfigured(): boolean {

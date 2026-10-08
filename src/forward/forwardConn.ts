@@ -2,31 +2,59 @@
  * One SSH connection per host carrying many short-lived `direct-tcpip`
  * channels — SSH's own local-forwarding primitive, pointed at the host
  * itself. The transport is the sessions workspace's: the browser speaks SSH
- * through the dumb relay, so forwarded traffic crosses it as ciphertext and
- * the relay has nothing to read.
+ * through the versioned scoped direct proxy, so forwarded traffic crosses it
+ * as ciphertext and the proxy has nothing to read.
+ *
+ * Credential and trust rules (both fail closed):
+ *  - the admission credential is minted FRESH per actual (re)dial through
+ *    the spec's async provider — never per request on an already-healthy
+ *    SSH session, never from a stored token, never the raw sign-in. The
+ *    provider (not this class) is the cancel point: lock, sign-out and
+ *    host edits refuse inside it, which cancels any future reconnect mint;
+ *  - the host key is verified against the caller's independently saved
+ *    known-hosts pins BEFORE SSH user authentication runs — the old
+ *    `hostVerifier: () => true` is gone. A missing pin takes the caller's
+ *    TOFU decision (the same policy the ordinary direct dial has); a
+ *    mismatch refuses hard. Broker admission is account admission only and
+ *    never stands in for SSH host trust; a dial without a pin source
+ *    refuses outright.
  *
  * The worker-facing contract is one method: `exchange` sends one serialized
  * request over a fresh channel and resolves with the whole response.
  */
 import { Client as SSHClient } from 'ssh2';
 import type { ClientChannel } from 'ssh2';
-import { connectWebSocketDuplex } from '../terminal/wsduplex';
+import type { KnownHostsHooks } from '../terminal/connection';
+import { verifyHostKey } from '../terminal/connection';
+import { dialScopedProxy } from '../terminal/scopedProxyDuplex';
+import type { ScopedProxyAdmission } from '../api/gatewayToken';
 import { HttpResponseParser, serializeRequest, type BuiltRequest, type ParsedResponse } from './forwardHttp';
 
 const CONNECT_TIMEOUT_MS = 20_000;
 const EXCHANGE_TIMEOUT_MS = 45_000;
 
-/** Everything needed to dial one host through the relay. Fetched fresh on
- * every (re)connect so a rotated Google ID token is picked up. */
+/** Everything needed to dial one host through the scoped direct proxy.
+ * Rebuilt fresh on every (re)connect so edits, locks and re-mints are
+ * picked up; the admission itself is only asked for when a dial actually
+ * happens. */
 export interface ForwardDialSpec {
   hostname: string;
-  /** The SSH port — the relay dials this; the forwarded port is per-request. */
+  /** The SSH port — the proxy dials this; the forwarded port is per-request. */
   port: number;
   user: string;
   privateKey: string;
   passphrase?: string;
-  relayUrl: string;
-  idToken: string;
+  /** The trusted scoped-proxy origin (deployment config, never host input). */
+  scopedProxyUrl: string;
+  /** Development escape hatch for ws:// endpoints — never in production. */
+  allowInsecureWs?: boolean;
+  /** Async mint for THIS dial's typed admission. Coalescing is the HostChannel's
+   * job (one dial = one mint); cancellation is the provider's (it re-checks
+   * lock/sign-out/edits and refuses). */
+  admissionOf: () => Promise<ScopedProxyAdmission>;
+  /** The independently saved known-hosts pins. REQUIRED — a dial without a
+   * pin source refuses instead of trusting an unverified host key. */
+  knownHosts: KnownHostsHooks;
 }
 
 export class HostChannel {
@@ -46,12 +74,14 @@ export class HostChannel {
     try {
       c?.end();
     } catch {
-      // the relay may already be gone; nothing to salvage
+      // the proxy may already be gone; nothing to salvage
     }
   }
 
   private async client(): Promise<SSHClient> {
     if (this.conn !== null) return this.conn;
+    // In-flight dials coalesce: concurrent requests over one dead channel
+    // share ONE dial and therefore ONE mint — never one per request.
     if (this.connecting !== null) return this.connecting;
     this.connecting = this.dial().finally(() => {
       this.connecting = null;
@@ -61,12 +91,17 @@ export class HostChannel {
 
   private async dial(): Promise<SSHClient> {
     const spec = this.specOf();
-    const query = new URLSearchParams({
+    // Fresh admission for THIS actual dial — after it, SSH authenticates
+    // with the user's own key, which never crosses the proxy.
+    const admission = await spec.admissionOf();
+    const dial = await dialScopedProxy({
+      serverUrl: spec.scopedProxyUrl,
       host: spec.hostname,
-      port: String(spec.port),
-      token: spec.idToken,
+      port: spec.port,
+      admission,
+      ...(spec.allowInsecureWs ? { allowInsecureWs: true } : {}),
     });
-    const sock = await connectWebSocketDuplex(`${spec.relayUrl}?${query.toString()}`);
+    const sock = dial.duplex;
     const conn = new SSHClient();
     try {
       await new Promise<void>((resolve, reject) => {
@@ -81,8 +116,33 @@ export class HostChannel {
           tryKeyboard: false,
           readyTimeout: CONNECT_TIMEOUT_MS,
           keepaliveInterval: 30_000,
-          hostHash: 'sha256',
-          hostVerifier: () => true,
+          // No hostHash: the verifier gets the RAW key blob and classifies it
+          // against the saved pins — the same verifier shape the terminal
+          // sessions use. Runs inside key exchange, i.e. BEFORE userauth.
+          hostVerifier: (key: Buffer, verify: (ok: boolean) => void) => {
+            verifyForwardHostKey(spec, key)
+              .then((r) => {
+                if (r.ok) {
+                  verify(true);
+                } else {
+                  reject(new Error(r.reason));
+                  try {
+                    conn.end();
+                  } catch {
+                    // already refusing
+                  }
+                }
+              })
+              .catch((e: unknown) => {
+                // A pin store that cannot be read must not fail open.
+                reject(new Error(e instanceof Error ? e.message : String(e)));
+                try {
+                  conn.end();
+                } catch {
+                  // already refusing
+                }
+              });
+          },
           // Same cipher/kex set the terminal sessions negotiate — the
           // browser polyfill speaks these and every OpenSSH server offers them.
           algorithms: {
@@ -96,7 +156,7 @@ export class HostChannel {
       try {
         sock.destroy();
       } catch {
-        // the relay may already be gone
+        // the proxy may already be gone
       }
       try {
         conn.end();
@@ -167,4 +227,27 @@ export class HostChannel {
       });
     });
   }
+}
+
+/**
+ * The forwarding host-key decision, exported for tests: the presented key
+ * must classify against the caller's independently saved pins — trusted
+ * proceeds, mismatch refuses hard, and an unknown key takes the hooks' TOFU
+ * decision (persisting on accept-always). A spec WITHOUT a pin source
+ * refuses outright: forwarding never returns to `hostVerifier: () => true`.
+ * This runs inside ssh2's key exchange, so every refusal happens before SSH
+ * authentication — and before the private key is ever offered to the host.
+ */
+export async function verifyForwardHostKey(
+  spec: Pick<ForwardDialSpec, 'hostname' | 'port' | 'knownHosts'>,
+  keyBlob: Uint8Array,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!spec.knownHosts) {
+    return {
+      ok: false,
+      reason:
+        'No known-hosts pin source is available for this forwarded host — the host key cannot be verified, so nothing was connected.',
+    };
+  }
+  return verifyHostKey(spec.knownHosts, { host: spec.hostname, port: spec.port }, keyBlob);
 }

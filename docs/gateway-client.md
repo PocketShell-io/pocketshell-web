@@ -36,20 +36,51 @@ with the desktop's link). Gateway hosts sync as ordinary hosts in your
 account list — the gateway address and device id are stored with the host;
 the fingerprint pairing is NOT synced, because trust is per-device.
 
-**Legacy credential boundary (existing transports, until migrated):** the
-browser-direct relay dial still rides the raw sign-in in its query string,
-authorized by that relay only; and a deployment with no direct relay
-configured uses the Lambda bridge, whose `connect` frame carries a host's
-key. The automatic warnings sweep no longer sends any host key to that
-bridge — keys move only on a dial you started, over the host's own
-transport. Gateway hosts are excluded from that sweep entirely (see
-maturity limits). Link hosts do sweep, but their bridge frame carries
+**Browser-direct SSH is the versioned scoped proxy (migrated):** ordinary
+sessions, the single-tab session, and `/fwd/` forwarding no longer ride the
+legacy query-string relay. Every browser-direct dial goes to the
+deployment-advertised scoped direct proxy (`config.scopedProxyUrl`, the
+route `/proxy/v1/ssh?host=…&port=…` — those two query fields and nothing
+else) and admits with a **scoped broker token** — the same independently
+trusted exchange as the gateway's management surface (`POST
+{syncApiBase}/gateway/token`), wrapped as a distinct typed credential that
+cannot be confused with the raw sign-in. The token travels ONLY as the
+first WebSocket text frame (`{"type":"auth","v":1,"token":…}`); the proxy
+answers the exact `{"type":"ready","v":1}` and from there the socket is
+opaque binary SSH, end-to-end with the host as ever. The raw Google sign-in
+never appears in a browser-direct URL, header, or frame — an old client
+never sent it anywhere else, and a failed mint or a proxy that does not
+speak the v1 handshake FAILS THE DIAL: there is no fallback to the legacy
+unversioned query-token relay, to the Lambda bridge, or to any Google
+retry. A deployment that does not advertise the scoped proxy refuses
+browser-direct dials with a fixed update-required sentence before the
+broker is even asked. Forwarding remits a fresh token per actual
+(re)dial — never per request on a healthy session — and now verifies the
+host key against this browser's saved known-hosts pins BEFORE SSH
+authentication (first contact pins via the same TOFU flow the host list
+uses; a changed key refuses), closing the old accept-anything verifier.
+Broker admission authorizes the account to the PROXY; your SSH key still
+authenticates you to the HOST, and the two trusts are never equated.
+
+**Legacy credential boundary (what remains, until full retirement):** the
+Lambda bridge remains only where a deployment has no browser-direct
+transport at all (no scoped proxy and no direct relay configured), under
+its documented separate deployment boundary; its `connect` frame carries a
+host's key for ordinary hosts there. The automatic warnings sweep no
+longer sends any host key to that bridge on any deployment that has a
+non-bridge transport — keys move only on a dial you started, over the
+host's own transport. Gateway hosts are excluded from that sweep entirely
+(see maturity limits). Link hosts do sweep, but their bridge frame carries
 exactly the shared relay token — never the SSH private key a stale
 credential record may still hold, and nothing at all when the token is
 missing (no key fallback). The sweep and the dial resolve a host's
 transport with the same fail-closed rule: a malformed or conflicting
 transport marker on a synced host refuses the dial and excludes the host
-from the sweep, it never degrades into a direct dial.
+from the sweep, it never degrades into a direct dial. The legacy
+unversioned relay dial (sign-in in the query string) is retired from this
+client: no shipping caller produces it any more; full retirement of the
+credential at the server boundary additionally requires the server-side
+cutoff and old-client cessation gates (see the scoped-auth migration plan).
 
 **Which record a dial uses (selected-host resolution):** one endpoint can
 carry several named records in your synced list, and a dial is authorized by

@@ -1,21 +1,22 @@
 /**
  * The browser-direct path, end to end without a browser: DirectSshSession
- * dials a relay (the same WebSocket↔TCP pipe relay/src/worker.ts runs),
- * which dials an in-process ssh2 server. The user key is a real encrypted
+ * dials the versioned scoped direct proxy (the same wire contract the Go
+ * proxy implements — here an owned fixture, tests/scopedProxyFixture.ts),
+ * which pipes an in-process ssh2 server. The user key is a real encrypted
  * OpenSSH ed25519 key with a one-space passphrase — the shape the app
- * actually stores.
+ * actually stores. The sign-in token never rides the URL: the fixture
+ * refuses any dial whose query is not exactly host/port.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import net from 'node:net';
-import { WebSocketServer } from 'ws';
 import { Server as SshServer } from 'ssh2';
 import { DirectSshSession } from '../src/terminal/direct';
 import { SshConnection } from '../src/terminal/connection';
-import type { SessionHandlers } from '../src/terminal/session';
+import type { SessionHandlers, SessionDialSpec } from '../src/terminal/session';
+import { sentinelAdmission, startScopedProxyFixture, SCOPED_TOKEN_SENTINEL, type ScopedFixture, type ScopedFixtureMode } from './scopedProxyFixture';
 
 const HOME_DIR = mkdtempSync(join(tmpdir(), 'directssh-'));
 const HOST_KEY = join(HOME_DIR, 'host_ed25519');
@@ -24,8 +25,7 @@ const PASSPHRASE = ' ';
 
 let sshd: SshServer;
 let sshPort = 0;
-let relay: WebSocketServer;
-let relayPort = 0;
+let proxy: ScopedFixture;
 
 beforeAll(async () => {
   execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-q', '-f', HOST_KEY]);
@@ -68,39 +68,28 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => {
     sshd.listen(0, '127.0.0.1', () => {
-      sshPort = (sshd.address() as net.AddressInfo).port;
-      resolve();
-    });
-  });
-
-  // The relay, exactly as the worker pipes it: bytes in, bytes out.
-  relay = new WebSocketServer({ port: 0, host: '127.0.0.1' });
-  relay.on('connection', (ws, req) => {
-    const url = new URL(req.url ?? '/', 'http://x');
-    const upstream = net.connect(Number(url.searchParams.get('port')), url.searchParams.get('host') ?? undefined);
-    ws.on('message', (data) => upstream.write(data as Buffer));
-    upstream.on('data', (chunk) => ws.send(chunk));
-    const bothDown = () => {
-      try { ws.close(); } catch { /* gone */ }
-      upstream.destroy();
-    };
-    ws.on('close', () => upstream.destroy());
-    upstream.on('close', bothDown);
-    upstream.on('error', bothDown);
-  });
-  await new Promise<void>((resolve) => {
-    relay.on('listening', () => {
-      relayPort = (relay.address() as net.AddressInfo).port;
+      sshPort = (sshd.address() as import('node:net').AddressInfo).port;
       resolve();
     });
   });
 });
 
-afterAll(() => {
-  relay.close();
+afterAll(async () => {
+  await proxy?.close();
   sshd.close();
   rmSync(HOME_DIR, { recursive: true, force: true });
 });
+
+/** A scoped proxy fixture piped to the in-process sshd, in a failure mode
+ * if asked. The fixture refuses non-contract dials on its own. */
+async function startProxy(mode: ScopedFixtureMode = 'ok'): Promise<ScopedFixture> {
+  const fixture = await startScopedProxyFixture(sshPort, { mode, requireTokenEquals: SCOPED_TOKEN_SENTINEL });
+  return fixture;
+}
+
+function directSpec(serverUrl: string): Extract<SessionDialSpec, { kind: 'direct' }> {
+  return { kind: 'direct', serverUrl, dialOf: async () => sentinelAdmission(), allowInsecureWs: true };
+}
 
 function handlers(output: string[], events: { exit: number; errors: string[]; status: string[] }): SessionHandlers {
   return {
@@ -119,11 +108,12 @@ async function until(pred: () => boolean, what: string): Promise<void> {
   }
 }
 
-describe('DirectSshSession over a dumb relay', () => {
-  it('handshakes with an encrypted key, shells, and round-trips input', async () => {
+describe('DirectSshSession through the scoped direct proxy', () => {
+  it('admits with the scoped token, handshakes with an encrypted key, shells, and round-trips input', async () => {
+    proxy = await startProxy();
     const output: string[] = [];
     const events = { exit: 0, errors: [] as string[], status: [] as string[] };
-    const session = new DirectSshSession(`ws://127.0.0.1:${relayPort}`, 'test-token', handlers(output, events));
+    const session = new DirectSshSession(directSpec(proxy.serverUrl), handlers(output, events));
 
     await session.open({
       host: '127.0.0.1',
@@ -131,6 +121,11 @@ describe('DirectSshSession over a dumb relay', () => {
       user: 'alexey',
       auth: { kind: 'key', privateKey: readFileSync(USER_KEY, 'utf8'), passphrase: PASSPHRASE },
     });
+
+    // Custody: the dial URL carried host/port ONLY — the fixture records
+    // every upgrade, and its own census refuses a token field.
+    expect(proxy.records.upgradeUrls).toEqual([`/proxy/v1/ssh?host=127.0.0.1&port=${sshPort}`]);
+    expect(proxy.records.authFrames).toEqual([{ type: 'auth', v: 1, token: SCOPED_TOKEN_SENTINEL }]);
 
     session.sendInput('ping\n');
     await until(() => output.join('').includes('ECHO:ping'), 'echo round-trip');
@@ -143,9 +138,10 @@ describe('DirectSshSession over a dumb relay', () => {
   }, 30_000);
 
   it('surfaces a wrong passphrase as an open failure, not a hang', async () => {
+    proxy = await startProxy();
     const output: string[] = [];
     const events = { exit: 0, errors: [] as string[], status: [] as string[] };
-    const session = new DirectSshSession(`ws://127.0.0.1:${relayPort}`, 'test-token', handlers(output, events));
+    const session = new DirectSshSession(directSpec(proxy.serverUrl), handlers(output, events));
     await expect(session.open({
       host: '127.0.0.1',
       port: sshPort,
@@ -156,19 +152,42 @@ describe('DirectSshSession over a dumb relay', () => {
   }, 30_000);
 
   it('rejects when no key is attached', async () => {
-    const session = new DirectSshSession(`ws://127.0.0.1:${relayPort}`, 't', handlers([], { exit: 0, errors: [], status: [] }));
+    proxy = await startProxy();
+    const session = new DirectSshSession(directSpec(proxy.serverUrl), handlers([], { exit: 0, errors: [], status: [] }));
     await expect(session.open({
       host: '127.0.0.1', port: sshPort, user: 'alexey', auth: { kind: 'key' },
     })).rejects.toThrow(/No private key/);
   });
+
+  it('a proxy that answers admission with binary refuses the session — the sshd never saw a login', async () => {
+    proxy = await startProxy('binary-first');
+    const session = new DirectSshSession(directSpec(proxy.serverUrl), handlers([], { exit: 0, errors: [], status: [] }));
+    await expect(session.open({
+      host: '127.0.0.1', port: sshPort, user: 'alexey',
+      auth: { kind: 'key', privateKey: readFileSync(USER_KEY, 'utf8'), passphrase: PASSPHRASE },
+    })).rejects.toThrow(/before admission/);
+    session.close();
+    // The client DID send its auth frame first; the attack came after it.
+    expect(proxy.records.authFrames).toEqual([{ type: 'auth', v: 1, token: SCOPED_TOKEN_SENTINEL }]);
+  });
+
+  it('a proxy whose ready carries an advisory host-key field refuses — never guessed into shape', async () => {
+    proxy = await startProxy('advisory-ready');
+    const session = new DirectSshSession(directSpec(proxy.serverUrl), handlers([], { exit: 0, errors: [], status: [] }));
+    await expect(session.open({
+      host: '127.0.0.1', port: sshPort, user: 'alexey',
+      auth: { kind: 'key', privateKey: readFileSync(USER_KEY, 'utf8'), passphrase: PASSPHRASE },
+    })).rejects.toThrow(/malformed frame/);
+    session.close();
+  });
 });
 
-describe('SshConnection: exec and session joins over the relay', () => {
+describe('SshConnection: exec and session joins through the scoped proxy', () => {
   it('collects stdout, stderr, and the exit code; never rejects', async () => {
+    proxy = await startProxy();
     const conn = new SshConnection();
     await conn.connect({
-      url: `ws://127.0.0.1:${relayPort}`,
-      idToken: 'test-token',
+      scopedProxy: { serverUrl: proxy.serverUrl, admission: sentinelAdmission(), allowInsecureWs: true },
       host: '127.0.0.1',
       port: sshPort,
       user: 'alexey',
@@ -183,10 +202,10 @@ describe('SshConnection: exec and session joins over the relay', () => {
   }, 30_000);
 
   it('runs a join command directly under a PTY', async () => {
+    proxy = await startProxy();
     const conn = new SshConnection();
     await conn.connect({
-      url: `ws://127.0.0.1:${relayPort}`,
-      idToken: 'test-token',
+      scopedProxy: { serverUrl: proxy.serverUrl, admission: sentinelAdmission(), allowInsecureWs: true },
       host: '127.0.0.1',
       port: sshPort,
       user: 'alexey',
@@ -215,10 +234,10 @@ describe('SshConnection: exec and session joins over the relay', () => {
   }, 30_000);
 
   it('surfaces a refused exec as error, not a rejection', async () => {
+    proxy = await startProxy();
     const conn = new SshConnection();
     await conn.connect({
-      url: `ws://127.0.0.1:${relayPort}`,
-      idToken: 'test-token',
+      scopedProxy: { serverUrl: proxy.serverUrl, admission: sentinelAdmission(), allowInsecureWs: true },
       host: '127.0.0.1',
       port: sshPort,
       user: 'alexey',
@@ -229,4 +248,16 @@ describe('SshConnection: exec and session joins over the relay', () => {
     expect(out.exitCode).toBeNull();
     expect(out.error).toContain('not open');
   }, 30_000);
+
+  it('refuses a dial with NO scoped target — the legacy query-token relay is gone', async () => {
+    const conn = new SshConnection();
+    await expect(
+      conn.connect({
+        host: '127.0.0.1',
+        port: sshPort,
+        user: 'alexey',
+        auth: { kind: 'key', privateKey: readFileSync(USER_KEY, 'utf8'), passphrase: PASSPHRASE },
+      }),
+    ).rejects.toThrow(/no scoped direct-proxy target/);
+  });
 });

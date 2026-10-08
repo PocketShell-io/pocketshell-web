@@ -86,9 +86,12 @@ interface Seed {
 beforeEach(() => {
   setActivePinia(createPinia());
   localStorage.clear();
-  // BOTH URLs configured — the default scenario under review.
+  // BOTH URLs configured — the default scenario under review. (The scoped
+  // direct proxy defaults to unconfigured; tests that deploy one set it
+  // explicitly.)
   config.wsUrl = 'wss://legacy-bridge.example';
   config.directWsUrl = 'wss://direct-relay.example';
+  config.scopedProxyUrl = '';
   const auth = useAuthStore();
   auth.idToken = 'sweep-token';
 });
@@ -310,11 +313,37 @@ describe('linkHostBridgesOnlyItsRelayToken — never the stale SSH key on the re
     hosts.secrets = { 'plain-box': { privateKeyPem: PLAIN_KEY, password: NORMAL_PASSWORD } };
     hosts.secretHosts = Object.keys(hosts.secrets);
     config.directWsUrl = ''; // the legacy deployment chose the bridge
+    config.scopedProxyUrl = ''; // and it has no scoped direct proxy either
     const warnings = useWarningsStore();
     const link = await warnings.linkFor('plain-box');
     // bridgeAuthOf's historical priority (key over password) preserved for
     // the transport that actually authenticates with it.
     expect(link!.auth).toEqual({ kind: 'key', privateKey: PLAIN_KEY });
+  });
+
+  it('a plain host on a SCOPED deployment never bridges — the scoped proxy replaced the direct relay', async () => {
+    const hosts = useHostsStore();
+    hosts.pulled = true;
+    hosts.passphrase = 'sync-pass';
+    hosts.hosts = [entry('plain-box')];
+    hosts.secrets = { 'plain-box': { privateKeyPem: PLAIN_KEY, password: NORMAL_PASSWORD } };
+    hosts.secretHosts = Object.keys(hosts.secrets);
+    // The deployment the migration produces: the scoped direct proxy is the
+    // one browser-direct transport; the legacy direct relay is gone. The
+    // plain host's dial goes through the scoped proxy — its key must stay
+    // out of the bridge exactly as direct-relay hosts' keys always did.
+    config.directWsUrl = '';
+    config.scopedProxyUrl = 'wss://scoped-proxy.example';
+    const warnings = useWarningsStore();
+    const { opens, open } = spyBridgeOpens();
+    try {
+      const link = await warnings.linkFor('plain-box');
+      expect(link).toBeNull();
+      await warnings.sweep();
+      expect(opens).toEqual([]);
+    } finally {
+      open.mockRestore();
+    }
   });
 });
 

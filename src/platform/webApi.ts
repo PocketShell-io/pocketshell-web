@@ -31,7 +31,8 @@ import { hostEntryId } from '@pocketshell/core';
 import { SshConnection } from '../terminal/connection';
 import { resolveTransportIntent } from './transportIntent';
 import { LinkSshConnection } from '../terminal/linkConnection';
-import { getGatewayToken } from '../api/gatewayToken';
+import { getGatewayToken, mintScopedProxyAdmission, type ScopedProxyAdmission } from '../api/gatewayToken';
+import { SCOPED_PROXY_UNCONFIGURED_MESSAGE } from '../terminal/scopedProxyDuplex';
 import { useAuthStore } from '../stores/auth';
 import { useSyncStore } from '@ui/app/stores/sync';
 import { claimsOf } from '../auth/google';
@@ -253,15 +254,39 @@ async function connectHost(payload: {
     };
   }
 
-  const conn = new SshConnection();
+  // The scoped direct proxy is a deployment-advertised capability: without
+  // it there is NO direct dial (and no fallback to the legacy query-token
+  // relay or the bridge) — the fixed update-required refusal fires before
+  // the broker is asked, so an unconfigured deployment mints nothing.
+  if (config.scopedProxyUrl === '') {
+    return { ok: false, error: SCOPED_PROXY_UNCONFIGURED_MESSAGE };
+  }
+  // A fresh admission for THIS dial, minted only after the transport
+  // intent, the vault secret and the key checks above all passed. A failed
+  // exchange ends the dial — the host is never contacted on a failed mint,
+  // and there is no fallback to the raw sign-in.
   const auth = useAuthStore();
+  let admission: ScopedProxyAdmission;
+  try {
+    admission = await mintScopedProxyAdmission({ googleIdToken: auth.idToken });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${err instanceof Error ? err.message : String(err)} ${entry.name} was not contacted.`,
+    };
+  }
+
+  const conn = new SshConnection();
   // The connection id only exists once the dial resolves, but the transport's
   // onClosed callback needs it — the desktop pool's mutable-box pattern.
   let connectionIdRef: string | null = null;
   try {
     await conn.connect({
-      url: config.directWsUrl,
-      idToken: auth.idToken,
+      scopedProxy: {
+        serverUrl: config.scopedProxyUrl,
+        admission,
+        ...(config.gatewayAllowInsecureWs ? { allowInsecureWs: true } : {}),
+      },
       host: entry.hostname,
       port: entry.port,
       user: entry.user || payload.user,
@@ -402,11 +427,10 @@ async function connectViaGateway(
   let connectionIdRef: string | null = null;
   try {
     await conn.connect({
-      // The gateway dial ignores the legacy relay URL and host/port entirely;
-      // they stay as labels for the status line. idToken here is the BROKER
-      // token minted above — the raw Google sign-in never rides this dial.
-      url: '',
-      idToken: gatewayToken,
+      // The gateway dial ignores host/port entirely; they stay as labels for
+      // the status line. gatewayToken here is the BROKER token minted above
+      // — the raw Google sign-in never rides this dial (the device protocol
+      // is unchanged).
       host: entry.hostname,
       port: entry.port,
       user: entry.user || fallbackUser,
@@ -415,6 +439,7 @@ async function connectViaGateway(
         privateKey: secret.privateKeyPem!,
         ...(secret.keyPassphrase ? { passphrase: secret.keyPassphrase } : {}),
       },
+      gatewayToken,
       gateway: {
         serverUrl: target.serverUrl,
         deviceId: target.deviceId,
