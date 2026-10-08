@@ -120,6 +120,29 @@ describe('untrusted display text', () => {
     expect(displayText('x'.repeat(100), 10)).toBe(`${'x'.repeat(9)}…`);
   });
 
+  it('strips every Unicode "Other" character and blank-looking fillers, keeps spaces', () => {
+    const cps = (...c: number[]) => String.fromCodePoint(...c);
+    // Cf: zero-width space/joiners, LRM/RLM, isolates, BOM, soft hyphen, tag chars.
+    expect(displayText(`a${cps(0x200b, 0x200d, 0x200e, 0x2066, 0x2069, 0xfeff, 0xad)}b`)).toBe('a b');
+    expect(displayText(`me${cps(0xe0041, 0xe0042)}@laptop`)).toBe('me @laptop');
+    // Co private use (BMP and plane 15), Cn unassigned, Cs lone surrogate.
+    expect(displayText(`x${cps(0xe000)}y${cps(0xf0000)}z`)).toBe('x y z');
+    expect(displayText(`x${cps(0x0378)}y`)).toBe('x y');
+    expect(displayText('x\ud800y')).toBe('x y');
+    // Hangul fillers and the braille blank render as nothing/blank.
+    expect(displayText(`root${cps(0x3164)}@${cps(0x115f, 0x1160)}box${cps(0x2800)}`)).toBe('root @ box');
+    expect(displayText(`a${cps(0xffa0)}b`)).toBe('a b');
+    // Line/paragraph separators collapse like any whitespace.
+    expect(displayText('a\u2028b\u2029c')).toBe('a b c');
+    // Normal text, normal spaces and non-Latin letters/emoji survive.
+    expect(displayText('alexey @ work-laptop')).toBe('alexey @ work-laptop');
+    expect(displayText('Алексей ноутбук 🙂')).toBe('Алексей ноутбук 🙂');
+  });
+
+  it('caps by code point, never splitting a surrogate pair', () => {
+    expect(displayText('🙂🙂🙂', 2)).toBe('🙂…');
+  });
+
   it('parses integer unix seconds only', () => {
     expect(parseTimestamp(1_760_000_000)).toBe(1_760_000_000_000);
     expect(parseTimestamp(1_760_000_000.5)).toBeNull();

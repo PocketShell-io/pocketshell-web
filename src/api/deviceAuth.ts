@@ -101,15 +101,22 @@ function errorKind(status: number, code: unknown): DeviceAuthErrorKind {
   return STATUS_FALLBACK[status] ?? 'unexpected';
 }
 
-// C0/C1 controls, zero-width and bidi embedding/override/isolate marks, BOM.
-const UNSAFE_CHARS = new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u2069\\ufeff]', 'g');
+// Every Unicode "Other" code point (\p{C}: Cc controls, Cf format —
+// zero-width, bidi embedding/override/isolate, BOM, tag characters — Co
+// private use, Cn unassigned, Cs lone surrogates), the line/paragraph
+// separators, and the blank-looking letters that \p{C} misses: the Hangul
+// fillers (U+115F, U+1160, U+3164, U+FFA0) and the braille blank (U+2800).
+// Ordinary spaces stay; whitespace runs collapse below.
+const UNSAFE_CHARS = /[\p{C}\u2028\u2029\u115f\u1160\u3164\uffa0\u2800]/gu;
 
-/** Untrusted server string → displayable text: control/bidi characters
- * become spaces, whitespace runs collapse, length is capped. */
+/** Untrusted server string → displayable text: invisible/control/bidi
+ * characters become spaces, whitespace runs collapse, length is capped (by
+ * code point, so the cap cannot split a surrogate pair). */
 export function displayText(value: unknown, max = 200): string {
   if (typeof value !== 'string') return '';
   const clean = value.replace(UNSAFE_CHARS, ' ').replace(/\s+/g, ' ').trim();
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+  const chars = Array.from(clean);
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : clean;
 }
 
 /** Broker timestamps are integer unix seconds → milliseconds, or null. */
