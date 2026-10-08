@@ -77,13 +77,14 @@ describe('DeviceAuthService', () => {
     [404, { error: 'invalid_code' }, 'invalid_code'],
     [410, { error: 'expired_token' }, 'expired'],
     [429, { error: 'too_many_attempts' }, 'too_many_attempts'],
-    [429, { error: 'rate_limited' }, 'rate_limited'],
+    [429, { error: 'rate_limited' }, 'too_many_wrong_codes'],
     [409, { error: 'already_resolved' }, 'already_used'],
     [403, { error: 'account_not_allowed' }, 'not_allowed'],
     [403, { error: 'email_not_verified' }, 'email_not_verified'],
     [403, { error: 'lookup_required' }, 'lookup_required'],
     [400, { error: 'invalid_request' }, 'unexpected'],
     [429, undefined, 'rate_limited'],
+    [429, { message: 'Too Many Requests' }, 'rate_limited'],
     [403, { message: 'Forbidden' }, 'unexpected'],
     [500, { error: 'boom' }, 'unexpected'],
     [400, { error: 'constructor' }, 'unexpected'],
@@ -122,6 +123,27 @@ describe('untrusted display text', () => {
     expect(displayText('  two\n\nlines ')).toBe('two lines');
     expect(displayText(42)).toBe('');
     expect(displayText('x'.repeat(100), 10)).toBe(`${'x'.repeat(9)}…`);
+  });
+
+  it('the per-account wrong-code limit says so, on lookup and on approve', async () => {
+    const svc = service((async () => respond(429, { error: 'rate_limited' })) as unknown as typeof fetch);
+    for (const call of [() => svc.lookup('BCDF-2345'), () => svc.decide('BCDF-2345', true)]) {
+      const err = (await call().catch((e: unknown) => e)) as DeviceAuthError;
+      expect(err.kind).toBe('too_many_wrong_codes');
+      expect(err.message).toMatch(/^Too many wrong codes from this account; wait an hour/);
+    }
+  });
+
+  it('first viewer wins: a code another account opened reads as invalid, naming that case', async () => {
+    const svc = service((async () => respond(404, { error: 'invalid_code' })) as unknown as typeof fetch);
+    const err = (await svc.decide('BCDF-2345', true).catch((e: unknown) => e)) as DeviceAuthError;
+    expect(err.kind).toBe('invalid_code');
+    expect(err.message).toMatch(/already opened by another account/);
+  });
+
+  it('a Lambda rate_limited on the sessions routes stays the generic throttle', async () => {
+    const svc = service((async () => respond(429, { error: 'rate_limited' })) as unknown as typeof fetch);
+    await expect(svc.listSessions()).rejects.toMatchObject({ kind: 'rate_limited' });
   });
 
   it('same_network is true only for a literal true; now is optional', async () => {

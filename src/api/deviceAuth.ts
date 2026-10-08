@@ -25,6 +25,7 @@ export type DeviceAuthErrorKind =
   | 'lookup_required' // approve without a prior lookup by this account
   | 'already_used' // no longer pending: approved/denied elsewhere
   | 'rate_limited'
+  | 'too_many_wrong_codes' // this account is over its hourly invalid_code budget
   | 'network'
   | 'unexpected';
 
@@ -84,10 +85,15 @@ export interface DeviceAuthDeps {
 // docs/CLI-DEVICE-FLOW.md). The `error` string decides; the status is only a
 // fallback for responses that never reached the Lambda (API Gateway).
 const ERROR_CODES: Record<string, DeviceAuthErrorKind> = {
-  invalid_code: 'invalid_code', // 404
+  // 404 — also a code ANOTHER Google account looked up first ("first viewer
+  // wins": the broker will not even confirm such a code exists).
+  invalid_code: 'invalid_code',
   expired_token: 'expired', // 410
   too_many_attempts: 'too_many_attempts', // 429
-  rate_limited: 'rate_limited', // 429
+  // 429 from the Lambda. On lookup/approve it means this account spent its
+  // 20-wrong-codes-an-hour budget (see deviceCodeKind); a bare 429 from API
+  // Gateway (no `error`) is the generic throttle via STATUS_FALLBACK.
+  rate_limited: 'rate_limited',
   already_resolved: 'already_used', // 409
   account_not_allowed: 'not_allowed', // 403
   email_not_verified: 'email_not_verified', // 403
@@ -104,7 +110,7 @@ const STATUS_FALLBACK: Record<number, DeviceAuthErrorKind> = {
 
 const MESSAGES: Record<DeviceAuthErrorKind, string> = {
   invalid_code:
-    'That code is unknown or has expired. Check it against your terminal, or run `pocketshell login` again for a new one.',
+    'That code is not valid for this account: it is unknown, used up, or was already opened by another account. Check it against your terminal, or run `pocketshell login` again for a new one. Wrong codes count against a limit.',
   expired: 'That code has expired. Run `pocketshell login` again for a new one.',
   too_many_attempts:
     'Too many attempts for that code, so it was cancelled. Run `pocketshell login` again for a new one.',
@@ -113,6 +119,8 @@ const MESSAGES: Record<DeviceAuthErrorKind, string> = {
   lookup_required: 'Look up the code again before approving.',
   already_used: 'That sign-in request was already approved or denied. Run `pocketshell login` again if you still need one.',
   rate_limited: 'Too many requests right now. Wait a moment and try again.',
+  too_many_wrong_codes:
+    'Too many wrong codes from this account; wait an hour and try again. Run `pocketshell login` again then if its code has expired.',
   network: 'Could not reach PocketShell. Check your connection and try again.',
   unexpected: 'PocketShell returned an unexpected response. Try again in a moment.',
 };
@@ -121,8 +129,13 @@ export function deviceAuthErrorMessage(kind: DeviceAuthErrorKind): string {
   return MESSAGES[kind];
 }
 
-function errorKind(status: number, code: unknown): DeviceAuthErrorKind {
-  if (typeof code === 'string' && Object.hasOwn(ERROR_CODES, code)) return ERROR_CODES[code];
+function errorKind(status: number, code: unknown, path: string): DeviceAuthErrorKind {
+  if (typeof code === 'string' && Object.hasOwn(ERROR_CODES, code)) {
+    // The Lambda's own rate_limited on lookup/approve is the per-account
+    // miss budget (20 invalid_code answers an hour), not a momentary blip.
+    if (code === 'rate_limited' && path.startsWith('/auth/device/')) return 'too_many_wrong_codes';
+    return ERROR_CODES[code];
+  }
   return STATUS_FALLBACK[status] ?? 'unexpected';
 }
 
@@ -270,7 +283,7 @@ export class DeviceAuthService {
       ? (parsed as Record<string, unknown>)
       : null;
     if (!res.ok) {
-      const kind = errorKind(res.status, body?.error);
+      const kind = errorKind(res.status, body?.error, path);
       throw new DeviceAuthError(kind, res.status, MESSAGES[kind]);
     }
     if (body === null) throw new DeviceAuthError('unexpected', res.status, MESSAGES.unexpected);

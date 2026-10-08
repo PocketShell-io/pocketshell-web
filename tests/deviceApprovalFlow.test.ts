@@ -234,7 +234,8 @@ describe('device approval flow', () => {
   });
 
   it.each([
-    ['invalid_code', /unknown or has expired/],
+    ['invalid_code', /unknown, used up, or was already opened by another account/],
+    ['too_many_wrong_codes', /Too many wrong codes from this account; wait an hour/],
     ['expired', /expired/],
     ['too_many_attempts', /Too many attempts/],
     ['not_allowed', /not allowed/],
