@@ -401,6 +401,7 @@ async function open(host: HostEntry) {
           </span>
           <span class="spacer" />
           <div class="head-actions">
+            <RouterLink class="button" :to="{ name: 'device-sessions' }">CLI sessions</RouterLink>
             <button @click="startImport">Import config</button>
             <button class="primary" @click="newHost">Add host</button>
           </div>

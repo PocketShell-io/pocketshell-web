@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { isConfigured } from '../config';
 import { renderLoginButton } from '../auth/google';
 import { useAuthStore } from '../stores/auth';
+import { afterLoginTarget } from '../auth/returnTo';
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
 const buttonEl = ref<HTMLElement | null>(null);
 // The GIS script arrives late (async defer), so the button slot tracks it:
 // a placeholder holds the slot while loading, and a failure becomes a
@@ -14,10 +16,12 @@ const buttonEl = ref<HTMLElement | null>(null);
 const gsi = ref<'loading' | 'ready' | 'failed'>('loading');
 const error = ref('');
 const ready = isConfigured();
+// Arriving from /device: say why sign-in is needed before the approval.
+const forDevice = computed(() => route.query.next === 'device');
 
 onMounted(async () => {
   if (auth.signedIn) {
-    router.replace({ name: 'hosts' });
+    router.replace(afterLoginTarget(route.query));
     return;
   }
   if (!ready) return;
@@ -26,7 +30,8 @@ onMounted(async () => {
       auth.signIn(idToken);
       // Sign-in lands on the home — the shared host picker — the same screen
       // every back path returns to; host prep lives one hop away on /app.
-      router.push({ name: 'hosts' });
+      // The one exception is the CLI-approval page, which asked to come back.
+      router.push(afterLoginTarget(route.query));
     });
     gsi.value = 'ready';
   } catch (e) {
@@ -45,7 +50,11 @@ function retry() {
     <section class="auth-card" aria-labelledby="auth-heading">
       <div class="auth-mark" aria-hidden="true">&gt;_</div>
       <h1 id="auth-heading">Sign in to PocketShell</h1>
-      <p class="auth-lede">
+      <p v-if="forDevice" class="auth-lede">
+        Sign in to review the <code>pocketshell login</code> request from your
+        terminal. Nothing is approved until you confirm it on the next screen.
+      </p>
+      <p v-else class="auth-lede">
         Your hosts, in a browser tab. Sign in with the same Google account the
         desktop app syncs with.
       </p>

@@ -3940,3 +3940,239 @@ details.keybox textarea {
   outline: 2px solid var(--accent-dim);
   outline-offset: -1px;
 }
+
+/* CLI sign-in approval (/device) — the auth card, widened for the request
+   facts and left-aligned so labels and values scan as a table. */
+.device-card {
+  width: min(480px, 100%);
+  text-align: left;
+  align-items: stretch;
+}
+
+.device-card .auth-mark {
+  align-self: center;
+}
+
+.device-card h1 {
+  text-align: center;
+}
+
+.device-card h1:focus {
+  outline: none;
+}
+
+.device-card .auth-lede {
+  text-align: center;
+}
+
+.device-card code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.device-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.device-label {
+  flex-basis: 100%;
+  font-size: var(--text-small);
+  color: var(--fg-secondary);
+}
+
+main.page .device-code-input {
+  flex: 1 1 160px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 20px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 10px 12px;
+}
+
+.device-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 24px 0 0;
+  font-size: var(--text-small);
+}
+
+.device-facts dt {
+  color: var(--fg-secondary);
+}
+
+.device-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.device-mono {
+  font-family: var(--font-mono);
+}
+
+.device-warning {
+  margin-top: 20px;
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--error);
+  border-radius: 6px;
+  font-size: var(--text-small);
+}
+
+.device-warning p {
+  margin: 0;
+}
+
+.device-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+main.page .device-actions button {
+  min-width: 96px;
+  padding: 10px 16px;
+}
+
+main.page button.device-link {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-size: var(--text-small);
+}
+
+.device-account {
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-small);
+  color: var(--fg-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.device-account strong {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+/* /device: a different-network request — the loudest thing on the card. */
+.device-danger {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 2px solid var(--error);
+  border-radius: 6px;
+  background: var(--error-soft);
+  color: var(--fg);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.device-danger p {
+  margin: 0 0 10px;
+}
+
+.device-ack {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.device-ack input {
+  margin-top: 3px;
+}
+
+.device-prefill {
+  margin: 0;
+  flex-basis: 100%;
+  font-size: 20px;
+  letter-spacing: 0.12em;
+}
+
+.device-hint {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: var(--text-small);
+  color: var(--fg-secondary);
+}
+
+.device-expired {
+  color: var(--error);
+  font-weight: 600;
+}
+
+/* /device/sessions — the account's CLI sessions, one hairline row each. */
+.sessions-card {
+  width: min(560px, 100%);
+}
+
+.sessions-list {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.sessions-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.sessions-row + .sessions-row {
+  border-top: 1px solid var(--border);
+}
+
+.sessions-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sessions-label {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.sessions-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  font-size: var(--text-fine);
+}
+
+.sessions-meta dt {
+  color: var(--fg-secondary);
+}
+
+.sessions-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+main.page button.danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+  font-weight: var(--fw-semibold);
+}
+
+.device-account a {
+  color: var(--accent);
+}
