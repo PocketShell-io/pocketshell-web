@@ -148,6 +148,32 @@ describe('device approval flow', () => {
     expect(flow.resultError).toBe('already used');
   });
 
+  it('lookup_required on approve returns to the code step, keeps the code, and re-looks it up on Continue', async () => {
+    const api = mockApi({
+      decide: vi
+        .fn()
+        .mockRejectedValueOnce(new DeviceAuthError('lookup_required', 403, 'Look up the code again before approving.'))
+        .mockResolvedValueOnce('approved'),
+    });
+    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    await flow.submitCode();
+    await flow.approve();
+    expect(flow.step).toBe('enter');
+    expect(flow.input).toBe('BCDF-2345');
+    expect(flow.error).toBe('Look up the code again before approving.');
+    expect(flow.error).not.toMatch(/not allowed/);
+    expect(flow.info).toBeNull();
+    // Nothing approves until a fresh lookup and another explicit click.
+    await flow.approve();
+    expect(api.decide).toHaveBeenCalledTimes(1);
+    await flow.submitCode();
+    expect(api.lookup).toHaveBeenCalledTimes(2);
+    expect(flow.step).toBe('review');
+    await flow.approve();
+    expect(api.decide).toHaveBeenCalledTimes(2);
+    expect(flow.decision).toBe('approved');
+  });
+
   it('an expired Google session asks for sign-in instead of failing', async () => {
     const api = mockApi({
       lookup: vi.fn(async () => {

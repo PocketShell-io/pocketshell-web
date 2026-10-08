@@ -144,6 +144,20 @@ describe('/device view', () => {
     expect(api.decide).not.toHaveBeenCalled();
   });
 
+  it('a lookup_required approve shows its own message on the code step', async () => {
+    const { DeviceAuthError, deviceAuthErrorMessage } = await import('../src/api/deviceAuth');
+    api.decide.mockRejectedValue(new DeviceAuthError('lookup_required', 403, deviceAuthErrorMessage('lookup_required')));
+    const { wrapper: w } = await mountAt('/device?code=BCDF-2345');
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await button(w, 'Approve').trigger('click');
+    await flushPromises();
+    expect(w.find('[role="alert"]').text()).toBe('Look up the code again before approving.');
+    expect(w.text()).not.toMatch(/not allowed/);
+    expect((w.find('#device-code').element as HTMLInputElement).value).toBe('BCDF-2345');
+    expect(w.findAll('button').some((b) => b.text() === 'Approve')).toBe(false);
+  });
+
   it('an expired session goes back through sign-in, keeping the code', async () => {
     const { NotSignedInError } = await import('../src/api/sync');
     api.lookup.mockRejectedValue(new NotSignedInError('expired'));

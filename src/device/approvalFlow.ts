@@ -110,6 +110,20 @@ export class DeviceApprovalFlow {
       this.resultError = '';
     } catch (e) {
       this.decision = null;
+      if (e instanceof DeviceAuthError && e.kind === 'lookup_required') {
+        // The broker has no record of THIS account looking the code up (a
+        // different account did, or the record is gone). Back to the code
+        // step with the code kept: Continue re-runs the lookup and re-shows
+        // the request before any approval.
+        const code = this.reviewedCode;
+        this.step = 'enter';
+        this.info = null;
+        this.reviewedCode = '';
+        this.input = formatUserCode(code);
+        this.error = e.message;
+        this.resultError = '';
+        return;
+      }
       this.resultError = this.describe(e);
       if (this.needsSignIn) return; // stay on review; the view re-signs in
     } finally {

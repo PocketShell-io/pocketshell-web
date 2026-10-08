@@ -16,11 +16,12 @@ import { config } from '../config';
 import { NotSignedInError, type TokenSource } from './sync';
 
 export type DeviceAuthErrorKind =
-  | 'invalid_code' // unknown, malformed, or already gone (TTL)
+  | 'invalid_code' // unknown, malformed, or already consumed
   | 'expired'
-  | 'too_many_attempts'
+  | 'too_many_attempts' // the grant's 5-call budget is spent; it is dead
   | 'not_allowed' // account not on the allowlist
   | 'email_not_verified'
+  | 'lookup_required' // approve without a prior lookup by this account
   | 'already_used' // no longer pending: approved/denied elsewhere
   | 'rate_limited'
   | 'network'
@@ -54,31 +55,22 @@ export interface DeviceAuthDeps {
   timeoutMs?: number;
 }
 
+// The broker's exact error vocabulary (aws-infra sandbox/pocketshell-sync
+// docs/CLI-DEVICE-FLOW.md). The `error` string decides; the status is only a
+// fallback for responses that never reached the Lambda (API Gateway).
 const ERROR_CODES: Record<string, DeviceAuthErrorKind> = {
-  invalid_code: 'invalid_code',
-  invalid_user_code: 'invalid_code',
-  unknown_code: 'invalid_code',
-  not_found: 'invalid_code',
-  invalid_grant: 'invalid_code',
-  invalid_request: 'invalid_code',
-  expired: 'expired',
-  expired_token: 'expired',
-  code_expired: 'expired',
-  too_many_attempts: 'too_many_attempts',
-  attempts_exceeded: 'too_many_attempts',
-  account_not_allowed: 'not_allowed',
-  email_not_verified: 'email_not_verified',
-  already_used: 'already_used',
-  not_pending: 'already_used',
-  already_approved: 'already_used',
-  already_denied: 'already_used',
-  access_denied: 'already_used',
-  slow_down: 'rate_limited',
+  invalid_code: 'invalid_code', // 404
+  expired_token: 'expired', // 410
+  too_many_attempts: 'too_many_attempts', // 429
+  rate_limited: 'rate_limited', // 429
+  already_resolved: 'already_used', // 409
+  account_not_allowed: 'not_allowed', // 403
+  email_not_verified: 'email_not_verified', // 403
+  lookup_required: 'lookup_required', // 403
+  invalid_request: 'unexpected', // 400: a malformed body is our bug
 };
 
 const STATUS_FALLBACK: Record<number, DeviceAuthErrorKind> = {
-  400: 'invalid_code',
-  403: 'not_allowed',
   404: 'invalid_code',
   409: 'already_used',
   410: 'expired',
@@ -93,6 +85,7 @@ const MESSAGES: Record<DeviceAuthErrorKind, string> = {
     'Too many attempts for that code, so it was cancelled. Run `pocketshell login` again for a new one.',
   not_allowed: 'This Google account is not allowed to use the PocketShell gateway.',
   email_not_verified: 'This Google account has no verified email address, so it cannot approve sign-ins.',
+  lookup_required: 'Look up the code again before approving.',
   already_used: 'That sign-in request was already approved or denied. Run `pocketshell login` again if you still need one.',
   rate_limited: 'Too many requests right now. Wait a moment and try again.',
   network: 'Could not reach PocketShell. Check your connection and try again.',
@@ -119,18 +112,9 @@ export function displayText(value: unknown, max = 200): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
-/** The contract does not pin a timestamp format: accept unix seconds, unix
- * milliseconds, or an ISO-8601 string. */
+/** Broker timestamps are integer unix seconds → milliseconds, or null. */
 export function parseTimestamp(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return value < 1e12 ? value * 1000 : value;
-  }
-  if (typeof value === 'string' && value.length <= 64) {
-    if (/^\d+$/.test(value)) return parseTimestamp(Number(value));
-    const ms = Date.parse(value);
-    return Number.isNaN(ms) ? null : ms;
-  }
-  return null;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value * 1000 : null;
 }
 
 export class DeviceAuthService {

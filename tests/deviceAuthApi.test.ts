@@ -28,7 +28,7 @@ describe('DeviceAuthService', () => {
         request_ip: '203.0.113.7',
         user_agent: 'pocketshell/1.2 (Linux)',
         created_at: 1_760_000_000,
-        expires_at: '2025-10-09T08:53:20Z',
+        expires_at: 1_760_000_600,
       }),
     );
     const info = await service(fetchFn as unknown as typeof fetch).lookup('BCDF-2345');
@@ -37,7 +37,7 @@ describe('DeviceAuthService', () => {
       requestIp: '203.0.113.7',
       userAgent: 'pocketshell/1.2 (Linux)',
       createdAt: 1_760_000_000_000,
-      expiresAt: Date.parse('2025-10-09T08:53:20Z'),
+      expiresAt: 1_760_000_600_000,
     });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
@@ -70,16 +70,19 @@ describe('DeviceAuthService', () => {
   });
 
   it.each([
-    [404, { error: 'not_found' }, 'invalid_code'],
-    [400, { error: 'expired_token' }, 'expired'],
-    [410, {}, 'expired'],
+    [404, { error: 'invalid_code' }, 'invalid_code'],
+    [410, { error: 'expired_token' }, 'expired'],
     [429, { error: 'too_many_attempts' }, 'too_many_attempts'],
-    [429, undefined, 'rate_limited'],
+    [429, { error: 'rate_limited' }, 'rate_limited'],
+    [409, { error: 'already_resolved' }, 'already_used'],
     [403, { error: 'account_not_allowed' }, 'not_allowed'],
     [403, { error: 'email_not_verified' }, 'email_not_verified'],
-    [409, { error: 'not_pending' }, 'already_used'],
+    [403, { error: 'lookup_required' }, 'lookup_required'],
+    [400, { error: 'invalid_request' }, 'unexpected'],
+    [429, undefined, 'rate_limited'],
+    [403, { message: 'Forbidden' }, 'unexpected'],
     [500, { error: 'boom' }, 'unexpected'],
-    [400, { error: 'constructor' }, 'invalid_code'],
+    [400, { error: 'constructor' }, 'unexpected'],
   ])('maps HTTP %i %j to %s', async (status, body, kind) => {
     const svc = service((async () => respond(status, body)) as unknown as typeof fetch);
     const err = await svc.lookup('BCDF-2345').catch((e: unknown) => e);
@@ -117,11 +120,11 @@ describe('untrusted display text', () => {
     expect(displayText('x'.repeat(100), 10)).toBe(`${'x'.repeat(9)}…`);
   });
 
-  it('parses seconds, milliseconds and ISO timestamps', () => {
+  it('parses integer unix seconds only', () => {
     expect(parseTimestamp(1_760_000_000)).toBe(1_760_000_000_000);
-    expect(parseTimestamp(1_760_000_000_123)).toBe(1_760_000_000_123);
-    expect(parseTimestamp('1760000000')).toBe(1_760_000_000_000);
-    expect(parseTimestamp('2025-10-09T08:53:20Z')).toBe(Date.parse('2025-10-09T08:53:20Z'));
+    expect(parseTimestamp(1_760_000_000.5)).toBeNull();
+    expect(parseTimestamp('1760000000')).toBeNull();
+    expect(parseTimestamp(-1)).toBeNull();
     expect(parseTimestamp('soon')).toBeNull();
     expect(parseTimestamp(undefined)).toBeNull();
   });
