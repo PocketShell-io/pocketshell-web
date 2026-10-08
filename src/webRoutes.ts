@@ -11,9 +11,12 @@ import AccountView from '@ui/app/views/AccountView.vue';
  *   /app     the web's host surface: sync unlock, host/key management, config
  *            import — the pieces the desktop does in ~/.ssh/config files. The
  *            shared picker owns CONNECTING; this page owns preparing hosts.
+ *   /device  approve a `pocketshell login` (CLI device flow) request;
+ *            `?code=XXXX-XXXX` only prefills the code field.
  */
 export const webRoutes: RouteRecordRaw[] = [
   { path: '/account', name: 'account', component: AccountView },
   { path: '/app', name: 'app-hosts', component: () => import('./views/HostsView.vue') },
   { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
+  { path: '/device', name: 'device', component: () => import('./views/DeviceView.vue') },
 ];
