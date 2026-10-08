@@ -27,10 +27,17 @@ export function formatUserCode(normalized: string): string {
   return normalized.length > 4 ? `${normalized.slice(0, 4)}-${normalized.slice(4)}` : normalized;
 }
 
-/** What the input field shows for raw typed text: normalized, capped at the
- * code length, dashed. */
+/** What the input field shows for raw typed text: normalized and dashed,
+ * NEVER cut to the code length. A long paste (`BCDF-2345-X`, a code with a
+ * stray symbol, two codes glued together) must stay visibly too long and
+ * invalid; trimming it would silently turn it into some other valid code. */
 export function formatUserCodeInput(raw: string): string {
-  return formatUserCode(normalizeUserCode(raw).slice(0, USER_CODE_LENGTH));
+  return formatUserCode(normalizeUserCode(raw));
+}
+
+/** True when the field holds more alphabet symbols than any code has. */
+export function isOverlongUserCode(normalized: string): boolean {
+  return normalized.length > USER_CODE_LENGTH;
 }
 
 /** The `?code=` prefill: a valid code (normalized) or nothing. A query value

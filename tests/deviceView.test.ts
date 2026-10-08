@@ -87,6 +87,16 @@ describe('/device view', () => {
     expect((input.element as HTMLInputElement).value).toBe('BCDF-2345');
   });
 
+  it('a long paste stays long and invalid (no maxlength, no truncation)', async () => {
+    const { wrapper: w } = await mountAt('/device');
+    const input = w.find('#device-code');
+    expect(input.attributes('maxlength')).toBeUndefined();
+    await input.setValue('BCDF-2345-GHJK');
+    expect((input.element as HTMLInputElement).value).toBe('BCDF-2345GHJK');
+    expect(w.find('[role="alert"]').text()).toMatch(/longer than a code/);
+    expect(w.find('button[type="submit"]').attributes('disabled')).toBeDefined();
+  });
+
   it('shows the request as text, warns, and does not approve on review', async () => {
     const { wrapper: w } = await mountAt('/device?code=BCDF-2345');
     await w.find('form').trigger('submit');

@@ -3,6 +3,7 @@ import {
   codeFromQuery,
   formatUserCode,
   formatUserCodeInput,
+  isOverlongUserCode,
   isValidUserCode,
   normalizeUserCode,
   USER_CODE_ALPHABET,
@@ -39,7 +40,17 @@ describe('device user code normalization', () => {
     expect(formatUserCode('BCD')).toBe('BCD');
     expect(formatUserCode('BCDF')).toBe('BCDF');
     expect(formatUserCode('BCDF2')).toBe('BCDF-2');
-    expect(formatUserCodeInput('bcdf2345zz')).toBe('BCDF-2345');
+  });
+
+  it('the input formatter never truncates a long paste into a valid code', () => {
+    expect(formatUserCodeInput('bcdf2345')).toBe('BCDF-2345');
+    const long = formatUserCodeInput('bcdf2345zz');
+    expect(long).toBe('BCDF-2345ZZ');
+    expect(isValidUserCode(normalizeUserCode(long))).toBe(false);
+    expect(isOverlongUserCode(normalizeUserCode(long))).toBe(true);
+    expect(isOverlongUserCode('BCDF2345')).toBe(false);
+    // Two codes pasted together stay two codes' worth of symbols.
+    expect(normalizeUserCode(formatUserCodeInput('BCDF-2345 GHJK-6789'))).toHaveLength(16);
   });
 
   it('prefills from the query only when it is exactly one valid code', () => {

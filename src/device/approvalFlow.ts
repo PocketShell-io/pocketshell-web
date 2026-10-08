@@ -12,7 +12,7 @@
  */
 import { DeviceAuthError, deviceAuthErrorMessage, type DeviceDecision, type DeviceRequestInfo } from '../api/deviceAuth';
 import { NotSignedInError } from '../api/sync';
-import { formatUserCode, formatUserCodeInput, isValidUserCode, normalizeUserCode } from './userCode';
+import { formatUserCode, formatUserCodeInput, isOverlongUserCode, isValidUserCode, normalizeUserCode } from './userCode';
 
 export interface DeviceAuthApi {
   lookup(userCode: string): Promise<DeviceRequestInfo>;
@@ -49,6 +49,12 @@ export class DeviceApprovalFlow {
 
   get canSubmit(): boolean {
     return this.step === 'enter' && !this.busy && isValidUserCode(normalizeUserCode(this.input));
+  }
+
+  /** The field holds more symbols than a code: a long paste is invalid as a
+   * whole, never cut down to a code that happens to be its prefix. */
+  get inputTooLong(): boolean {
+    return isOverlongUserCode(normalizeUserCode(this.input));
   }
 
   /** The code as shown to the user, `XXXX-XXXX`. */

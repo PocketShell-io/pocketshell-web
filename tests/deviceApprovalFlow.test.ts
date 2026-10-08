@@ -40,6 +40,17 @@ describe('device approval flow', () => {
     expect(api.lookup).not.toHaveBeenCalled();
   });
 
+  it('a long paste is not truncated into a valid code', async () => {
+    const api = mockApi();
+    const flow = new DeviceApprovalFlow(api);
+    flow.setInput('BCDF-2345-GH');
+    expect(flow.input).toBe('BCDF-2345GH');
+    expect(flow.inputTooLong).toBe(true);
+    expect(flow.canSubmit).toBe(false);
+    await flow.submitCode();
+    expect(api.lookup).not.toHaveBeenCalled();
+  });
+
   it('enter → review → approve, with approve only on the explicit call', async () => {
     const api = mockApi();
     const flow = new DeviceApprovalFlow(api);

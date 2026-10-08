@@ -100,13 +100,12 @@ function formatTime(ms: number | null): string {
             type="text"
             :value="flow.input"
             placeholder="XXXX-XXXX"
-            maxlength="9"
             autocomplete="off"
             autocapitalize="characters"
             autocorrect="off"
             spellcheck="false"
             :disabled="flow.busy"
-            :aria-invalid="flow.error !== ''"
+            :aria-invalid="flow.error !== '' || flow.inputTooLong"
             aria-describedby="device-code-error"
             @input="onInput"
           />
@@ -116,6 +115,9 @@ function formatTime(ms: number | null): string {
         </form>
         <div v-if="flow.error" id="device-code-error" class="auth-notice" role="alert">
           <p>{{ flow.error }}</p>
+        </div>
+        <div v-else-if="flow.inputTooLong" id="device-code-error" class="auth-notice" role="alert">
+          <p>That is longer than a code. Check it against your terminal and type it again.</p>
         </div>
       </template>
 
