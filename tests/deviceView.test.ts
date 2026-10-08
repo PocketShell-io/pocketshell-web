@@ -29,6 +29,8 @@ const INFO: DeviceRequestInfo = {
   userAgent: 'pocketshell/1.2 (Linux)',
   createdAt: Date.UTC(2026, 9, 8, 7, 0, 0),
   expiresAt: Date.UTC(2026, 9, 8, 7, 10, 0),
+  serverNow: Date.UTC(2026, 9, 8, 7, 0, 12),
+  sameNetwork: true,
 };
 
 let wrapper: VueWrapper | null = null;

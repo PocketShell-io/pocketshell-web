@@ -44,6 +44,13 @@ export interface DeviceRequestInfo {
   /** Unix milliseconds, or null when the server sent nothing parseable. */
   createdAt: number | null;
   expiresAt: number | null;
+  /** The broker's clock at lookup (unix ms), so request age and expiry are
+   * computed against server time, not this machine's possibly-wrong clock. */
+  serverNow: number | null;
+  /** True only when the broker said the approver's network matches the
+   * requester's (IPv4 exact, IPv6 same /64). Anything else — false, absent,
+   * not a boolean — counts as a different network: the warning fails safe. */
+  sameNetwork: boolean;
 }
 
 export type DeviceDecision = 'approved' | 'denied';
@@ -151,6 +158,8 @@ export class DeviceAuthService {
       userAgent: displayText(body.user_agent, 200),
       createdAt: parseTimestamp(body.created_at),
       expiresAt: parseTimestamp(body.expires_at),
+      serverNow: parseTimestamp(body.now),
+      sameNetwork: body.same_network === true,
     };
   }
 

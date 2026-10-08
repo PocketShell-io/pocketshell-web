@@ -9,6 +9,8 @@ const INFO: DeviceRequestInfo = {
   userAgent: 'pocketshell/1.2',
   createdAt: 1_760_000_000_000,
   expiresAt: 1_760_000_600_000,
+  serverNow: 1_760_000_012_000,
+  sameNetwork: true,
 };
 
 function mockApi(overrides: Partial<DeviceAuthApi> = {}) {

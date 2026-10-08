@@ -29,6 +29,8 @@ describe('DeviceAuthService', () => {
         user_agent: 'pocketshell/1.2 (Linux)',
         created_at: 1_760_000_000,
         expires_at: 1_760_000_600,
+        now: 1_760_000_012,
+        same_network: true,
       }),
     );
     const info = await service(fetchFn as unknown as typeof fetch).lookup('BCDF-2345');
@@ -38,6 +40,8 @@ describe('DeviceAuthService', () => {
       userAgent: 'pocketshell/1.2 (Linux)',
       createdAt: 1_760_000_000_000,
       expiresAt: 1_760_000_600_000,
+      serverNow: 1_760_000_012_000,
+      sameNetwork: true,
     });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
@@ -118,6 +122,15 @@ describe('untrusted display text', () => {
     expect(displayText('  two\n\nlines ')).toBe('two lines');
     expect(displayText(42)).toBe('');
     expect(displayText('x'.repeat(100), 10)).toBe(`${'x'.repeat(9)}…`);
+  });
+
+  it('same_network is true only for a literal true; now is optional', async () => {
+    for (const same of [false, 'true', 1, null, undefined]) {
+      const fetchFn = vi.fn(async () => respond(200, { label: 'x', same_network: same }));
+      const info = await service(fetchFn as unknown as typeof fetch).lookup('BCDF-2345');
+      expect(info.sameNetwork).toBe(false);
+      expect(info.serverNow).toBeNull();
+    }
   });
 
   it('strips every Unicode "Other" character and blank-looking fillers, keeps spaces', () => {
