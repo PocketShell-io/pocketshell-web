@@ -10,16 +10,34 @@ browser (Vue 3 SPA) ── HTTPS ──▶ S3 + CloudFront (pocketshell.io)
         ├─ HTTPS, Bearer <Google ID token> ──▶ pocketshell-sync API (host list,
         │                                      zero-knowledge encrypted blob)
         └─ WSS ?token=<ID token> ──▶ API Gateway WebSocket ──▶ bridge Lambda ──▶ SSH :22
-                                               (aws-infra sandbox/pocketshell-web)
+                                               (bridge/ in this repo)
+```
+
+## Repo layout
+
+```
+src/        the SPA (Vue 3): login, host list, terminal UI (xterm.js), the
+            browser half of the sync contract
+public/     runtime config.js and static assets
+scripts/    deploy.sh (SPA → site bucket), build helpers
+tests/      vitest unit tests + browser E2E (tests/e2e/)
+bridge/     the backend: WebSocket ssh2 bridge Lambda (lambda/), its
+            CloudFormation stack (template.yaml) and deploy.sh — see
+            bridge/README.md
+relay/      reference browser-direct SSH relay (Cloudflare worker + dev relay)
 ```
 
 ## What lives where
 
-- **This repo** — the SPA. Login, host list, terminal UI (xterm.js), and the
-  browser half of the sync contract.
-- **aws-infra `sandbox/pocketshell-web`** — the stack: Route53 zone for
-  pocketshell.io, CloudFront distribution, and the `ssh2` bridge Lambda
-  behind a WebSocket API (deployed by that directory's `deploy.sh`).
+- **This repo** — the SPA (`src/`) and its backend, the `ssh2` bridge
+  Lambda behind a WebSocket API (`bridge/`). The bridge's stack
+  `pocketshell-web` also holds the pocketshell.io Route53 zone and the
+  S3 + CloudFront site origin; see `bridge/README.md` for why it was not
+  split when it moved here from aws-infra.
+- **aws-infra `sandbox/pocketshell-web`** — the `app.pocketshell.io`
+  custom domain: us-east-1 ACM certificate, the `pocketshell-web-domain`
+  stack (outer CloudFront + alias records), and the hand-applied
+  apex/www/relay records (`deploy-domain.sh`).
 - **aws-infra `sandbox/pocketshell-sync`** — the Google-login settings sync
   the host list comes from.
 - **PocketShell-io/pocketshell-desktop** — the desktop (Electron) app whose
@@ -85,7 +103,7 @@ directly — the same suite the core repo runs.
   (`identityFile` in the host blob is still just a path on whatever machine
   pushed it.)
 - That bridge handling is verified in source, not asserted:
-  `aws-infra/sandbox/pocketshell-web/lambda/index.mjs` feeds the `connect`
+  `bridge/lambda/index.mjs` feeds the `connect`
   frame's key/password straight into the ssh2 client — never onto the
   session object, never logged, never persisted. The Lambda has no table;
   its warm session state dies on disconnect, after 10 idle minutes, and at
@@ -125,14 +143,24 @@ and paramiko.
 `public/config.js` is runtime configuration (sync API URL, Google web client
 ID, bridge WSS URL) — not bundled, so values rotate without a rebuild.
 
-## Deploying the site
+## Deploying
+
+Two independent deploys, both against the sandbox account (eu-west-1):
 
 ```bash
-scripts/deploy.sh   # builds, syncs dist/ to the site bucket, invalidates CF
+scripts/deploy.sh   # SPA: build, sync dist/ to the site bucket, invalidate CF
+bridge/deploy.sh    # backend: npm ci + zip the Lambda, deploy the pocketshell-web stack
 ```
 
-The script reads bucket/distribution/WSS from the aws-infra stack outputs
-(override with `SITE_BUCKET`, `CF_DISTRIBUTION_ID`, `WS_URL`).
+- `scripts/deploy.sh` reads bucket/distribution/WSS from the
+  `pocketshell-web` stack outputs (override with `SITE_BUCKET`,
+  `CF_DISTRIBUTION_ID`, `WS_URL`, `DIRECT_WS_URL`). CI runs it on every
+  push to main (`.github/workflows/deploy.yml`) with the values pinned.
+- `bridge/deploy.sh` is run by hand by the operator; nothing in CI deploys
+  the bridge. A Lambda code-only change also needs an
+  `aws lambda update-function-code` — see `bridge/README.md`.
+- The custom domain (`app.pocketshell.io`) is deployed from aws-infra
+  `sandbox/pocketshell-web/deploy-domain.sh`, only when it changes.
 
 ## First-run checklist (one-time, manual)
 
@@ -146,12 +174,12 @@ The script reads bucket/distribution/WSS from the aws-infra stack outputs
    browser tokens) with authorized JavaScript origins
    `https://pocketshell.io` and `http://localhost:5173`. Then:
    - put the client ID into `config.js` (`googleClientId`),
-   - redeploy the stack with `GOOGLE_WEB_CLIENT_ID=<id> ./deploy.sh` so the
+   - redeploy the stack with `GOOGLE_WEB_CLIENT_ID=<id> bridge/deploy.sh` so the
      bridge (and later the sync API's authorizer) accept its tokens.
-3. **Custom domain**: every `./deploy.sh` of the aws-infra stack brings
-   pocketshell.io up with the site — it requests the ACM cert, seeds its
-   DNS validation records itself, and waits for issuance, so with the
-   delegation from step 1 live one run completes end-to-end. This repo's
+3. **Custom domain**: aws-infra `sandbox/pocketshell-web/deploy-domain.sh`
+   brings app.pocketshell.io up on top of this stack — it requests the ACM
+   cert, seeds its DNS validation records itself, and waits for issuance,
+   so with the delegation from step 1 live one run completes end-to-end. This repo's
    `scripts/deploy.sh` keeps serving from the `CloudFrontDomain` output
    until then — no change needed when the domain goes live, `config.js`
    never hardcodes the hostname.
