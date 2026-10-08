@@ -1,0 +1,307 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  PocketShell web client: static SPA on S3+CloudFront, plus a WebSocket API
+  driving an ssh2 bridge Lambda so the browser can open terminal sessions on
+  the hosts saved in the user's pocketshell-sync account. Login is the same
+  Google ID token the desktop app uses; see README.md.
+  The pocketshell.io custom domain lives in domain.yaml — deploying it here
+  behind a condition is rejected by CloudFormation early validation (the
+  ACM ARN gets existence-checked even when the condition is false).
+
+Parameters:
+  # Comma-separated list of Google OAuth client IDs whose ID tokens the WS
+  # bridge accepts. Defaults to the desktop client (tokens minted by the
+  # installed-app flow); add the pocketshell.io web client ID here via
+  # deploy.sh (GOOGLE_WEB_CLIENT_ID) once it exists in Google Console.
+  GoogleClientIds:
+    Type: CommaDelimitedList
+    Default: "1035162854462-nos4fptbf2psbkp8ljd8tjem1psnekvt.apps.googleusercontent.com"
+    Description: >-
+      Audience values accepted for WS connect tokens (Google client IDs).
+  AllowedEmails:
+    Type: CommaDelimitedList
+    Default: "alexey.s.grigoriev@gmail.com"
+    Description: Google accounts allowed to open terminal sessions.
+  GoogleIssuer:
+    Type: String
+    Default: "https://accounts.google.com"
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  # Authoritative DNS for pocketshell.io. The registrar (GoDaddy) delegates
+  # to this zone by pointing at the NameServers output below; until that
+  # happens nothing under the name resolves publicly.
+  Zone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: pocketshell.io.
+      HostedZoneTags:
+        - {Key: Project, Value: pocketshell-web}
+        - {Key: Environment, Value: sandbox}
+        - {Key: ManagedBy, Value: cloudformation}
+
+  # Google Search Console domain verification (DNS TXT, pocketshell.io).
+  # Verify at https://search.google.com/search-console after deploy.sh
+  # applies this record.
+  GoogleSearchConsoleVerification:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref Zone
+      Name: pocketshell.io.
+      Type: TXT
+      TTL: 300
+      ResourceRecords:
+        - '"google-site-verification=f9ySYFL37PL0nr0hJbsO2PuLZysIyCgrWFU-eb9rhPc"'
+
+  # ---- Static site ----------------------------------------------------
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "pocketshell-web-site-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+            BucketKeyEnabled: true
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 90}
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}
+
+  SiteOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: pocketshell-web-site-oac
+        Description: CloudFront access to the private pocketshell-web site bucket.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Both this stack's distribution and the custom-domain distribution in
+  # domain.yaml read this bucket; the SourceArn condition keeps it to
+  # distributions of this account only.
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringLike:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*"
+
+  # www.pocketshell.io 308s to the apex so there is exactly one canonical
+  # origin (and one set of GIS authorized origins to maintain).
+  WwwRedirectFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: pocketshell-web-www-redirect
+      AutoPublish: true
+      FunctionConfig:
+        Comment: 308 www.pocketshell.io to the apex
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var host = request.headers.host ? request.headers.host.value : '';
+          if (host === 'www.pocketshell.io') {
+            return {
+              statusCode: 308,
+              statusDescription: 'Moved Permanently',
+              headers: {
+                location: {value: 'https://pocketshell.io' + request.uri},
+              },
+            };
+          }
+          return request;
+        }
+
+  SiteDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: pocketshell.io static web client (origin URL; custom domain in domain.yaml)
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        IPV6Enabled: true
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !Ref SiteOac
+            S3OriginConfig: {OriginReadTimeout: 30}
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # Managed-CachingOptimized
+          Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !Ref WwwRedirectFunction
+        # SPA fallback: unknown non-asset paths render the app, which routes
+        # client-side. Hashed asset names make false 200s on misses harmless.
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 60
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 60
+        Restrictions:
+          GeoRestriction: {RestrictionType: none}
+        # Note: AWS::CloudFront::Distribution does not accept Tags — early
+        # validation rejects the stack outright if present.
+
+  # ---- Terminal bridge (browser ⇄ WebSocket ⇄ ssh2) -------------------
+
+  BridgeLogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: /aws/lambda/pocketshell-web-bridge
+      RetentionInDays: !Ref LogRetentionDays
+
+  BridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: lambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/pocketshell-web-bridge:*"
+              # The bridge pushes terminal output back over the open socket.
+              - Effect: Allow
+                Action: execute-api:ManageConnections
+                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${WsApi}/*"
+
+  BridgeFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: BridgeLogs
+    Properties:
+      FunctionName: pocketshell-web-bridge
+      Description: Browser terminal bridge — Google-authenticated WebSocket to ssh2
+      Role: !GetAtt BridgeRole.Arn
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      Timeout: 30
+      MemorySize: 512
+      Code:
+        S3Bucket: !Sub "pocketshell-web-deploy-${AWS::AccountId}-${AWS::Region}"
+        S3Key: pocketshell-web/bridge.zip
+      Environment:
+        Variables:
+          GOOGLE_CLIENT_IDS: !Join [",", !Ref GoogleClientIds]
+          ALLOWED_EMAILS: !Join [",", !Ref AllowedEmails]
+          GOOGLE_ISSUER: !Ref GoogleIssuer
+
+  WsApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: pocketshell-web-bridge
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  WsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WsApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BridgeFunction.Arn}/invocations"
+
+  # The bridge validates the Google ID token itself on $connect (WebSocket
+  # APIs have no native JWT authorizer) and keeps the ssh2 session per
+  # connectionId in warm Lambda state.
+  WsRouteConnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WsApi
+      RouteKey: $connect
+      Target: !Sub "integrations/${WsIntegration}"
+
+  WsRouteDefault:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WsApi
+      RouteKey: $default
+      Target: !Sub "integrations/${WsIntegration}"
+
+  WsRouteDisconnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WsApi
+      RouteKey: $disconnect
+      Target: !Sub "integrations/${WsIntegration}"
+
+  WsDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn: [WsRouteConnect, WsRouteDefault, WsRouteDisconnect]
+    Properties:
+      ApiId: !Ref WsApi
+
+  WsStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WsApi
+      StageName: main
+      DeploymentId: !Ref WsDeployment
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+
+  WsInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref BridgeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${WsApi}/*"
+
+Outputs:
+  ZoneId:
+    Value: !Ref Zone
+  NameServers:
+    Description: Point GoDaddy's pocketshell.io delegation at these nameservers.
+    Value: !Join [",", !GetAtt Zone.NameServers]
+  SiteBucketName:
+    Value: !Ref SiteBucket
+  SiteDistributionId:
+    Description: Origin distribution ID (domain.yaml derives its origin from this).
+    Value: !Ref SiteDistribution
+  CloudFrontDomain:
+    Description: Site URL before the custom domain is enabled.
+    Value: !Sub "https://${SiteDistribution.DomainName}"
+  WsUrl:
+    Description: WebSocket endpoint the web client opens (token=<ID token> query).
+    Value: !Sub "wss://${WsApi}.execute-api.${AWS::Region}.amazonaws.com/main"
