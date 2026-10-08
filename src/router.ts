@@ -42,6 +42,7 @@ const titles: Record<string, string> = {
   hosts: 'Hosts — PocketShell',
   account: 'Account & sync — PocketShell',
   device: 'Approve a CLI sign-in — PocketShell',
+  'device-sessions': 'CLI sessions — PocketShell',
 };
 
 router.afterEach((to) => {

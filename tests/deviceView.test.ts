@@ -41,6 +41,7 @@ async function mountAt(path: string) {
     history: createMemoryHistory(),
     routes: [
       { path: '/device', name: 'device', component: DeviceView },
+      { path: '/device/sessions', name: 'device-sessions', component: Stub },
       { path: '/login', name: 'login', component: Stub },
       { path: '/', name: 'hosts', component: Stub },
     ],
@@ -215,6 +216,8 @@ describe('/device view', () => {
     await flushPromises();
     expect(api.decide.mock.calls).toEqual([['BCDF-2345', true]]);
     expect(w.text()).toContain('Sign-in approved');
+    const link = w.findAll('a').find((x) => x.text() === 'Manage CLI sessions');
+    expect(link?.attributes('href')).toBe('/device/sessions');
   });
 
   it('denies on the Deny click', async () => {

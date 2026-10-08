@@ -14,6 +14,12 @@ describe('sign-in return target', () => {
     expect(afterLoginTarget(q as never)).toEqual({ name: 'device', query: {} });
   });
 
+  it('a signed-out /device/sessions visit comes back there, with no query carried', () => {
+    const q = loginQueryFor({ name: 'device-sessions', query: { evil: 'x' } });
+    expect(q).toEqual({ next: 'device-sessions' });
+    expect(afterLoginTarget(q as never)).toEqual({ name: 'device-sessions' });
+  });
+
   it('other routes keep the old behavior: query rides along, sign-in lands home', () => {
     expect(loginQueryFor({ name: 'account', query: { a: '1' } })).toEqual({ a: '1' });
     expect(afterLoginTarget({})).toEqual({ name: 'hosts' });

@@ -4113,3 +4113,66 @@ main.page button.device-link {
   color: var(--error);
   font-weight: 600;
 }
+
+/* /device/sessions — the account's CLI sessions, one hairline row each. */
+.sessions-card {
+  width: min(560px, 100%);
+}
+
+.sessions-list {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.sessions-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.sessions-row + .sessions-row {
+  border-top: 1px solid var(--border);
+}
+
+.sessions-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sessions-label {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.sessions-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  font-size: var(--text-fine);
+}
+
+.sessions-meta dt {
+  color: var(--fg-secondary);
+}
+
+.sessions-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+main.page button.danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+  font-weight: var(--fw-semibold);
+}
+
+.device-account a {
+  color: var(--accent);
+}

@@ -11,9 +11,9 @@ import { webRoutes } from '../src/webRoutes';
 describe('web routes on the shared map', () => {
   const router = createRouter({ history: createMemoryHistory(), routes: createAppRoutes(webRoutes) });
 
-  it('names the shared routes plus exactly login, account, app-hosts and device', () => {
+  it('names the shared routes plus exactly login, account, app-hosts, device and device-sessions', () => {
     const names = router.getRoutes().map((r) => r.name).filter(Boolean).map(String).sort();
-    expect(names).toEqual([...SHARED_ROUTE_NAMES, 'account', 'app-hosts', 'device', 'login'].sort());
+    expect(names).toEqual([...SHARED_ROUTE_NAMES, 'account', 'app-hosts', 'device', 'device-sessions', 'login'].sort());
   });
 
   it('resolves shared and web paths, and sends an unknown path home', async () => {
@@ -21,6 +21,7 @@ describe('web routes on the shared map', () => {
     expect(router.resolve('/login').name).toBe('login');
     expect(router.resolve('/account').name).toBe('account');
     expect(router.resolve('/device?code=BCDF-2345').name).toBe('device');
+    expect(router.resolve('/device/sessions').name).toBe('device-sessions');
     await router.push('/no/such/page');
     expect(router.currentRoute.value.name).toBe('hosts');
   });

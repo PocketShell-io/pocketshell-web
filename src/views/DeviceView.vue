@@ -19,7 +19,7 @@ import { DeviceApprovalFlow } from '../device/approvalFlow';
 import { codeFromQuery, formatUserCode } from '../device/userCode';
 import { formatExpiry, formatRequestAge } from '../device/requestTiming';
 import { useAuthStore } from '../stores/auth';
-import { DEVICE_ROUTE } from '../auth/returnTo';
+import { DEVICE_ROUTE, DEVICE_SESSIONS_ROUTE } from '../auth/returnTo';
 
 const auth = useAuthStore();
 const route = useRoute();
@@ -281,6 +281,10 @@ function formatTime(ms: number | null): string {
         <div class="device-actions">
           <button type="button" @click="flow.reset()">Enter another code</button>
         </div>
+        <p class="device-hint">
+          <RouterLink :to="{ name: DEVICE_SESSIONS_ROUTE }">Manage CLI sessions</RouterLink>
+          — see and revoke every machine signed in with <code>pocketshell login</code>.
+        </p>
       </template>
 
       <p class="device-account">
