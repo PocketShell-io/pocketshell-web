@@ -4066,3 +4066,50 @@ main.page button.device-link {
   color: var(--fg);
   overflow-wrap: anywhere;
 }
+
+/* /device: a different-network request — the loudest thing on the card. */
+.device-danger {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 2px solid var(--error);
+  border-radius: 6px;
+  background: var(--error-soft);
+  color: var(--fg);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.device-danger p {
+  margin: 0 0 10px;
+}
+
+.device-ack {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.device-ack input {
+  margin-top: 3px;
+}
+
+.device-prefill {
+  margin: 0;
+  flex-basis: 100%;
+  font-size: 20px;
+  letter-spacing: 0.12em;
+}
+
+.device-hint {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: var(--text-small);
+  color: var(--fg-secondary);
+}
+
+.device-expired {
+  color: var(--error);
+  font-weight: 600;
+}

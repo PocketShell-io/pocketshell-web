@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceAuthError, type DeviceRequestInfo } from '../src/api/deviceAuth';
 import { NotSignedInError } from '../src/api/sync';
-import { DeviceApprovalFlow, type DeviceAuthApi } from '../src/device/approvalFlow';
+import { DeviceApprovalFlow, type DeviceAuthApi, type FlowOptions } from '../src/device/approvalFlow';
 
 const INFO: DeviceRequestInfo = {
   label: 'alexey@laptop',
@@ -21,14 +21,118 @@ function mockApi(overrides: Partial<DeviceAuthApi> = {}) {
   };
 }
 
+/** A flow where the user typed the whole code themselves. */
+function typedFlow(api: DeviceAuthApi, options: FlowOptions = {}) {
+  const flow = new DeviceApprovalFlow(api, '', options);
+  flow.setInput('BCDF2345');
+  return flow;
+}
+
 describe('device approval flow', () => {
-  it('a ?code= prefill fills the field and calls nothing', async () => {
+  it('a ?code= prefill shows only the first half, calls nothing, and cannot Continue by itself', async () => {
     const api = mockApi();
     const flow = new DeviceApprovalFlow(api, 'BCDF2345');
     await Promise.resolve();
-    expect(flow.input).toBe('BCDF-2345');
+    expect(flow.prefilledCode).toBe('BCDF2345');
+    expect(flow.prefillDisplay).toBe('BCDF-····');
+    expect(flow.prefillDisplay).not.toContain('2345');
     expect(flow.step).toBe('enter');
+    expect(flow.canSubmit).toBe(false);
+    await flow.submitCode();
     expect(api.lookup).not.toHaveBeenCalled();
+    expect(api.decide).not.toHaveBeenCalled();
+  });
+
+  it('a prefill needs the last four symbols typed to match before Continue', async () => {
+    const api = mockApi();
+    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    flow.setConfirm('23');
+    expect(flow.canSubmit).toBe(false);
+    expect(flow.confirmMismatch).toBe(false);
+    flow.setConfirm('2346');
+    expect(flow.canSubmit).toBe(false);
+    expect(flow.confirmMismatch).toBe(true);
+    flow.setConfirm('23456'); // too many symbols is not a match either
+    expect(flow.canSubmit).toBe(false);
+    expect(flow.confirmMismatch).toBe(true);
+    flow.setConfirm('2345');
+    expect(flow.canSubmit).toBe(true);
+    // Typing into the (hidden) full-code field does not bypass the confirm.
+    flow.setInput('ZZZZ-ZZZZ');
+    await flow.submitCode();
+    expect(api.lookup.mock.calls).toEqual([['BCDF-2345']]);
+  });
+
+  it('typing into the full-code field alone never satisfies a prefill', async () => {
+    const api = mockApi();
+    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    flow.setInput('BCDF2345');
+    expect(flow.canSubmit).toBe(false);
+  });
+
+  it('a prefill can be abandoned for typing the whole code', async () => {
+    const api = mockApi();
+    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    flow.enterFullCode();
+    expect(flow.prefilledCode).toBe('');
+    expect(flow.input).toBe('');
+    flow.setInput('GHJK6789');
+    await flow.submitCode();
+    expect(api.lookup.mock.calls).toEqual([['GHJK-6789']]);
+  });
+
+  it('an invalid prefill is ignored entirely', () => {
+    const flow = new DeviceApprovalFlow(mockApi(), 'BCDF23');
+    expect(flow.prefilledCode).toBe('');
+    expect(flow.input).toBe('');
+  });
+
+  it('a different-network request cannot be approved until acknowledged', async () => {
+    const api = mockApi({ lookup: vi.fn(async () => ({ ...INFO, sameNetwork: false })) });
+    const flow = typedFlow(api);
+    await flow.submitCode();
+    expect(flow.networkCleared).toBe(false);
+    expect(flow.canApprove).toBe(false);
+    await flow.approve();
+    expect(api.decide).not.toHaveBeenCalled();
+    flow.acknowledgeNetwork(true);
+    expect(flow.canApprove).toBe(true);
+    await flow.approve();
+    expect(api.decide.mock.calls).toEqual([['BCDF-2345', true]]);
+  });
+
+  it('deny needs no acknowledgement', async () => {
+    const api = mockApi({ lookup: vi.fn(async () => ({ ...INFO, sameNetwork: false })) });
+    const flow = typedFlow(api);
+    await flow.submitCode();
+    await flow.deny();
+    expect(api.decide.mock.calls).toEqual([['BCDF-2345', false]]);
+  });
+
+  it('the acknowledgement does not carry over to another lookup', async () => {
+    const api = mockApi({ lookup: vi.fn(async () => ({ ...INFO, sameNetwork: false })) });
+    const flow = typedFlow(api);
+    await flow.submitCode();
+    flow.acknowledgeNetwork(true);
+    flow.back();
+    await flow.submitCode();
+    expect(flow.networkAcknowledged).toBe(false);
+    expect(flow.canApprove).toBe(false);
+  });
+
+  it('age and expiry run on the broker clock; an expired request cannot be approved', async () => {
+    let local = 5_000_000; // a local clock wildly off from the broker's
+    const api = mockApi();
+    const flow = typedFlow(api, { now: () => local });
+    await flow.submitCode();
+    // created 1_760_000_000, broker now 1_760_000_012, expires 1_760_000_600
+    expect(flow.timing()).toEqual({ ageSeconds: 12, remainingSeconds: 588 });
+    local += 30_000;
+    expect(flow.timing()).toEqual({ ageSeconds: 42, remainingSeconds: 558 });
+    local += 558_000;
+    expect(flow.expired).toBe(true);
+    expect(flow.canApprove).toBe(false);
+    await flow.approve();
     expect(api.decide).not.toHaveBeenCalled();
   });
 
@@ -73,7 +177,7 @@ describe('device approval flow', () => {
 
   it('deny sends approve:false', async () => {
     const api = mockApi();
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     await flow.deny();
     expect(api.decide.mock.calls).toEqual([['BCDF-2345', false]]);
@@ -82,7 +186,7 @@ describe('device approval flow', () => {
 
   it('approve/deny are inert outside the review step', async () => {
     const api = mockApi();
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.approve();
     await flow.deny();
     expect(api.decide).not.toHaveBeenCalled();
@@ -94,7 +198,7 @@ describe('device approval flow', () => {
 
   it('editing the field after lookup cannot retarget the approval', async () => {
     const api = mockApi();
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     flow.setInput('ZZZZ-ZZZZ');
     await flow.approve();
@@ -108,7 +212,7 @@ describe('device approval flow', () => {
         () => new Promise<'approved'>((r) => (release = () => r('approved'))),
       ),
     });
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     const first = flow.approve();
     const second = flow.deny();
@@ -120,7 +224,7 @@ describe('device approval flow', () => {
 
   it('back returns to the field without any call', async () => {
     const api = mockApi();
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     flow.back();
     expect(flow.step).toBe('enter');
@@ -140,7 +244,7 @@ describe('device approval flow', () => {
         throw new DeviceAuthError(kind, 400, (await import('../src/api/deviceAuth')).deviceAuthErrorMessage(kind));
       }),
     });
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     expect(flow.step).toBe('enter');
     expect(flow.error).toMatch(msg);
@@ -153,7 +257,7 @@ describe('device approval flow', () => {
         throw new DeviceAuthError('already_used', 409, 'already used');
       }),
     });
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     await flow.approve();
     expect(flow.step).toBe('result');
@@ -168,7 +272,7 @@ describe('device approval flow', () => {
         .mockRejectedValueOnce(new DeviceAuthError('lookup_required', 403, 'Look up the code again before approving.'))
         .mockResolvedValueOnce('approved'),
     });
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     await flow.approve();
     expect(flow.step).toBe('enter');
@@ -193,7 +297,7 @@ describe('device approval flow', () => {
         throw new NotSignedInError('expired');
       }),
     });
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
+    const flow = typedFlow(api);
     await flow.submitCode();
     expect(flow.needsSignIn).toBe(true);
     expect(flow.step).toBe('enter');
