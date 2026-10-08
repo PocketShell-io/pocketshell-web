@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
-# Package and deploy the pocketshell-web stacks (sandbox account).
+# Package the bridge Lambda and deploy the `pocketshell-web` stack
+# (sandbox account, eu-west-1): zone, site bucket + CloudFront, bridge.
 #
 # Usage:
-#   ./deploy.sh                                # zone + site + pocketshell.io
-#                                              # custom domain (cert, aliases,
-#                                              # Route53 records) + bridge
+#   ./deploy.sh                                # package + deploy the stack
 #   GOOGLE_WEB_CLIENT_ID=<id> ./deploy.sh      # add the pocketshell.io web
 #                                              # client to accepted audiences
+#
+# The app.pocketshell.io custom domain (us-east-1 ACM certificate + the
+# `pocketshell-web-domain` stack) is infra and lives in aws-infra
+# sandbox/pocketshell-web/deploy-domain.sh; it reads this stack's outputs.
+# Run it after this script only when the site distribution or zone changed.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 # One deploy at a time — concurrent runs pick the same changeset names and
 # race each other into AlreadyExistsException (hit in practice).
+mkdir -p build  # a fresh checkout has no build/ yet; the lock lives there
 exec 9>build/deploy.lock
 flock -n 9 || { echo "another deploy.sh is already running" >&2; exit 1; }
 
 REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
 : "${REGION:=eu-west-1}"
 STACK_NAME="pocketshell-web"
-CERT_REGION="us-east-1"
-DOMAIN_STACK_NAME="pocketshell-web-domain"
 
 # The high-level `aws cloudformation deploy` is gone from this box's CLI
 # (aws-cli 1.44 dropped the deploy/package customizations) — do its job with
@@ -123,82 +126,6 @@ output_of() {
 }
 
 cfn_deploy "$REGION" "$STACK_NAME" template.yaml ${OVERRIDES[@]+"${OVERRIDES[@]}"}
-
-ZONE_ID="$(output_of "$STACK_NAME" ZoneId)"
-
-# ---- Certificate (ACM us-east-1, owned by this script, not CloudFormation) -
-# A AWS::CertificateManager::Certificate resource inside a stack deadlocks on
-# first create: it blocks the stack until DNS validation succeeds, while the
-# in-stack helper that would write the validation CNAMEs cannot run until the
-# stack's resources exist. So deploy.sh drives ACM directly: find-or-request,
-# mirror the validation CNAMEs into the zone ourselves, wait for ISSUED.
-find_cert_arn() {
-  aws acm list-certificates --region "$CERT_REGION" \
-    --query "CertificateSummaryList[?DomainName=='app.pocketshell.io'].CertificateArn" \
-    --output text | head -n1
-}
-
-# CERT_ARN can be pinned from the environment (e.g. a re-issue); the default
-# lookup finds the app-subdomain certificate this script manages.
-CERT_ARN="${CERT_ARN:-$(find_cert_arn)}"
-if [ -z "$CERT_ARN" ]; then
-  echo "Requesting ACM certificate for app.pocketshell.io"
-  # request-certificate returns CertificateArn at the TOP level (unlike
-  # describe-certificate's Certificate.* nesting) — a nested query silently
-  # yields the literal "None" and poisons everything downstream.
-  CERT_ARN="$(aws acm request-certificate --region "$CERT_REGION" \
-    --domain-name app.pocketshell.io \
-    --validation-method DNS \
-    --idempotency-token pocketshellapp \
-    --query CertificateArn --output text)"
-fi
-case "$CERT_ARN" in
-  arn:aws:acm:*) : ;; # looks like a certificate ARN
-  *) echo "no usable certificate ARN: '$CERT_ARN'" >&2; exit 1 ;;
-esac
-
-# ACM publishes its validation CNAMEs a few seconds after the request, so
-# this re-seeds on every pass while waiting; the UPSERT is idempotent and the
-# records stay in the zone afterwards, which is also what keeps renewals free.
-seed_validation_records() {
-  aws acm describe-certificate --region "$CERT_REGION" --certificate-arn "$CERT_ARN" \
-    --query "Certificate.DomainValidationOptions[].ResourceRecord" --output json |
-  ZONE_ID="$ZONE_ID" python3 - <<'PYEOF'
-import json, os, subprocess, sys
-try:
-    records = [r for r in json.load(sys.stdin) if r and r.get("Name") and r.get("Value")]
-except json.JSONDecodeError:
-    sys.exit(0)  # describe failed upstream; the caller's next pass retries
-if not records:
-    sys.exit(0)  # ACM has not published the options yet; the caller retries
-changes = [{"Action": "UPSERT",
-            "ResourceRecordSet": {"Name": r["Name"], "Type": "CNAME", "TTL": 300,
-                                  "ResourceRecords": [{"Value": r["Value"]}]}}
-           for r in records]
-subprocess.run(["aws", "route53", "change-resource-record-sets",
-                "--hosted-zone-id", os.environ["ZONE_ID"],
-                "--change-batch", json.dumps({"Changes": changes})],
-               check=True, stdout=subprocess.DEVNULL)
-print(f"seeded {len(records)} validation CNAME(s) into the zone")
-PYEOF
-}
-
-echo "Waiting for certificate issuance: $CERT_ARN"
-status="PENDING_VALIDATION"
-for attempt in $(seq 1 60); do
-  status="$(aws acm describe-certificate --region "$CERT_REGION" --certificate-arn "$CERT_ARN" \
-    --query Certificate.Status --output text 2>/dev/null || echo UNKNOWN)"
-  [ "$status" = "ISSUED" ] && break
-  seed_validation_records || true
-  sleep 30
-done
-[ "$status" = "ISSUED" ] || { echo "certificate still $status after ~30 min" >&2; exit 1; }
-
-cfn_deploy "$REGION" "$DOMAIN_STACK_NAME" domain.yaml \
-  "ZoneId=$ZONE_ID" \
-  "CertificateArn=$CERT_ARN" \
-  "OriginDistributionDomain=$(output_of "$STACK_NAME" CloudFrontDomain | sed 's|https://||')" \
-  "OriginDistributionId=$(output_of "$STACK_NAME" SiteDistributionId)"
 
 echo
 aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \

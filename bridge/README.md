@@ -1,11 +1,16 @@
-# pocketshell-web — pocketshell.io static client + terminal bridge
+# bridge — the pocketshell-web backend (WebSocket ssh2 bridge)
 
-Web sibling of the PocketShell Android app and pocketshell-electron: open
-`pocketshell.io`, sign in with the same Google account the desktop sync uses,
-pull the encrypted host list from the `pocketshell-sync` API, and open real
-terminal sessions on those hosts from the browser.
+The backend half of this repo: a Lambda behind an API Gateway WebSocket API
+that verifies the browser's Google ID token on `$connect` and then runs a
+real `ssh2` client to the user's saved host, one session per
+`connectionId`. The SPA in `../src` talks to it through
+`src/terminal/bridge.ts`.
 
-Two halves, one stack, plus the us-east-1 certificate deploy.sh owns:
+```
+lambda/        index.mjs (handler) + package.json/lock (ssh2, apigw mgmt SDK)
+template.yaml  CloudFormation for the `pocketshell-web` stack (eu-west-1)
+deploy.sh      npm ci → zip → upload → change-set deploy of that stack
+```
 
 ```
 browser ──HTTPS──▶ CloudFront ──OAC──▶ private S3 (static SPA)
@@ -38,56 +43,90 @@ shows the drop and one click reopens the session).
 Host credentials never touch storage: the `connect` frame carries either
 the browser-generated key's PEM or a pasted key/password, in memory only.
 
+## What is in the stack (and why it is not split)
+
+`template.yaml` is the live `pocketshell-web` CloudFormation stack and it
+is byte-identical to the version that was deployed from aws-infra. It
+carries more than the bridge:
+
+- the bridge itself — Lambda, IAM role, log group, WebSocket API, routes,
+  stage, invoke permission;
+- the static-site origin — private S3 bucket (`pocketshell-web-site-*`),
+  OAC, bucket policy, www-redirect CloudFront Function, the inner
+  CloudFront distribution that `../scripts/deploy.sh` syncs `dist/` into;
+- the `pocketshell.io` Route53 hosted zone and its Search Console TXT.
+
+The zone and the site would ideally live in aws-infra, but moving a
+resource between CloudFormation stacks is a replacement (or a careful
+retain + import), and replacing the hosted zone changes its nameservers —
+breaking the GoDaddy delegation. So the template moved here whole, with
+the app. Treat zone/site edits in it as infra changes.
+
+What stayed in aws-infra (`sandbox/pocketshell-web/`): the
+`app.pocketshell.io` custom domain — `domain.yaml` (stack
+`pocketshell-web-domain`: the outer CloudFront distribution + app. alias
+records), the us-east-1 ACM certificate, the hand-applied apex/www/relay
+records in `route53-site-records.json`, and `deploy-domain.sh` that drives
+them. That script reads this stack's `ZoneId`, `CloudFrontDomain` and
+`SiteDistributionId` outputs, so those output names are a contract.
+
 ## Deploy
 
 ```bash
-./deploy.sh                                # zone + site + bridge + pocketshell.io
-GOOGLE_WEB_CLIENT_ID=<id> ./deploy.sh      # accept the web client's tokens
+bridge/deploy.sh                             # package + deploy the stack
+GOOGLE_WEB_CLIENT_ID=<id> bridge/deploy.sh   # also accept the web client's tokens
 ```
 
-`deploy.sh` builds `lambda/node_modules` with npm, zips, uploads to the
-deploy bucket, then: `aws cloudformation deploy` of the main stack (zone,
-site bucket, CloudFront, bridge), the ACM certificate, and the
-custom-domain stack (aliased CloudFront + Route53 records). Outputs include
-`NameServers` (point GoDaddy at these), `CloudFrontDomain` (works before
-delegation), and `WsUrl` (bake into the web app's `src/config.ts`).
+`deploy.sh` builds `lambda/node_modules` with `npm ci --omit=dev` (only when
+`ssh2` is missing — delete `lambda/node_modules` to force a fresh install),
+zips `lambda/` into `build/bridge.zip`, uploads it to
+`s3://pocketshell-web-deploy-<account>-<region>/pocketshell-web/bridge.zip`,
+and deploys `template.yaml` with raw change-set APIs (aws-cli v1 on the
+operator box lacks `cloudformation deploy`). Outputs: `ZoneId`,
+`NameServers`, `SiteBucketName`, `SiteDistributionId`, `CloudFrontDomain`,
+`WsUrl` (the SPA's `wsUrl`; `../scripts/deploy.sh` reads it).
 
-The viewer certificate is NOT in CloudFormation. An
-`AWS::CertificateManager::Certificate` resource blocks its stack until DNS
-validation succeeds, while any in-stack helper that would write the
-validation CNAMEs cannot run until the stack exists — a deadlock on
-first-ever create (hit in practice 2026-09-11). deploy.sh therefore drives
-ACM directly: finds or requests the pocketshell.io cert in us-east-1,
-mirrors its validation CNAMEs into the zone (idempotent UPSERTs; the
-records stay, which also keeps renewals free), and waits for ISSUED before
-deploying the domain stack. With GoDaddy delegated, one run completes
-end-to-end; before delegation it waits ~30 min for validation and exits —
-re-run once the delegation is live.
+Note: the Lambda's `Code` points at a fixed S3 key, so a code-only change
+uploads a new zip but leaves the template unchanged — CloudFormation then
+reports "no changes" and the function keeps the old code. Push new code
+with `aws lambda update-function-code --function-name pocketshell-web-bridge
+--s3-bucket <deploy bucket> --s3-key pocketshell-web/bridge.zip
+--region eu-west-1` after `deploy.sh` uploads the zip.
+
+The custom domain is not deployed from here; see aws-infra
+`sandbox/pocketshell-web/README.md`.
 
 ## Prerequisites the owner does by hand
 
-1. **GoDaddy** — replace pocketshell.io's nameservers with the stack's
-   `NameServers` output (Route 53 delegation; the zone is created here, the
-   domain stays registered at GoDaddy).
-2. **Google Cloud Console** — create an OAuth client of type **Web
-   application** with Authorized JavaScript origins
-   `https://pocketshell.io` and `http://localhost:5173`. Pass its client ID
-   to this stack (`GOOGLE_WEB_CLIENT_ID`) and to the web app build. No
+1. **Google Cloud Console** — an OAuth client of type **Web application**
+   with Authorized JavaScript origins for the app host and
+   `http://localhost:5173`. Pass its client ID to this stack
+   (`GOOGLE_WEB_CLIENT_ID`) and to the web app (`public/config.js`). No
    client secret involved: the browser flow (GIS) yields an ID token
    directly.
-3. **pocketshell-sync CORS** — the sync stack's template lists the origins
-   allowed to call it from a browser; add `https://pocketshell.io` there if
-   missing and redeploy that stack.
+2. **pocketshell-sync CORS** — the sync stack (aws-infra
+   `sandbox/pocketshell-sync`) lists the origins allowed to call it from a
+   browser; add the app origin there if missing.
+3. **GoDaddy delegation** of pocketshell.io to this stack's `NameServers`
+   (done once; see aws-infra for the domain side).
+
+## History
+
+This directory was moved from aws-infra `sandbox/pocketshell-web` with
+`git subtree`, so its full history is in this repo. Path-filtered `git log`
+does not cross the subtree merge; to see the pre-move commits of a file:
+
+```bash
+m=$(git log --format=%H --grep='BRIDGE import' -1)   # the subtree merge
+git log --oneline "$m^2" -- lambda/index.mjs
+```
 
 ## Removing
 
 ```bash
 aws cloudformation delete-stack --stack-name pocketshell-web --region eu-west-1
-aws cloudformation delete-stack --stack-name pocketshell-web-domain --region eu-west-1
-# the ACM certificate is script-owned: delete by hand if wanted
-# aws acm delete-certificate --region us-east-1 --certificate-arn <arn>
 ```
 
-The hosted zone, buckets, and log groups are retained (no DeletionPolicy
-overrides needed — the zone and bucket simply outlive the stack until
-deleted by hand).
+Delete the aws-infra `pocketshell-web-domain` stack first — it depends on
+this stack's distribution and zone. The hosted zone, buckets and log
+groups outlive the stack until deleted by hand.
