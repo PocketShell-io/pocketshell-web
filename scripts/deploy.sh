@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 # Build the SPA and push it to the pocketshell-web site bucket, then
-# invalidate CloudFront. Stack values come from the aws-infra stack outputs
-# unless overridden:
+# invalidate CloudFront. Stack values come from the pocketshell-web stack
+# outputs (bridge/template.yaml, deployed by bridge/deploy.sh) unless overridden:
 #   SITE_BUCKET=... CF_DISTRIBUTION_ID=... WS_URL=... ./deploy.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 REGION="${AWS_REGION:-eu-west-1}"
-INFRA_DIR="${AWS_INFRA_DIR:-$HOME/git/aws-infra/sandbox/pocketshell-web}"
 
 stack_output() {
-  (cd "$INFRA_DIR" && aws cloudformation describe-stacks --region "$REGION" \
+  aws cloudformation describe-stacks --region "$REGION" \
     --stack-name pocketshell-web \
-    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null)
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null
 }
 
 SITE_BUCKET="${SITE_BUCKET:-$(stack_output SiteBucketName)}"

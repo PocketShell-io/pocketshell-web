@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 // The app stores SSH credentials encrypted in the browser and, on connect,
 // sends them once over the authenticated WebSocket to the bridge, which
-// uses them in memory (verified against the aws-infra Lambda source). The
+// uses them in memory (verified against bridge/lambda/index.mjs). The
 // public copy must keep saying exactly that: these tests fail if an
 // absolute "keys never leave your browser" claim sneaks back in. The
 // marketing surfaces (landing, blog, FAQ) moved to the pocketshell-site

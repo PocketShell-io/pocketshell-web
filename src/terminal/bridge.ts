@@ -1,6 +1,6 @@
 /**
- * The WebSocket bridge protocol (implemented by the Lambda in aws-infra
- * sandbox/pocketshell-web). All frames are JSON text:
+ * The WebSocket bridge protocol (implemented by the Lambda in this repo's
+ * bridge/lambda/index.mjs). All frames are JSON text:
  *
  *   client → server: {type:"connect", host, port, username, auth, cols, rows}
  *                      where auth = {kind:"key", privateKey, passphrase?}
@@ -19,7 +19,7 @@
  * against Google's JWKS (+ audience and email allowlist) on $connect. SSH
  * secrets live in the browser and travel once, in the `connect` frame, to
  * the bridge — which uses them in memory to open the SSH connection; the
- * Lambda neither persists nor logs them (verified in aws-infra source).
+ * Lambda neither persists nor logs them (verified in bridge/lambda/index.mjs).
  */
 export interface BridgeAuth {
   kind: 'key' | 'password';

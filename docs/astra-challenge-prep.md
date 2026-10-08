@@ -12,7 +12,7 @@ The verified model (source, not assertion):
    passphrase (PBKDF2 600k + AES-256-GCM, `src/shared/syncCrypto.ts`).
 2. Transfer — `src/terminal/bridge.ts` sends `auth` in the `connect` frame
    over WSS (API Gateway, TLS) to the bridge Lambda.
-3. Bridge handling — `aws-infra/sandbox/pocketshell-web/lambda/index.mjs`
+3. Bridge handling — `bridge/lambda/index.mjs`
    feeds the frame's key/password straight into the ssh2 client options:
    never onto the session object, never logged (CloudWatch lines carry
    connection ids and error strings only), never persisted (no table; warm
