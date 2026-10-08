@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { createAppRoutes } from '@ui/app/routes';
 import { webRoutes } from './webRoutes';
 import { useAuthStore } from './stores/auth';
+import { afterLoginTarget, loginQueryFor } from './auth/returnTo';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -16,14 +17,16 @@ export const router = createRouter({
  * The one web-specific routing rule: nothing outside the sign-in surface is
  * reachable without a Google session. The desktop's router carries no guard
  * because the OS account is always there; the browser's is not. The query
- * rides along so a deep link (or a future OAuth return) survives the bounce.
+ * rides along so a deep link (or a future OAuth return) survives the bounce;
+ * the CLI-approval page (/device) additionally asks to come back after
+ * sign-in, with its user code (auth/returnTo.ts).
  */
 router.beforeEach((to) => {
   if (!useAuthStore().signedIn && to.name !== 'login') {
-    return { name: 'login', query: to.query };
+    return { name: 'login', query: loginQueryFor(to) };
   }
   if (useAuthStore().signedIn && to.name === 'login') {
-    return { name: 'hosts' };
+    return afterLoginTarget(to.query);
   }
   // `/` is the home, unconditionally once signed in — the same picker the
   // desktop opens on. A signed-in-but-locked account sees the picker's
@@ -38,6 +41,7 @@ const titles: Record<string, string> = {
   'app-hosts': 'Your hosts — PocketShell',
   hosts: 'Hosts — PocketShell',
   account: 'Account & sync — PocketShell',
+  device: 'Approve a CLI sign-in — PocketShell',
 };
 
 router.afterEach((to) => {
