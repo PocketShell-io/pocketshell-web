@@ -98,8 +98,29 @@ describe('/device/sessions view', () => {
     expect(first).toContain('203.0.113.7');
     expect(first).toContain(new Date(ROWS[0].createdAt!).toLocaleString());
     expect(first).toContain(new Date(ROWS[0].lastUsedAt!).toLocaleString());
-    expect(first).toContain(new Date(ROWS[0].expiresAt!).toLocaleString());
     expect(rows[1].text()).toContain('never');
+  });
+
+  it('shows the effective expiry and which limit applies', async () => {
+    const now = Date.now();
+    const DAY = 86_400_000;
+    api.listSessions.mockResolvedValue([
+      // used a day ago, hard expiry far off → the idle limit applies
+      { ...ROWS[0], createdAt: now - 2 * DAY, lastUsedAt: now - DAY + 60_000, expiresAt: now + 28 * DAY },
+      // used just now, hard expiry in 5 days → the 30-day limit applies
+      { ...ROWS[1], createdAt: now - 25 * DAY, lastUsedAt: now - 60_000, expiresAt: now + 5 * DAY + 60_000 },
+    ]);
+    const { wrapper: w } = await mountView();
+    const rows = w.findAll('.sessions-row');
+    expect(rows[0].text()).toContain('expires in 13 days if unused');
+    expect(rows[1].text()).toContain('expires in 5 days (30-day limit)');
+    expect(rows[1].text()).toContain(new Date(now + 5 * DAY + 60_000).toLocaleString());
+  });
+
+  it('a session whose last use equals its creation reads as not used yet', async () => {
+    api.listSessions.mockResolvedValue([{ ...ROWS[0], lastUsedAt: ROWS[0].createdAt }]);
+    const { wrapper: w } = await mountView();
+    expect(w.find('.sessions-row').text()).toContain('not used yet');
   });
 
   it('revokes one row by its token_id and reloads', async () => {

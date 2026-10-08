@@ -13,6 +13,7 @@ import { DeviceAuthError, deviceAuthErrorMessage, makeDeviceAuthService, type Cl
 import { NotSignedInError } from '../api/sync';
 import { DEVICE_ROUTE, DEVICE_SESSIONS_ROUTE } from '../auth/returnTo';
 import { useAuthStore } from '../stores/auth';
+import { describeExpiry, effectiveExpiry } from '../device/sessionExpiry';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -93,6 +94,13 @@ async function revokeAll(): Promise<void> {
   await load();
 }
 
+/** `expires in 13 days if unused` / `… (30-day limit)`, with the date. */
+function expiryText(row: CliSession): string {
+  const expiry = effectiveExpiry(row);
+  if (expiry.at === null) return 'unknown';
+  return `${describeExpiry(expiry, Date.now())} — ${formatTime(expiry.at)}`;
+}
+
 function formatTime(ms: number | null, missing = 'unknown'): string {
   if (ms === null) return missing;
   const d = new Date(ms);
@@ -134,9 +142,10 @@ onMounted(() => {
               <dt>Created</dt>
               <dd>{{ formatTime(row.createdAt) }}</dd>
               <dt>Last used</dt>
-              <dd>{{ formatTime(row.lastUsedAt, 'never') }}</dd>
+              <!-- The broker starts last_used_at at created_at until the first mint. -->
+              <dd>{{ row.lastUsedAt === row.createdAt ? 'not used yet' : formatTime(row.lastUsedAt, 'never') }}</dd>
               <dt>Expires</dt>
-              <dd>{{ formatTime(row.expiresAt) }}</dd>
+              <dd>{{ expiryText(row) }}</dd>
             </dl>
           </div>
           <button
