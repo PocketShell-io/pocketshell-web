@@ -1,9 +1,10 @@
 /**
  * The browser side of the CLI device flow (broker routes 3 and 4 of the
  * design contract): look a `pocketshell login` request up by its user code,
- * then approve or deny it. Both calls are authorized ONLY by the Google ID
+ * then approve or deny it; and (contract addendum 2) list and revoke the
+ * account's CLI sessions. Every call is authorized ONLY by the Google ID
  * token in `Authorization: Bearer` — no cookie ever rides along
- * (`credentials: 'omit'`), so a cross-site page cannot forge either request:
+ * (`credentials: 'omit'`), so a cross-site page cannot forge any of them:
  * it would need the token, which lives in this tab's sessionStorage.
  *
  * Everything the server returns about the requesting machine (label, IP,
@@ -54,6 +55,23 @@ export interface DeviceRequestInfo {
 }
 
 export type DeviceDecision = 'approved' | 'denied';
+
+/** One `pocketshell login` session of the signed-in account (GET /cli/sessions). */
+export interface CliSession {
+  /** 12 lower-case hex, or null when the server sent something else (the
+   * row still shows; only "Revoke all" can reach it). */
+  tokenId: string | null;
+  label: string;
+  requestIp: string;
+  /** Unix ms, or null. */
+  createdAt: number | null;
+  expiresAt: number | null;
+  /** Null when the session was never used. */
+  lastUsedAt: number | null;
+}
+
+const TOKEN_ID = /^[0-9a-f]{12}$/;
+const MAX_SESSIONS = 500;
 
 export interface DeviceAuthDeps {
   auth: TokenSource;
@@ -163,6 +181,42 @@ export class DeviceAuthService {
     };
   }
 
+  /** `GET /cli/sessions` — the caller's own CLI sessions. */
+  async listSessions(): Promise<CliSession[]> {
+    const body = await this.request('GET', '/cli/sessions');
+    if (!Array.isArray(body.sessions)) throw new DeviceAuthError('unexpected', 200, MESSAGES.unexpected);
+    return body.sessions
+      .slice(0, MAX_SESSIONS)
+      .filter((row): row is Record<string, unknown> => row !== null && typeof row === 'object' && !Array.isArray(row))
+      .map((row) => ({
+        tokenId: typeof row.token_id === 'string' && TOKEN_ID.test(row.token_id) ? row.token_id : null,
+        label: displayText(row.label, 80) || '(no label)',
+        requestIp: displayText(row.request_ip, 64),
+        createdAt: parseTimestamp(row.created_at),
+        expiresAt: parseTimestamp(row.expires_at),
+        lastUsedAt: parseTimestamp(row.last_used_at),
+      }));
+  }
+
+  /** `POST /cli/sessions/revoke {"token_id"}` → how many were revoked. */
+  async revokeSession(tokenId: string): Promise<number> {
+    if (!TOKEN_ID.test(tokenId)) throw new TypeError('token_id must be 12 lower-case hex characters');
+    return this.revoked(await this.request('POST', '/cli/sessions/revoke', { token_id: tokenId }));
+  }
+
+  /** `POST /cli/sessions/revoke {"all":true}` → how many were revoked. */
+  async revokeAllSessions(): Promise<number> {
+    return this.revoked(await this.request('POST', '/cli/sessions/revoke', { all: true }));
+  }
+
+  private revoked(body: Record<string, unknown>): number {
+    const n = body.revoked;
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) {
+      throw new DeviceAuthError('unexpected', 200, MESSAGES.unexpected);
+    }
+    return n;
+  }
+
   /** `POST /auth/device/approve` with an explicit boolean decision. */
   async decide(userCode: string, approve: boolean): Promise<DeviceDecision> {
     if (typeof approve !== 'boolean') throw new TypeError('approve must be a boolean');
@@ -174,7 +228,15 @@ export class DeviceAuthService {
     return expected;
   }
 
-  private async post(path: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private post(path: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request('POST', path, payload);
+  }
+
+  private async request(
+    method: 'GET' | 'POST',
+    path: string,
+    payload?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     // getIdToken throws NotSignedInError when the session is gone; that
     // propagates as-is so the page can route through sign-in.
     const token = this.auth.getIdToken();
@@ -183,9 +245,12 @@ export class DeviceAuthService {
     let res: Response;
     try {
       res = await this.fetchFn(`${this.baseUrl}${path}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        method,
+        headers:
+          payload === undefined
+            ? { Authorization: `Bearer ${token}` }
+            : { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
         credentials: 'omit',
         cache: 'no-store',
         redirect: 'error',

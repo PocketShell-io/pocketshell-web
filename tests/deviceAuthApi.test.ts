@@ -164,4 +164,73 @@ describe('untrusted display text', () => {
     expect(parseTimestamp('soon')).toBeNull();
     expect(parseTimestamp(undefined)).toBeNull();
   });
+
+  it('lists CLI sessions with a bodyless Bearer GET and sanitizes every row', async () => {
+    const fetchFn = vi.fn(async () =>
+      respond(200, {
+        sessions: [
+          {
+            token_id: '0123456789ab',
+            label: `me@lap${String.fromCodePoint(0x202e)}top`,
+            request_ip: '203.0.113.7',
+            created_at: 1_760_000_000,
+            expires_at: 1_762_592_000,
+            last_used_at: 1_760_100_000,
+          },
+          { token_id: 'NOT-HEX', label: 42, created_at: 'x', last_used_at: null },
+          'garbage',
+        ],
+      }),
+    );
+    const rows = await service(fetchFn as unknown as typeof fetch).listSessions();
+    expect(rows).toEqual([
+      {
+        tokenId: '0123456789ab',
+        label: 'me@lap top',
+        requestIp: '203.0.113.7',
+        createdAt: 1_760_000_000_000,
+        expiresAt: 1_762_592_000_000,
+        lastUsedAt: 1_760_100_000_000,
+      },
+      { tokenId: null, label: '(no label)', requestIp: '', createdAt: null, expiresAt: null, lastUsedAt: null },
+    ]);
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://broker.example/cli/sessions');
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined();
+    expect(init.credentials).toBe('omit');
+    expect(init.headers).toEqual({ Authorization: 'Bearer id-token-abc' });
+  });
+
+  it('a sessions response without an array is unexpected', async () => {
+    const fetchFn = vi.fn(async () => respond(200, { sessions: {} }));
+    await expect(service(fetchFn as unknown as typeof fetch).listSessions()).rejects.toMatchObject({ kind: 'unexpected' });
+  });
+
+  it('revokes one session or all of them, returning the count', async () => {
+    const fetchFn = vi.fn(async () => respond(200, { revoked: 1 }));
+    const svc = service(fetchFn as unknown as typeof fetch);
+    expect(await svc.revokeSession('0123456789ab')).toBe(1);
+    expect(await svc.revokeAllSessions()).toBe(1);
+    const bodies = fetchFn.mock.calls.map((c) => {
+      const [url, init] = c as unknown as [string, RequestInit];
+      expect(url).toBe('https://broker.example/cli/sessions/revoke');
+      expect(init.method).toBe('POST');
+      return JSON.parse(String(init.body));
+    });
+    expect(bodies).toEqual([{ token_id: '0123456789ab' }, { all: true }]);
+  });
+
+  it('never sends a malformed token_id, and rejects a bad revoked count', async () => {
+    const fetchFn = vi.fn(async () => respond(200, { revoked: -1 }));
+    const svc = service(fetchFn as unknown as typeof fetch);
+    await expect(svc.revokeSession('../all')).rejects.toThrow(TypeError);
+    expect(fetchFn).not.toHaveBeenCalled();
+    await expect(svc.revokeAllSessions()).rejects.toMatchObject({ kind: 'unexpected' });
+  });
+
+  it('a 401 on the sessions list means sign in again', async () => {
+    const fetchFn = vi.fn(async () => respond(401, { message: 'Unauthorized' }));
+    await expect(service(fetchFn as unknown as typeof fetch).listSessions()).rejects.toBeInstanceOf(NotSignedInError);
+  });
 });
