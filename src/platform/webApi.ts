@@ -450,6 +450,10 @@ export const webApi: PocketShellApi = {
       servicesOf(connectionId).agent.kinds().then((kinds) =>
         kinds === null ? null : [...kinds],
       ),
+    // The browser transport has no `command -v` probe yet. null is core's
+    // "never asked" answer: it refuses nothing, so the launch picker falls
+    // back to the subcommand list instead of guessing a binary is absent.
+    binaries: () => Promise.resolve(null),
     profiles: (connectionId) => servicesOf(connectionId).agent.profiles(),
     envList: (connectionId, dir) => servicesOf(connectionId).agent.envList(dir),
     envGet: (connectionId, dir, keys) => servicesOf(connectionId).agent.envGet(dir, keys),

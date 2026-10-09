@@ -36,9 +36,10 @@ describe('the 0.4.44 `pocketshell agent` contract, as captured', () => {
     expect(listed).toEqual(['claude', 'codex', 'opencode']);
     expect([...HELPER_BASELINE_KINDS]).toEqual(listed);
     // LAUNCHABLE_KINDS is what the app can spell; the gap is probed for.
-    expect([...LAUNCHABLE_KINDS]).toEqual([...listed, 'grok']);
+    expect([...LAUNCHABLE_KINDS]).toEqual([...listed, 'grok', 'antigravity']);
     for (const kind of HELPER_BASELINE_KINDS) expect(kindNeedsNewerHelper(kind)).toBe(false);
     expect(kindNeedsNewerHelper('grok')).toBe(true);
+    expect(kindNeedsNewerHelper('antigravity')).toBe(true);
   });
 
   it('refuses grok on a host whose captured help has no such subcommand', () => {
