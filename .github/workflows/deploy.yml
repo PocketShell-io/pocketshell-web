@@ -1,5 +1,6 @@
 # Deploys pocketshell.io on every push to main (and manual dispatch).
-# Auth is GitHub OIDC -> the pocketshell-web-github-actions-deploy IAM role;
+# Auth is GitHub OIDC -> the pocketshell-web-github-actions-deploy IAM role
+# (source: aws-infra sandbox/pocketshell-web/github-actions.yaml);
 # no stored AWS keys. The inner distribution is invalidated by deploy.sh;
 # the outer custom-domain distribution (E2H01B6MN5ZDSI) must be invalidated
 # on every deploy, so it happens here as a second step.

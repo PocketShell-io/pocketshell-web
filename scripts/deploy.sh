@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the SPA and push it to the pocketshell-web site bucket, then
 # invalidate CloudFront. Stack values come from the pocketshell-web stack
-# outputs (bridge/template.yaml, deployed by bridge/deploy.sh) unless overridden:
+# outputs (aws-infra sandbox/pocketshell-web/template.yaml, deployed by its deploy.sh) unless overridden:
 #   SITE_BUCKET=... CF_DISTRIBUTION_ID=... WS_URL=... ./deploy.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
