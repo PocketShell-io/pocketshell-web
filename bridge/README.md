@@ -86,12 +86,10 @@ operator box lacks `cloudformation deploy`). Outputs: `ZoneId`,
 `NameServers`, `SiteBucketName`, `SiteDistributionId`, `CloudFrontDomain`,
 `WsUrl` (the SPA's `wsUrl`; `../scripts/deploy.sh` reads it).
 
-Note: the Lambda's `Code` points at a fixed S3 key, so a code-only change
-uploads a new zip but leaves the template unchanged — CloudFormation then
-reports "no changes" and the function keeps the old code. Push new code
-with `aws lambda update-function-code --function-name pocketshell-web-bridge
---s3-bucket <deploy bucket> --s3-key pocketshell-web/bridge.zip
---region eu-west-1` after `deploy.sh` uploads the zip.
+The Lambda zip is uploaded under a content-addressed key
+(`pocketshell-web/bridge-<sha256>.zip`) passed as the `BridgeCodeKey`
+parameter, so a code-only change is a template change and CloudFormation
+updates the function.
 
 The custom domain is not deployed from here; see aws-infra
 `sandbox/pocketshell-web/README.md`.

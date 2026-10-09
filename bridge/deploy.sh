@@ -111,10 +111,14 @@ if ! aws s3api head-bucket --bucket "$BUCKET" --region "$REGION" 2>/dev/null; th
   aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
     --create-bucket-configuration "LocationConstraint=$REGION"
 fi
-aws s3 cp build/bridge.zip "s3://$BUCKET/$STACK_NAME/bridge.zip"
+# Content-addressed key: a fixed key made code-only changes invisible to
+# CloudFormation ("no changes"), which kept serving the old function code.
+CODE_SHA="$(sha256sum build/bridge.zip | cut -c1-16)"
+CODE_KEY="$STACK_NAME/bridge-$CODE_SHA.zip"
+aws s3 cp build/bridge.zip "s3://$BUCKET/$CODE_KEY"
 
 # ---- Parameters -----------------------------------------------------------
-OVERRIDES=()
+OVERRIDES=("BridgeCodeKey=$CODE_KEY")
 if [ -n "${GOOGLE_WEB_CLIENT_ID:-}" ]; then
   # Desktop client + web client, both accepted as token audiences.
   OVERRIDES+=("GoogleClientIds=1035162854462-nos4fptbf2psbkp8ljd8tjem1psnekvt.apps.googleusercontent.com,$GOOGLE_WEB_CLIENT_ID")

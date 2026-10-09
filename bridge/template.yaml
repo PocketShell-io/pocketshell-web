@@ -9,6 +9,12 @@ Description: >
   ACM ARN gets existence-checked even when the condition is false).
 
 Parameters:
+  # S3 key of the bridge Lambda zip. deploy.sh uploads a content-addressed
+  # zip (bridge-<sha256>.zip) and passes its key here, so a code-only change
+  # is a template change and CloudFormation actually updates the function.
+  BridgeCodeKey:
+    Type: String
+    Default: pocketshell-web/bridge.zip
   # Comma-separated list of Google OAuth client IDs whose ID tokens the WS
   # bridge accepts. Defaults to the desktop client (tokens minted by the
   # installed-app flow); add the pocketshell.io web client ID here via
@@ -219,7 +225,7 @@ Resources:
       MemorySize: 512
       Code:
         S3Bucket: !Sub "pocketshell-web-deploy-${AWS::AccountId}-${AWS::Region}"
-        S3Key: pocketshell-web/bridge.zip
+        S3Key: !Ref BridgeCodeKey
       Environment:
         Variables:
           GOOGLE_CLIENT_IDS: !Join [",", !Ref GoogleClientIds]
