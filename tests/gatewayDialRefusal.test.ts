@@ -145,9 +145,21 @@ describe('web#4: connectHost refuses gateway-marked hosts before any dial', () =
       expect(bridgeDials).toBe(0);
       expect(relayDials).toBe(0);
       expect(store.secretReads).toEqual([]);
-      expect(connection.error).toBe(transportRefusalMessage('gateway-unsupported', 'box'));
+      // The refusal is about the host the user tapped, never the unmarked
+      // `box` the address happened to resolve to (the store sends no alias).
+      expect(connection.error).toBe(transportRefusalMessage('gateway-unsupported', null));
+      expect(connection.error).not.toContain('box');
     },
   );
+
+  it('a request that names its alias is refused under that name, not the resolved entry', async () => {
+    store.hosts = [syncedHost('box', {})];
+    const res = await webApi.ssh.connect({ host: 'gw-box.example', port: 22, user: 'me', hostAlias: 'gw', gateway: null });
+    await settle();
+    expect(res).toEqual({ ok: false, error: transportRefusalMessage('gateway-unsupported', 'gw') });
+    expect(bridgeDials + relayDials).toBe(0);
+    expect(store.secretReads).toEqual([]);
+  });
 
   it('a stored entry carrying gateway refuses even when the request omits the marker', async () => {
     store.hosts = [syncedHost('gw', { gateway: null })];

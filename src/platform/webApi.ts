@@ -26,7 +26,6 @@
  */
 import type { PocketShellApi, Unsubscribe } from '@ui/app/api';
 import type { ConnectionState } from '@pocketshell/core';
-import { unsupportedTransport, type TransportCapabilities } from '@pocketshell/core';
 import type { CloneProgress, HostEntry } from '@pocketshell/core';
 import { SshConnection } from '../terminal/connection';
 import { LinkSshConnection } from '../terminal/linkConnection';
@@ -45,6 +44,7 @@ import { WebSync } from './webSync';
 import { PreviewService } from './webPreview';
 import { WebAttachments } from './webAttachments';
 import { config } from '../config';
+import { authorizeDial, refuseRequest, requestLabel } from './dialGate';
 
 export class UnsupportedCapability extends Error {
   constructor(method: string) {
@@ -124,19 +124,12 @@ function knownHostsHooks(payload: { tofuDecision?: 'accept-always' | 'accept-onc
   };
 }
 
-/**
- * The transports this web client can dial besides ordinary SSH: the link
- * transport (`LinkSshConnection`) yes, the PocketShell gateway not yet. Fed
- * to core's shared `unsupportedTransport` decision at the dial boundary.
- */
-const WEB_TRANSPORTS: TransportCapabilities = { gateway: false, link: true };
-
-const hasOwn = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key);
-
 async function connectHost(payload: {
   host: string;
   port?: number;
   user: string;
+  /** The `Host` alias the request names, when the caller sends one. */
+  hostAlias?: string;
   privateKeyPath?: string;
   tofuDecision?: 'accept-always' | 'accept-once' | 'reject';
   /** Transport markers, verbatim from the shared store (any value). */
@@ -152,30 +145,23 @@ async function connectHost(payload: {
     store.hosts.find((h) => h.hostname === payload.host && h.port === wantedPort) ??
     store.hosts.find((h) => h.name === payload.privateKeyPath) ??
     store.hosts.find((h) => h.hostname === payload.host);
-  // The dial boundary (web#4, core #3059): core's one transport decision runs
-  // on BOTH the connect request and the stored entry it resolved to, before
-  // any secret is read or socket opened. The entry is matched by address, so
-  // a marked request can land on a different, unmarked entry — the request's
-  // own marker must refuse on its own. A gateway marker (valid, null,
-  // malformed, or beside `link`) is never dialled as plain SSH nor ridden
-  // over the link transport.
-  const asked = unsupportedTransport(payload, WEB_TRANSPORTS, entry?.name ?? null);
-  if (asked.refused) return { ok: false, error: asked.message };
+  // The dial boundary (web#4, core #3059): the one web dial gate
+  // (dialGate.ts, core's unsupportedTransport with the session path's
+  // capabilities) decides on the REQUEST first — the entry is matched by
+  // address, so a marked request can land on a different, unmarked entry —
+  // and then on the stored entry, before any secret is read or socket
+  // opened. The refusal names the host the request asked for, never an
+  // unrelated address-resolved one (requestLabel).
+  const label = requestLabel(payload, entry);
+  const asked = refuseRequest('session', payload, label);
+  if (asked !== null) return { ok: false, error: asked };
   if (!entry) {
     return { ok: false, error: `No synced host for ${payload.user ? `${payload.user}@` : ''}${payload.host}:${wantedPort}` };
   }
-  const stored = unsupportedTransport(entry, WEB_TRANSPORTS);
-  if (stored.refused) return { ok: false, error: stored.message };
-  if (hasOwn(payload, 'link') && !hasOwn(entry, 'link')) {
-    // A link host's hostname is display-only: dialling the unmarked entry
-    // that happens to share it would be plain SSH to the wrong place.
-    return {
-      ok: false,
-      error: `“${entry.name}” is not the relay-link host this dial asked for. Nothing was dialled.`,
-    };
-  }
-  const secret = await store.getHostSecret(entry.name);
-  if (hasOwn(entry, 'link')) {
+  const grant = await authorizeDial('session', entry, { request: payload, label });
+  if (!grant.ok) return grant;
+  const secret = grant.secret;
+  if (grant.transport === 'link') {
     // A link host (no inbound SSH) needs exactly one secret: the shared
     // relay token, stored in the vault's password slot.
     if (!secret || (secret.password ?? '') === '') {

@@ -8,6 +8,7 @@ import {
   type HostLink,
 } from '../aplexer/warnings';
 import { config } from '../config';
+import { authorizeDial } from '../platform/dialGate';
 import { useAuthStore } from './auth';
 import { useHostsStore } from './hosts';
 
@@ -47,7 +48,13 @@ export const useWarningsStore = defineStore('host-warnings', {
       if (auth.idToken === '' || config.wsUrl === '') return null;
       const host = hosts.hosts.find((h) => h.name === name);
       if (host === undefined) return null;
-      const bridgeAuth = bridgeAuthOf(await hosts.getHostSecret(name));
+      // The Lambda bridge dials ordinary SSH to `host.hostname` and nothing
+      // else: a gateway- or link-marked host is skipped quietly HERE, before
+      // its key — or a link host's relay token — is read, let alone sent
+      // (web#4: the one web dial gate, core's unsupportedTransport).
+      const grant = await authorizeDial('bridgeExec', host);
+      if (!grant.ok) return null;
+      const bridgeAuth = bridgeAuthOf(grant.secret);
       if (bridgeAuth === null) return null;
       return {
         wsUrl: config.wsUrl,

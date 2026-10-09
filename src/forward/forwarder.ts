@@ -10,6 +10,7 @@
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
 import { config } from '../config';
+import { authorizeDial } from '../platform/dialGate';
 import {
   buildRequest,
   filterResponseHeaders,
@@ -108,7 +109,12 @@ async function dispatch(msg: FwdRequest, target: ForwardTarget, search: string):
   if (entry === undefined) {
     return htmlReply(msg.id, 404, `No host named “${escapeHtml(target.host)}” in your list.`);
   }
-  const secret = hosts.secrets[target.host];
+  // The forwarder's HostChannel is ordinary SSH through the direct WebSocket:
+  // a gateway- or link-marked host is refused HERE, before its key is read
+  // (web#4: the one web dial gate, core's unsupportedTransport and wording).
+  const grant = await authorizeDial('forward', entry);
+  if (!grant.ok) return htmlReply(msg.id, 503, escapeHtml(grant.error));
+  const secret = grant.secret;
   if (secret?.privateKeyPem === undefined || secret.privateKeyPem === '') {
     return htmlReply(msg.id, 503, 'No key attached for this host yet — open PocketShell → Hosts → Key… and attach one.');
   }
