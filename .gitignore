@@ -3,3 +3,4 @@ dist/
 .tmp/
 *.local
 .DS_Store
+vitest-results.json

@@ -44,6 +44,7 @@ import { WebSync } from './webSync';
 import { PreviewService } from './webPreview';
 import { WebAttachments } from './webAttachments';
 import { config } from '../config';
+import { authorizeDial, refuseRequest, requestLabel } from './dialGate';
 
 export class UnsupportedCapability extends Error {
   constructor(method: string) {
@@ -127,8 +128,13 @@ async function connectHost(payload: {
   host: string;
   port?: number;
   user: string;
+  /** The `Host` alias the request names, when the caller sends one. */
+  hostAlias?: string;
   privateKeyPath?: string;
   tofuDecision?: 'accept-always' | 'accept-once' | 'reject';
+  /** Transport markers, verbatim from the shared store (any value). */
+  link?: unknown;
+  gateway?: unknown;
 }): Promise<{ ok: true; connectionId: string } | { ok: false; error: string }> {
   // The synced host list is the web's ~/.ssh/config: a dial is authorised by
   // a synced entry, and its attached secret (never a key FILE path — the
@@ -139,11 +145,23 @@ async function connectHost(payload: {
     store.hosts.find((h) => h.hostname === payload.host && h.port === wantedPort) ??
     store.hosts.find((h) => h.name === payload.privateKeyPath) ??
     store.hosts.find((h) => h.hostname === payload.host);
+  // The dial boundary (web#4, core #3059): the one web dial gate
+  // (dialGate.ts, core's unsupportedTransport with the session path's
+  // capabilities) decides on the REQUEST first — the entry is matched by
+  // address, so a marked request can land on a different, unmarked entry —
+  // and then on the stored entry, before any secret is read or socket
+  // opened. The refusal names the host the request asked for, never an
+  // unrelated address-resolved one (requestLabel).
+  const label = requestLabel(payload, entry);
+  const asked = refuseRequest('session', payload, label);
+  if (asked !== null) return { ok: false, error: asked };
   if (!entry) {
     return { ok: false, error: `No synced host for ${payload.user ? `${payload.user}@` : ''}${payload.host}:${wantedPort}` };
   }
-  const secret = await store.getHostSecret(entry.name);
-  if (entry.link) {
+  const grant = await authorizeDial('session', entry, { request: payload, label });
+  if (!grant.ok) return grant;
+  const secret = grant.secret;
+  if (grant.transport === 'link') {
     // A link host (no inbound SSH) needs exactly one secret: the shared
     // relay token, stored in the vault's password slot.
     if (!secret || (secret.password ?? '') === '') {
