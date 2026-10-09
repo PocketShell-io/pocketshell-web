@@ -19,7 +19,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Nothing ships unless the full test suite and typecheck pass on exactly
+  # this commit, against the core it will be built with (web#5).
+  test:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

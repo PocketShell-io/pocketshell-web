@@ -1,0 +1,61 @@
+# Unit/integration tests and typecheck for every PR and branch push, and the
+# gate the Deploy site workflow runs before it ships anything (web#5).
+#
+# Core is checked out as a true SIBLING (web/ and pocketshell-core/ side by
+# side), exactly the layout the `file:../pocketshell-core` dependency and the
+# vite/vitest `@ui`/`@pocketshell/core` aliases expect — and it keeps core's
+# own tests out of this repo's vitest include.
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main] # main pushes run this through Deploy site
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Tests and typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: web
+      - uses: actions/checkout@v4
+        with:
+          repository: PocketShell-io/pocketshell-core
+          path: pocketshell-core
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            pocketshell-core/package-lock.json
+            pocketshell-core/packages/ui/package-lock.json
+      - name: Build @pocketshell/core (file sibling)
+        working-directory: pocketshell-core
+        run: |
+          npm ci && npm run build
+          npm ci --prefix packages/ui --no-fund --no-audit
+      - run: npm ci
+        working-directory: web
+      - name: Typecheck
+        working-directory: web
+        run: npm run typecheck
+      - name: Test suite
+        working-directory: web
+        run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
+      - name: Check the results are real (count > 0, the transport-refusal suites ran)
+        working-directory: web
+        run: node scripts/check-test-results.mjs vitest-results.json
