@@ -60,7 +60,7 @@ main.page .button:hover:not(:disabled) {
 main.page button.primary,
 main.page .button.primary {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--border-strong);
   color: var(--on-accent);
   font-weight: var(--fw-semibold);
 }
@@ -107,7 +107,7 @@ main.page textarea {
   cursor: pointer;
 }
 
-.filepick:focus-within {
+.filepick:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -128,7 +128,7 @@ label.filepick input[type='file'] {
   white-space: nowrap;
 }
 
-label.filepick input[type='file']:focus {
+label.filepick input[type='file']:focus-visible {
   outline: none;
 }
 
@@ -421,7 +421,8 @@ main.page ::placeholder {
    invalid port paints its own 1px border in the .error hue — the field and
    the message read as one. Absent aria-invalid computes exactly as before. */
 #hf-port[aria-invalid='true'] {
-  border-color: var(--error);
+  border-color: var(--border-strong);
+  background-color: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
 /* Bases are sized so field contents fit untruncated: the "Name (e.g.
@@ -1061,7 +1062,6 @@ details.keybox textarea {
   padding: 12px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--warning);
   border-radius: 6px;
   display: flex;
   flex-direction: column;
@@ -1113,18 +1113,20 @@ details.keybox textarea {
 
 .warn-kind {
   flex: none;
-  border: 1px solid var(--warning);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   padding: 0 8px;
   color: var(--warning);
   font-family: var(--font-mono);
   font-size: var(--text-fine);
   text-transform: uppercase;
+  background-color: color-mix(in srgb, var(--warning) 10%, transparent);
 }
 
 .warn-kind.is-crash {
-  border-color: var(--error);
+  border-color: var(--border-strong);
   color: var(--error);
+  background-color: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
 .warn-sel {
@@ -1167,10 +1169,10 @@ details.keybox textarea {
 .host-warns {
   margin-top: 6px;
   padding-left: 10px;
-  border-left: 2px solid var(--warning);
   display: flex;
   flex-direction: column;
   gap: 2px;
+  background-color: color-mix(in srgb, var(--warning) 10%, transparent);
 }
 
 /* Touch widths: the view bar mirrors the app-topbar's touch variant exactly
@@ -1499,7 +1501,6 @@ details.keybox textarea {
 
 .dir-row.current {
   background: var(--accent-soft);
-  border-left-color: var(--accent);
 }
 
 .sdot {
@@ -1845,7 +1846,8 @@ details.keybox textarea {
 }
 
 .card-link:hover {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
+  background-color: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .card-link h3 {
@@ -2866,10 +2868,9 @@ details.keybox textarea {
   background: var(--state-hover);
 }
 
-/* Selection is accent-tinted and railed; hover is a neutral lift. */
+/* Selection uses an accent-tinted fill; hover is a neutral lift. */
 .ws-dir-row.is-current {
   background: var(--accent-soft);
-  border-left-color: var(--accent);
 }
 
 .ws-dot {
@@ -3095,9 +3096,9 @@ details.keybox textarea {
 }
 
 .ws-tab.is-active {
-  background: var(--surface);
-  border-bottom-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--fg);
+  font-weight: var(--fw-semibold);
 }
 
 .ws-tab.is-dead {
@@ -3172,7 +3173,6 @@ details.keybox textarea {
   margin: 0;
   padding: 8px 14px;
   background: var(--error-soft);
-  border-bottom: 1px solid var(--error);
   color: var(--error);
   font-size: var(--text-small);
   display: flex;
@@ -3775,7 +3775,7 @@ details.keybox textarea {
   resize: none;
 }
 
-.ws-files-textarea:focus {
+.ws-files-textarea:focus-visible {
   outline: 2px solid var(--accent-dim);
   outline-offset: -1px;
 }
@@ -3936,13 +3936,28 @@ details.keybox textarea {
   resize: none;
 }
 
-.ws-files-textarea:focus {
+.ws-files-textarea:focus-visible {
   outline: 2px solid var(--accent-dim);
   outline-offset: -1px;
 }
 
-/* CLI sign-in approval (/device) — the auth card, widened for the request
-   facts and left-aligned so labels and values scan as a table. */
+/* Primary and danger buttons: status belongs in the fill, never border-color. */
+main.page button.primary,
+main.page .button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+  font-weight: var(--fw-semibold);
+}
+
+main.page button.danger {
+  background: var(--error);
+  border-color: transparent;
+  color: #fff;
+  font-weight: var(--fw-semibold);
+}
+
+/* CLI sign-in approval (/device) */
 .device-card {
   width: min(480px, 100%);
   text-align: left;
@@ -3957,7 +3972,8 @@ details.keybox textarea {
   text-align: center;
 }
 
-.device-card h1:focus {
+.device-card h1:focus,
+.device-card h1:focus-visible {
   outline: none;
 }
 
@@ -3970,96 +3986,224 @@ details.keybox textarea {
   font-size: 0.9em;
 }
 
+/* Step 1: full-code entry form */
 .device-form {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 24px;
 }
 
 .device-label {
-  flex-basis: 100%;
-  font-size: var(--text-small);
+  font-size: var(--text-fine);
+  font-weight: var(--fw-medium);
   color: var(--fg-secondary);
 }
 
 main.page .device-code-input {
-  flex: 1 1 160px;
+  width: 100%;
   min-width: 0;
+  min-height: 48px;
   font-family: var(--font-mono);
   font-size: 20px;
-  letter-spacing: 0.12em;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.14em;
+  text-align: center;
   text-transform: uppercase;
-  padding: 10px 12px;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
 }
 
+main.page .device-code-input[aria-invalid='true'] {
+  background: var(--error-soft);
+}
+
+.device-form button[type='submit'] {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+}
+
+/* Step 2: stacked request facts inside a recessed neutral card.
+   Stacking <dt> above <dd> guarantees long labels ("Machine name (reported by
+   the machine, not verified)") never squeeze values into a 1-char column. */
 .device-facts {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 8px 16px;
-  margin: 24px 0 0;
+  display: flex;
+  flex-direction: column;
+  margin: 20px 0 0;
+  padding: 2px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   font-size: var(--text-small);
 }
 
 .device-facts dt {
+  padding-top: 10px;
+  font-size: var(--text-fine);
   color: var(--fg-secondary);
+  line-height: 1.35;
+}
+
+.device-facts dt:not(:first-of-type) {
+  border-top: 1px solid var(--border-soft);
 }
 
 .device-facts dd {
-  margin: 0;
+  margin: 2px 0 0;
+  padding-bottom: 10px;
+  color: var(--fg);
+  font-size: var(--text-small);
+  line-height: 1.45;
   overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .device-mono {
   font-family: var(--font-mono);
 }
 
-.device-warning {
+.device-facts dd.device-mono:first-of-type {
+  font-size: var(--text-body);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+}
+
+/* Callout header shared by .device-danger, .device-warning, .auth-notice */
+.device-callout-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: var(--text-small);
+  font-weight: var(--fw-semibold);
+}
+
+.device-callout-head svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+/* Different-network alert: tinted error fill + icon + strong label, NO accent border */
+.device-danger {
   margin-top: 20px;
   padding: 14px 16px;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-left: 3px solid var(--error);
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--error-soft);
+  color: var(--fg);
   font-size: var(--text-small);
+  font-weight: var(--fw-regular);
+  line-height: 1.5;
+}
+
+.device-danger .device-callout-head {
+  color: var(--error);
+}
+
+.device-danger p {
+  margin: 0 0 12px;
+}
+
+.device-ack {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.device-ack input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+/* Gateway access scope warning: tinted amber fill + icon + strong label, NO side stripe */
+.device-warning {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--warning-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+
+.device-warning .device-callout-head {
+  color: var(--warning);
 }
 
 .device-warning p {
   margin: 0;
 }
 
+/* Error notice: tinted error fill, neutral border */
+.auth-notice {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--error-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--error);
+  font-size: var(--text-small);
+  line-height: 1.45;
+  text-align: left;
+}
+
+/* Primary/secondary actions */
 .device-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
   margin-top: 20px;
 }
 
+.device-actions > :only-child {
+  grid-column: 1 / -1;
+}
+
 main.page .device-actions button {
-  min-width: 96px;
+  width: 100%;
+  min-height: 40px;
   padding: 10px 16px;
 }
 
 main.page button.device-link {
   background: none;
   border: none;
-  padding: 4px 0;
+  padding: 6px 0;
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 3px;
   font-size: var(--text-small);
 }
 
+.device-card > button.device-link {
+  align-self: center;
+  margin-top: 8px;
+}
+
 .device-account {
-  margin: 24px 0 0;
+  margin: 20px 0 0;
   padding-top: 16px;
   border-top: 1px solid var(--border);
   font-size: var(--text-small);
   color: var(--fg-secondary);
   display: flex;
   flex-wrap: wrap;
+  justify-content: space-between;
   gap: 4px 12px;
-  align-items: baseline;
+  align-items: center;
 }
 
 .device-account strong {
@@ -4067,51 +4211,41 @@ main.page button.device-link {
   overflow-wrap: anywhere;
 }
 
-/* /device: a different-network request — the loudest thing on the card. */
-.device-danger {
-  margin-top: 20px;
-  padding: 14px 16px;
-  border: 2px solid var(--error);
-  border-radius: 6px;
-  background: var(--error-soft);
-  color: var(--fg);
-  font-size: var(--text-small);
-  font-weight: 600;
-}
-
-.device-danger p {
-  margin: 0 0 10px;
-}
-
-.device-ack {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.device-ack input {
-  margin-top: 3px;
-}
-
-.device-prefill {
-  margin: 0;
-  flex-basis: 100%;
-  font-size: 20px;
-  letter-spacing: 0.12em;
-}
-
 .device-hint {
-  flex-basis: 100%;
-  margin: 4px 0 0;
+  margin: 16px 0 0;
   font-size: var(--text-small);
   color: var(--fg-secondary);
+  line-height: 1.5;
+  text-align: center;
 }
 
-.device-expired {
+.device-expired,
+.device-facts dd.device-expired {
   color: var(--error);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
+}
+
+/* Mobile (360–430px and all touch viewports <= 640px) */
+@media (max-width: 640px) {
+  .auth-page {
+    padding: 16px 12px;
+  }
+
+  .device-card {
+    padding: 24px 18px;
+  }
+
+  .device-actions {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 10px;
+  }
+
+  main.page .device-actions button,
+  main.page button.device-link,
+  .device-ack {
+    min-height: 44px;
+  }
 }
 
 /* /device/sessions — the account's CLI sessions, one hairline row each. */
@@ -4168,7 +4302,7 @@ main.page button.device-link {
 
 main.page button.danger {
   background: var(--error);
-  border-color: var(--error);
+  border-color: transparent;
   color: #fff;
   font-weight: var(--fw-semibold);
 }
@@ -4181,4 +4315,19 @@ main.page button.danger {
   margin: 0.75rem 0 0;
   font-size: 0.8125rem;
   line-height: 1.4;
+}
+
+/* Error icons keep messages readable without a status-colored edge. */
+.device-card .auth-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.device-error-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--error);
 }

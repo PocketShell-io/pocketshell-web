@@ -4,13 +4,13 @@
  *
  * Safety properties this class owns (the view only binds to it):
  *   - nothing touches the network until the user submits a code — a
- *     `?code=` prefill only fills the field;
+ *     `?code=` value stays hidden and never fills the field;
  *   - the broker's approve endpoint is reachable ONLY through approve() /
  *     deny(), and only from the review step, for the exact code that was
  *     looked up and shown (editing the field afterwards cannot retarget it);
  *   - one request in flight at a time, so a double click cannot submit twice;
  *   - a `?code=` link is never enough on its own: the user must type the
- *     code's last four symbols from their terminal (a phishing link carries
+ *     entire code from their terminal (a phishing link carries
  *     a code the victim's terminal never printed, so they have nothing to
  *     type);
  *   - when the broker says the request came from a different network, Approve
@@ -29,9 +29,6 @@ export interface DeviceAuthApi {
 
 export type FlowStep = 'enter' | 'review' | 'result';
 
-/** How many trailing symbols of a link-prefilled code the user must type. */
-export const CONFIRM_SYMBOLS = 4;
-
 export interface FlowOptions {
   /** Local clock, ms. Injected by tests. */
   now?: () => number;
@@ -41,12 +38,8 @@ export class DeviceApprovalFlow {
   step: FlowStep = 'enter';
   /** The field's text, always normalized + dashed. */
   input = '';
-  /** The code a `?code=` link carried (normalized), until the user either
-   * confirms it or chooses to type a code in full. While set, the page shows
-   * only its first half and asks for the last four symbols. */
-  prefilledCode = '';
-  /** What the user typed for the last four symbols, normalized. */
-  confirmInput = '';
+  /** Hidden link binding. Never rendered or used to populate the input. */
+  readonly linkCode: string;
   busy = false;
   error = '';
   /** Set when the Google session is gone; the view routes through sign-in. */
@@ -68,49 +61,18 @@ export class DeviceApprovalFlow {
     this.api = api;
     this.now = options.now ?? Date.now;
     const code = normalizeUserCode(prefill);
-    // Only a whole valid code puts the page in confirm mode; anything else
-    // starts with an empty field.
-    this.prefilledCode = isValidUserCode(code) ? code : '';
+    this.linkCode = isValidUserCode(code) ? code : '';
   }
 
-  /** `BCDF-····`: the link's code with the part the user must supply hidden,
-   * so it cannot be copied off this page. */
-  get prefillDisplay(): string {
-    if (!this.prefilledCode) return '';
-    const shown = this.prefilledCode.slice(0, -CONFIRM_SYMBOLS);
-    return formatUserCode(shown + '·'.repeat(CONFIRM_SYMBOLS));
-  }
-
-  setConfirm(raw: string): void {
-    this.confirmInput = normalizeUserCode(raw);
-    this.error = '';
-  }
-
-  /** Four (or more) symbols typed that are not the link code's last four. */
-  get confirmMismatch(): boolean {
-    return (
-      this.prefilledCode !== '' &&
-      this.confirmInput.length >= CONFIRM_SYMBOLS &&
-      this.confirmInput !== this.prefilledCode.slice(-CONFIRM_SYMBOLS)
-    );
-  }
-
-  /** Leave confirm mode: the user types the code from their terminal in full. */
-  enterFullCode(): void {
-    if (this.busy || this.step !== 'enter') return;
-    this.prefilledCode = '';
-    this.confirmInput = '';
-    this.input = '';
-    this.error = '';
-  }
-
-  /** The code Continue would look up, or '' when it may not yet. */
-  private get codeToSubmit(): string {
-    if (this.prefilledCode) {
-      return this.confirmInput === this.prefilledCode.slice(-CONFIRM_SYMBOLS) ? this.prefilledCode : '';
-    }
+  /** Compare only after the user supplies an entire valid code. */
+  get linkMismatch(): boolean {
     const code = normalizeUserCode(this.input);
-    return isValidUserCode(code) ? code : '';
+    return this.linkCode !== '' && isValidUserCode(code) && code !== this.linkCode;
+  }
+
+  private get codeToSubmit(): string {
+    const code = normalizeUserCode(this.input);
+    return isValidUserCode(code) && !this.linkMismatch ? code : '';
   }
 
   /** Broker-clock age/expiry of the request under review. */
@@ -198,8 +160,6 @@ export class DeviceApprovalFlow {
     if (this.busy) return;
     this.step = 'enter';
     this.input = '';
-    this.prefilledCode = '';
-    this.confirmInput = '';
     this.error = '';
     this.info = null;
     this.reviewedCode = '';
@@ -227,10 +187,8 @@ export class DeviceApprovalFlow {
         this.info = null;
         this.reviewedCode = '';
         this.networkAcknowledged = false;
-        // The user already typed or confirmed this code; it goes back in the
+        // The user already typed this code; it goes back in the
         // field in full, as their own entry.
-        this.prefilledCode = '';
-        this.confirmInput = '';
         this.input = formatUserCode(code);
         this.error = e.message;
         this.resultError = '';
