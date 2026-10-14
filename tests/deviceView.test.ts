@@ -55,9 +55,9 @@ async function mountAt(path: string) {
   return { wrapper, router };
 }
 
-/** Opened from a `?code=BCDF-2345` link: type the last four, Continue. */
-async function confirmAndContinue(w: VueWrapper, last4 = '2345') {
-  await w.find('#device-confirm').setValue(last4);
+/** Opened from a `?code=BCDF-2345` link: type the entire code, Continue. */
+async function confirmAndContinue(w: VueWrapper, code = 'BCDF2345') {
+  await w.find('#device-code').setValue(code);
   await w.find('form').trigger('submit');
   await flushPromises();
 }
@@ -82,41 +82,27 @@ afterEach(() => {
 });
 
 describe('/device view', () => {
-  it('a ?code= link shows only the first half, calls nothing, and Continue stays shut', async () => {
+  it('a link code is never rendered and the full-code input starts blank', async () => {
     const { wrapper: w } = await mountAt('/device?code=bcdf-2345');
-    expect(w.text()).toContain('BCDF-····');
-    expect(w.text()).not.toContain('2345');
-    expect(w.find('#device-code').exists()).toBe(false);
-    expect(w.text()).toContain('Type the last 4 characters of the code shown in your terminal');
+    expect(w.html()).not.toMatch(/BCDF|2345/i);
+    expect((w.find('#device-code').element as HTMLInputElement).value).toBe('');
     expect(button(w, 'Continue').attributes('disabled')).toBeDefined();
     await w.find('form').trigger('submit');
     await flushPromises();
     expect(api.lookup).not.toHaveBeenCalled();
     expect(api.decide).not.toHaveBeenCalled();
-    expect(w.findAll('button').some((b) => b.text() === 'Approve')).toBe(false);
   });
 
-  it('a wrong last four is refused with a hint; the right four opens Continue', async () => {
+  it('refuses a different full code with the phishing explanation', async () => {
     const { wrapper: w } = await mountAt('/device?code=BCDF-2345');
-    await w.find('#device-confirm').setValue('ghjk');
-    expect(w.find('[role="alert"]').text()).toMatch(/does not match the code in the link/);
+    await w.find('#device-code').setValue('GHJK6789');
+    expect(w.find('[role="alert"]').text()).toBe('This link was made for a different code. Only approve codes your own terminal printed.');
     expect(button(w, 'Continue').attributes('disabled')).toBeDefined();
-    await w.find('#device-confirm').setValue('2345');
-    expect(button(w, 'Continue').attributes('disabled')).toBeUndefined();
     await w.find('form').trigger('submit');
     await flushPromises();
+    expect(api.lookup).not.toHaveBeenCalled();
+    await confirmAndContinue(w);
     expect(api.lookup.mock.calls).toEqual([['BCDF-2345']]);
-  });
-
-  it('"Type the whole code instead" drops the link code', async () => {
-    const { wrapper: w } = await mountAt('/device?code=BCDF-2345');
-    await button(w, 'Type the whole code instead').trigger('click');
-    const input = w.find('#device-code');
-    expect((input.element as HTMLInputElement).value).toBe('');
-    await input.setValue('ghjk6789');
-    await w.find('form').trigger('submit');
-    await flushPromises();
-    expect(api.lookup.mock.calls).toEqual([['GHJK-6789']]);
   });
 
   it('normalizes typed input', async () => {
@@ -235,7 +221,7 @@ describe('/device view', () => {
     const { wrapper: w } = await mountAt('/device?code=BCDF-2345');
     await confirmAndContinue(w);
     expect(w.find('[role="alert"]').text()).toMatch(/Too many attempts/);
-    expect(w.find('#device-confirm').exists()).toBe(true);
+    expect(w.find('#device-code').exists()).toBe(true);
     expect(api.decide).not.toHaveBeenCalled();
   });
 

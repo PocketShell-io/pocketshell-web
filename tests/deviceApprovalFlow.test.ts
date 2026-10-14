@@ -29,61 +29,38 @@ function typedFlow(api: DeviceAuthApi, options: FlowOptions = {}) {
 }
 
 describe('device approval flow', () => {
-  it('a ?code= prefill shows only the first half, calls nothing, and cannot Continue by itself', async () => {
+  it('a link leaves the full-code field blank and calls nothing', async () => {
     const api = mockApi();
     const flow = new DeviceApprovalFlow(api, 'BCDF2345');
-    await Promise.resolve();
-    expect(flow.prefilledCode).toBe('BCDF2345');
-    expect(flow.prefillDisplay).toBe('BCDF-····');
-    expect(flow.prefillDisplay).not.toContain('2345');
-    expect(flow.step).toBe('enter');
+    expect(flow.input).toBe('');
     expect(flow.canSubmit).toBe(false);
     await flow.submitCode();
     expect(api.lookup).not.toHaveBeenCalled();
     expect(api.decide).not.toHaveBeenCalled();
   });
 
-  it('a prefill needs the last four symbols typed to match before Continue', async () => {
+  it('requires the entire matching code from the terminal', async () => {
     const api = mockApi();
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
-    flow.setConfirm('23');
+    const flow = new DeviceApprovalFlow(api, 'bcdf-2345');
+    flow.setInput('2345');
+    await flow.submitCode();
+    expect(api.lookup).not.toHaveBeenCalled();
+    flow.setInput('GHJK6789');
+    expect(flow.linkMismatch).toBe(true);
+    await flow.submitCode();
+    expect(api.lookup).not.toHaveBeenCalled();
+    flow.reset(); // Reset cannot discard a link binding and bypass the check.
+    flow.setInput('GHJK6789');
     expect(flow.canSubmit).toBe(false);
-    expect(flow.confirmMismatch).toBe(false);
-    flow.setConfirm('2346');
-    expect(flow.canSubmit).toBe(false);
-    expect(flow.confirmMismatch).toBe(true);
-    flow.setConfirm('23456'); // too many symbols is not a match either
-    expect(flow.canSubmit).toBe(false);
-    expect(flow.confirmMismatch).toBe(true);
-    flow.setConfirm('2345');
-    expect(flow.canSubmit).toBe(true);
-    // Typing into the (hidden) full-code field does not bypass the confirm.
-    flow.setInput('ZZZZ-ZZZZ');
+    flow.setInput('bcdf 2345');
+    expect(flow.linkMismatch).toBe(false);
     await flow.submitCode();
     expect(api.lookup.mock.calls).toEqual([['BCDF-2345']]);
   });
 
-  it('typing into the full-code field alone never satisfies a prefill', async () => {
-    const api = mockApi();
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
-    flow.setInput('BCDF2345');
-    expect(flow.canSubmit).toBe(false);
-  });
-
-  it('a prefill can be abandoned for typing the whole code', async () => {
-    const api = mockApi();
-    const flow = new DeviceApprovalFlow(api, 'BCDF2345');
-    flow.enterFullCode();
-    expect(flow.prefilledCode).toBe('');
-    expect(flow.input).toBe('');
-    flow.setInput('GHJK6789');
-    await flow.submitCode();
-    expect(api.lookup.mock.calls).toEqual([['GHJK-6789']]);
-  });
-
-  it('an invalid prefill is ignored entirely', () => {
+  it('an invalid link code is ignored without filling the input', () => {
     const flow = new DeviceApprovalFlow(mockApi(), 'BCDF23');
-    expect(flow.prefilledCode).toBe('');
+    expect(flow.linkCode).toBe('');
     expect(flow.input).toBe('');
   });
 
