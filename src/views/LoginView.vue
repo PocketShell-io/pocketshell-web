@@ -77,6 +77,11 @@ function retry() {
             <span class="auth-spinner" aria-hidden="true" /> Loading sign-in…
           </div>
         </div>
+        <p v-if="gsi === 'ready'" class="muted auth-help">
+          Ended up on an <code>accounts.google.&lt;country&gt;</code> page that
+          can't be reached? Google has already signed you in. Come back here and
+          tap the button again.
+        </p>
         <div v-if="error" class="auth-notice" role="alert">
           <p>{{ error }}</p>
           <button type="button" @click="retry">Try again</button>
