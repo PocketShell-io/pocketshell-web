@@ -30,6 +30,7 @@ import time
 
 import subprocess
 from cryptography.hazmat.primitives import hashes
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from playwright.async_api import async_playwright
@@ -317,10 +318,14 @@ async def main() -> int:
             assert slot.startswith('vk-'), slot
             assert {'v', 'vaultId', 'keyId', 'n', 'ct'} <= set(doc.keys()), doc.keys()
     assert sum(1 for k in sync.slots if k.startswith('vk-')) == 2, sync.slots.keys()
-    # 3. What left is decryptable with the passphrase and carries the merged list.
-    final_hosts = json.loads(decrypt_envelope(sync.data, VAULT_PASSPHRASE))['hosts']
-    assert [h['name'] for h in final_hosts] == ['manualbox', 'dockertest', 'keylesstest'], final_hosts
-    assert final_hosts[1]['identityFile'] == '~/.ssh/key_enc'
+    # 3. Decision #7: the vault passphrase must NOT open the host list (a
+    #    new account's list rides a generated passphrase only the vault
+    #    index holds); the list's contents were checked through the UI.
+    try:
+        decrypt_envelope(sync.data, VAULT_PASSPHRASE)
+        raise AssertionError('the vault passphrase opens the host list')
+    except InvalidTag:
+        pass
     # 4. The relay only ever ferried ciphertext.
     assert relay_frames, 'no relay frames observed'
     for frame in relay_frames:
