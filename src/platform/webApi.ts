@@ -212,6 +212,36 @@ async function connectHost(payload: {
   return { ok: true, connectionId: id };
 }
 
+/**
+ * One command on a synced host over a short-lived connection of its own,
+ * with `stdin` written to the channel (never on the command line). Reuses
+ * the session dial in full — gate, vault key, TOFU pin — so it can do
+ * nothing a Connect could not. The key-vault "Apply to host" rides this.
+ */
+export async function execOnHost(
+  entry: HostEntry,
+  command: string,
+  stdin?: string,
+): Promise<{ ok: true; exitCode: number | null; stdout: string; stderr: string } | { ok: false; error: string }> {
+  const dial = await connectHost({
+    host: entry.hostname,
+    port: entry.port,
+    user: entry.user,
+    hostAlias: entry.name,
+    ...(entry.link !== undefined ? { link: entry.link } : {}),
+    ...(entry.gateway !== undefined ? { gateway: entry.gateway } : {}),
+  });
+  if (!dial.ok) return dial;
+  try {
+    const out = await connections.get(dial.connectionId)!.exec(command, stdin !== undefined ? { stdin } : {});
+    if (out.error) return { ok: false, error: out.error };
+    return { ok: true, exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr };
+  } finally {
+    evictConnection(dial.connectionId);
+    emitState(dial.connectionId, 'lost');
+  }
+}
+
 /** One services bundle per connection id — the shared body of the SSH and
  * link dials (the desktop main gives its services the same lifetime). The
  * conn is typed as SshConnection because every service rides its surface;

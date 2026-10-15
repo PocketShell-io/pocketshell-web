@@ -14,6 +14,13 @@ import {
 import { forgetDek, hasRememberedDek, recallRecord, rememberRecord } from '../vault/deviceRemember';
 import { makeServerVerifier } from '../vault/serverVerifier';
 import { makeVaultTransport } from '../vault/webTransport';
+import {
+  describeApplyFailure,
+  gatewayAuthInvocation,
+  parseGatewayAuthReport,
+  type GatewayAuthReport,
+} from '../vault/gatewayPolicy';
+import type { HostEntry } from '@pocketshell/core';
 
 export type VaultPhase = 'unknown' | 'absent' | 'locked' | 'unlocked';
 
@@ -47,6 +54,10 @@ export const vaultTuning = { kdf: { ...VAULT_KDF_DEFAULT } as { m: number; t: nu
  */
 let core: { sub: string; store: KeyVaultStore; off: () => void } | null = null;
 let coreFactory: ((sub: string) => KeyVaultStore) | null = null;
+/** A passphrase change or reset is rewriting the header: a lock must wait
+ * for it (locking mid-write can leave the vault unreadable). */
+let headerOps = 0;
+let lockDeferred = false;
 
 /** Test seam: build the core store over fakes. */
 export function setKeyVaultFactoryForTests(factory: ((sub: string) => KeyVaultStore) | null): void {
@@ -98,6 +109,9 @@ export const useVaultStore = defineStore('vault', {
     remembered: false,
     /** Epoch ms before which Unlock stays disabled (backoff / server lock). */
     retryAt: 0,
+    /** Hosts whose key or policy changed in this session and whose host
+     * agent has not been told yet ("Apply to host"). */
+    pendingApply: [] as string[],
   }),
   getters: {
     unlocked: (s) => s.phase === 'unlocked',
@@ -247,8 +261,26 @@ export const useVaultStore = defineStore('vault', {
     },
 
     lock(): void {
+      if (headerOps > 0) {
+        lockDeferred = true;
+        return;
+      }
       core?.store.lock();
       this.refresh();
+    },
+
+    /** Run a header rewrite with locks deferred until it settles. */
+    async headerOp<T>(fn: () => Promise<T>): Promise<T> {
+      headerOps += 1;
+      try {
+        return await fn();
+      } finally {
+        headerOps -= 1;
+        if (headerOps === 0 && lockDeferred) {
+          lockDeferred = false;
+          this.lock();
+        }
+      }
     },
 
     /** Sign-out forgets the remembered vault key too (design section 5). */
@@ -290,12 +322,22 @@ export const useVaultStore = defineStore('vault', {
       if (added.entry.keyId === oldKeyId) {
         return { kind: 'invalid', message: 'That is the same key. Upload the new key to rotate to.' };
       }
+      const moved = Object.entries(this.core().listHostBindings())
+        .filter(([, b]) => b.keyId === oldKeyId)
+        .map(([h]) => h);
       throwIfFailed(await this.core().rotateKey(oldKeyId, added.entry.keyId));
+      // The old public key stays authorized on those hosts until re-pushed.
+      this.markPending(moved);
       return added;
     },
 
     async bindHost(host: string, keyId: string | null, gatewayAuth: GatewayAuth = 'both'): Promise<void> {
       throwIfFailed(keyId === null ? await this.core().unbindHost(host) : await this.core().bindHost(host, keyId, gatewayAuth));
+      this.markPending([host]);
+    },
+
+    markPending(hosts: string[]): void {
+      this.pendingApply = [...new Set([...this.pendingApply, ...hosts])];
     },
 
     async setSyncPassphrase(passphrase: string): Promise<void> {
@@ -332,10 +374,41 @@ export const useVaultStore = defineStore('vault', {
       }
     },
 
+    /**
+     * Push this host's gateway policy and its vault public key to the host
+     * agent over a fresh SSH session (W5). Needs a working credential for
+     * the host already; a `managed`-only host must be bootstrapped from the
+     * host itself or with `both` first.
+     */
+    async applyGatewayPolicy(entry: HostEntry): Promise<GatewayAuthReport> {
+      const binding = this.bindings[entry.name];
+      const policy = binding?.gatewayAuth ?? 'host';
+      const keys: { keyId: string; publicKey: string }[] = [];
+      if (binding && policy !== 'host') {
+        const publicKey = await this.publicKeyOf(binding.keyId);
+        if (publicKey === null) throw new Error('This host has no vault SSH key to trust. Pick a key (not a password) first.');
+        keys.push({ keyId: binding.keyId, publicKey });
+      }
+      const { command, stdin } = gatewayAuthInvocation(policy, keys);
+      const { execOnHost } = await import('../platform/webApi');
+      const out = await execOnHost(entry, command, stdin);
+      if (!out.ok) throw new Error(out.error);
+      const report = out.exitCode === 0 ? parseGatewayAuthReport(out.stdout) : null;
+      if (report === null) throw new Error(describeApplyFailure(out.exitCode, out.stderr));
+      this.pendingApply = this.pendingApply.filter((h) => h !== entry.name);
+      return report;
+    },
+
     /* --- passphrase lifecycle ------------------------------------------ */
 
     async changePassphrase(current: string, next: string): Promise<void> {
-      const r = await this.core().changePassphrase(current, next);
+      const r = await this.headerOp(async () => {
+        const res = await this.core().changePassphrase(current, next);
+        // AUTH changed with the passphrase: refresh what this device
+        // remembers, before any deferred lock drops the key.
+        if (res.kind === 'ok' && this.remembered) await this.applyRemember(true);
+        return res;
+      });
       if (r.kind === 'ok') return;
       if (r.kind === 'wrongPassphrase') throw new WrongPassphraseError(r.retryAfterMs);
       if (r.kind === 'backoff') throw new Error(`Too many attempts. Try again in ${Math.ceil(r.retryAfterMs / 1000)}s.`);
@@ -355,14 +428,19 @@ export const useVaultStore = defineStore('vault', {
       const sub = accountSub();
       await forgetDek(sub);
       this.remembered = false;
-      const r = await this.core().resetVault(passphrase, carry);
+      const r = await this.headerOp(async () => {
+        const res = await this.core().resetVault(passphrase, carry);
+        if (res.kind === 'ok') await this.applyRemember(remember);
+        return res;
+      });
       if (r.kind === 'freshAuthRequired') throw new Error('Sign in with Google again (within the last 5 minutes) to reset the vault.');
       if (r.kind === 'exists') throw new Error('A new vault was just created on another device. Reload and unlock it.');
       if (r.kind === 'indexFull') throw new Error(describeWriteFailure(r));
       if (r.kind === 'error') throw new Error(r.message);
       this.retryAt = 0;
       this.refresh();
-      await this.applyRemember(remember);
+      // Reset keys stay authorized on the hosts until the new ones are pushed.
+      this.markPending(Object.keys(carry.hosts));
     },
 
     /** Bindings + sync passphrase this tab can carry over a reset. */

@@ -67,7 +67,7 @@ const importResume = ref(false);
 /** The quiet confirmation is one notice at rest: a new action's feedback
  * supersedes the previous confirmation instead of stacking with it. */
 function setNotice(slot: Ref<string>, message: string) {
-  for (const notice of [hostSaved, importDone, keySaved, keyRemoved]) {
+  for (const notice of [hostSaved, importDone, keySaved, keyRemoved, applied]) {
     if (notice !== slot) notice.value = '';
   }
   slot.value = message;
@@ -244,6 +244,25 @@ async function saveKey() {
 async function removeKey(host: HostEntry) {
   await vault.bindHost(host.name, null);
   setNotice(keyRemoved, host.name);
+}
+
+const applying = ref('');
+const applied = ref('');
+const applyError = ref<{ host: string; message: string } | null>(null);
+
+/** Push the host's gateway policy + vault public key to its host agent. */
+async function applyToHost(host: HostEntry) {
+  applying.value = host.name;
+  applyError.value = null;
+  try {
+    const report = await vault.applyGatewayPolicy(host);
+    const n = report.managedKeys.length;
+    setNotice(applied, `${host.name} now accepts ${report.policy === 'host' ? "only its own keys" : report.policy === 'managed' ? 'only your vault key' : 'your vault key and its own keys'} through the gateway (${n} vault ${n === 1 ? 'key' : 'keys'} trusted).`);
+  } catch (e) {
+    applyError.value = { host: host.name, message: e instanceof Error ? e.message : String(e) };
+  } finally {
+    applying.value = '';
+  }
 }
 
 function keyNameFor(host: HostEntry): string {
@@ -423,6 +442,13 @@ async function open(host: HostEntry) {
         <p v-if="hostSaved" class="notice" role="status">Saved {{ hostSaved }} to your account — desktops pick it up on their next sync.</p>
         <p v-if="importDone" class="notice" role="status">{{ importDone }}</p>
         <p v-if="keySaved" class="notice" role="status">Saved the vault key choice for {{ keySaved }}. Every device uses it after its next unlock.</p>
+        <p v-if="applied" class="notice" role="status">{{ applied }}</p>
+        <p v-if="applyError" class="error" role="alert">{{ applyError.host }}: {{ applyError.message }}</p>
+        <p v-if="vault.pendingApply.length > 0" class="notice" role="status">
+          Key changes for {{ vault.pendingApply.join(', ') }} reach the gateway once applied: use Apply to host on
+          {{ vault.pendingApply.length === 1 ? 'that row' : 'those rows' }}. Until then the host agent keeps trusting
+          the previous keys.
+        </p>
         <p v-if="keyRemoved" class="notice" role="status">{{ keyRemoved }} no longer uses a vault key. The key itself stays in your vault.</p>
 
         <!-- The list, in the landing's own hosts-mock: one bordered card with
@@ -463,6 +489,15 @@ async function open(host: HostEntry) {
             </div>
             <div class="actions">
               <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Unassign key</button>
+              <button
+                v-if="vault.bindings[host.name] !== undefined"
+                :class="{ primary: vault.pendingApply.includes(host.name) }"
+                :disabled="applying === host.name"
+                title="Push this host's gateway policy and vault public key to its host agent"
+                @click="applyToHost(host)"
+              >
+                {{ applying === host.name ? 'Applying…' : 'Apply to host' }}
+              </button>
               <button @click="editHost(host)">Edit</button>
               <button @click="attachKey(host)">Key…</button>
               <button class="primary" @click="open(host)">Connect</button>

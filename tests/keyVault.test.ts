@@ -345,6 +345,22 @@ describe('change passphrase and reset', () => {
     expect(useVaultStore().entries.map((e) => e.name)).toEqual(['k']);
   });
 
+  it('a lock during a passphrase change waits for it; the remembered record is refreshed', async () => {
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.createVault(VAULT_PASS, true);
+    const vault = useVaultStore();
+    const before = localStorage.getItem(`ps.vaultDek.${SUB}`);
+    const change = vault.changePassphrase(VAULT_PASS, 'another new passphrase');
+    vault.lock(); // e.g. the Lock button mid-change
+    expect(vault.unlocked).toBe(true);
+    await change;
+    expect(vault.unlocked).toBe(false); // the deferred lock ran afterwards
+    expect(localStorage.getItem(`ps.vaultDek.${SUB}`)).not.toBe(before);
+    newTab();
+    expect(await useVaultGateStore().open()).toBe('ready');
+  });
+
   it('reset wipes the keys, bumps the epoch, keeps bindings, and stale remembered keys stop working', async () => {
     await seedMain([host('box')]);
     const gate = useVaultGateStore();

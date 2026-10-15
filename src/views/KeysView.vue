@@ -93,7 +93,7 @@ function onAdded(entry: VaultKeyEntry, deduplicated: boolean) {
 function onRotated(entry: VaultKeyEntry) {
   const old = rotating.value;
   rotating.value = null;
-  say(`Rotated ${old?.name ?? 'the key'} to ${entry.name}. Every host that used it now uses the new key.`);
+  say(`Rotated ${old?.name ?? 'the key'} to ${entry.name}. Every host that used it now uses the new key; use Apply to host on the Hosts page so their host agents stop trusting the old one.`);
 }
 
 async function addPassword() {
