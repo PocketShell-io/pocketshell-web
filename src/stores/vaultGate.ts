@@ -41,6 +41,8 @@ export type GateStep =
   | 'resecure'
   /** The account could not be opened at all (gate.error says why). */
   | 'error'
+  /** The vault header is damaged: nothing opens it, a reset starts over. */
+  | 'corrupt'
   | 'ready';
 
 /**
@@ -68,6 +70,7 @@ export const useVaultGateStore = defineStore('vaultGate', {
       const hosts = useHostsStore();
       if (!this.checked) return 'checking';
       if (vault.phase === 'unknown') return this.error !== '' ? 'error' : 'checking';
+      if (vault.phase === 'corrupt') return 'corrupt';
       if (vault.phase === 'locked') return 'vault-locked';
       if (vault.phase === 'absent') {
         return hosts.unlocked || !this.mainExists ? 'create-vault' : 'sync-passphrase';
@@ -76,6 +79,11 @@ export const useVaultGateStore = defineStore('vaultGate', {
       if (this.needsResecure && !this.resecureDeferred) return 'resecure';
       if (this.legacy !== null && this.legacyPending) return 'migrate';
       return 'ready';
+    },
+    /** Reset is offered only once the vault was probed and is not of a
+     * newer format (that one needs an app update, never a wipe). */
+    resetAllowed(): boolean {
+      return this.step !== 'checking' && this.step !== 'error';
     },
     /** Something legacy still needs moving, deleting or the user's answer. */
     legacyPending(): boolean {
@@ -191,6 +199,7 @@ export const useVaultGateStore = defineStore('vaultGate', {
     async submitVaultPassphrase(passphrase: string, remember: boolean): Promise<void> {
       await useVaultStore().unlock(passphrase, remember);
       await this.afterVault();
+      await this.finishInterruptedResecure(passphrase);
       // An older build let the vault passphrase double as the sync one.
       this.needsResecure = await vaultPassphraseReusesSync(passphrase, { syncPassphrase: useVaultStore().syncPassphrase() });
     },
@@ -217,22 +226,23 @@ export const useVaultGateStore = defineStore('vaultGate', {
     },
 
     /**
-     * Re-encrypt the host list under a generated sync passphrase and record
-     * it in the index. `main` first, then the index; if the index write
-     * fails, `main` goes back to the old passphrase so nothing is stranded.
+     * Re-encrypt the host list under a generated sync passphrase. The index
+     * is written FIRST: if that fails nothing changed. Then `main`: if that
+     * fails, the old sync passphrase is still recoverable — re-secure only
+     * runs when it IS the vault passphrase — and the next typed unlock
+     * finishes the job (finishInterruptedResecure).
      */
     async resecureHostList(): Promise<void> {
       const hosts = useHostsStore();
       const vault = useVaultStore();
-      const old = hosts.passphrase;
       const fresh = generateSyncPassphrase();
-      await hosts.reencrypt(fresh);
+      await vault.setSyncPassphrase(fresh);
       try {
-        await vault.setSyncPassphrase(fresh);
+        await hosts.reencrypt(fresh);
       } catch (err) {
-        hosts.passphrase = fresh;
-        await hosts.reencrypt(old).catch(() => undefined);
-        throw err;
+        throw new Error(
+          `Your host list could not be re-encrypted (${err instanceof Error ? err.message : String(err)}). It still opens; this finishes the next time you unlock with your passphrase.`,
+        );
       }
       try {
         useSyncStore().passphrase = fresh;
@@ -240,6 +250,25 @@ export const useVaultGateStore = defineStore('vaultGate', {
         // optional
       }
       this.needsResecure = false;
+    },
+
+    /**
+     * A re-secure whose `main` write failed left the index on the new sync
+     * passphrase and `main` on the old one, which was the vault passphrase.
+     * When the typed vault passphrase still opens `main`, re-encrypt it to
+     * the index's passphrase now.
+     */
+    async finishInterruptedResecure(typed: string): Promise<void> {
+      const hosts = useHostsStore();
+      const vault = useVaultStore();
+      const target = vault.syncPassphrase();
+      if (hosts.unlocked || !vault.unlocked || target === '' || target === typed || !this.mainExists) return;
+      if (!(await hosts.opensHostList(typed))) return;
+      await hosts.unlock(typed);
+      await hosts.reencrypt(target);
+      this.error = '';
+      this.seedSyncStore();
+      await this.checkLegacy();
     },
 
     deferResecure(): void {
@@ -263,7 +292,12 @@ export const useVaultGateStore = defineStore('vaultGate', {
       const known = carry.syncPassphrase ?? (hosts.unlocked ? hosts.passphrase : null);
       let syncPassphrase: string;
       let wipeHostList = false;
-      if (sync.mode === 'known' && known !== null && known !== '') {
+      if (sync.mode === 'known') {
+        if (known === null || known === '') {
+          throw new Error(
+            "This tab doesn't know your sync passphrase. Enter it, or choose that you forgot it too (which deletes the host list).",
+          );
+        }
         syncPassphrase = known;
       } else if (sync.mode === 'enter' && this.mainExists) {
         if (!(await hosts.opensHostList(sync.passphrase))) {

@@ -38,10 +38,13 @@ const server = vi.hoisted(() => ({
   pushes: [] as { slot: string; data: string }[],
   /** Slots whose GET fails like a 5xx / network error. */
   failPull: new Set<string>(),
+  /** Slots whose PUT fails like a 5xx / network error. */
+  failPush: new Set<string>(),
   reset() {
     server.slots.clear();
     server.pushes.length = 0;
     server.failPull.clear();
+    server.failPush.clear();
   },
 }));
 
@@ -72,6 +75,7 @@ vi.mock('../src/api/sync', () => {
         return s ? { slot, version: s.version, data: s.data } : null;
       },
       push: async (slot: string, data: string, baseVersion: number) => {
+        if (server.failPush.has(slot)) throw new SyncApiError(503, 'sync API returned HTTP 503');
         if (new TextEncoder().encode(data).length > 8192) throw new SyncApiError(0, 'settings blob exceeds the 8 KB sync limit');
         const cur = server.slots.get(slot)?.version ?? 0;
         if (cur !== baseVersion) throw new SyncConflictError(cur);
@@ -675,6 +679,80 @@ describe('a newer-format vault is never reset (review item 3)', () => {
     );
     expect(server.slots.get('vault')!.data).toBe(JSON.stringify(newer));
     expect(server.slots.has('vk-AAAAAAAAAAAAAAAAAAAAAA')).toBe(true);
+  });
+});
+
+describe('verification regressions (A, B, C)', () => {
+  it('A: a corrupt vault is not a dead end: the gate says so and reset works', async () => {
+    await seedMain([host('box')]);
+    server.slots.set('vault', { version: 2, data: '{"v":1,"vaultId":"garbage"}' });
+    const gate = useVaultGateStore();
+    expect(await gate.open()).toBe('corrupt');
+    expect(gate.resetAllowed).toBe(true);
+    await gate.resetVault('a brand new vault passphrase', { mode: 'enter', passphrase: SYNC_PASS }, false);
+    expect(gate.step).toBe('ready');
+    expect(JSON.parse(server.slots.get('vault')!.data).epoch).toBeGreaterThan(0);
+  });
+
+  it('A: a newer-format vault still hides reset', async () => {
+    server.slots.set('vault', { version: 4, data: JSON.stringify({ v: 2, vaultId: 'AAAAAAAAAAAAAAAAAAAAAA', epoch: 1 }) });
+    const gate = useVaultGateStore();
+    expect(await gate.open()).toBe('error');
+    expect(gate.resetAllowed).toBe(false);
+  });
+
+  async function equalPassphraseAccount() {
+    await seedMain([host('box')], VAULT_PASS);
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(VAULT_PASS);
+    await useVaultStore().create(VAULT_PASS, VAULT_PASS, false);
+    newDevice();
+    await useVaultGateStore().open();
+    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+    expect(useVaultGateStore().step).toBe('resecure');
+  }
+
+  it('B: re-secure writes the index first; a failed host-list write is finished on the next unlock', async () => {
+    await equalPassphraseAccount();
+    server.failPush.add('main');
+    await expect(useVaultGateStore().resecureHostList()).rejects.toThrow();
+    const fresh = useVaultStore().syncPassphrase();
+    expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/); // the index already has it
+    await decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS); // main untouched, still readable
+    server.failPush.delete('main');
+
+    newDevice();
+    await useVaultGateStore().open();
+    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+    expect(useVaultGateStore().step).toBe('ready');
+    expect(useHostsStore().hosts.map((h) => h.name)).toEqual(['box']);
+    await decryptEnvelope(server.slots.get('main')!.data, fresh);
+    await expect(decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS)).rejects.toThrow();
+  });
+
+  it('B: a failed index write changes nothing', async () => {
+    await equalPassphraseAccount();
+    const mainBefore = server.slots.get('main')!.data;
+    server.failPush.add('vault');
+    await expect(useVaultGateStore().resecureHostList()).rejects.toThrow();
+    expect(server.slots.get('main')!.data).toBe(mainBefore);
+    expect(useVaultStore().syncPassphrase()).toBe(VAULT_PASS);
+  });
+
+  it('C: reset "known" without a known sync passphrase refuses instead of deleting the host list', async () => {
+    await seedMain([host('box')]);
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await gate.createVault(VAULT_PASS, false);
+    newDevice();
+    await useVaultGateStore().open(); // locked: nothing known
+    await expect(useVaultGateStore().resetVault('a brand new vault passphrase', { mode: 'known' }, false)).rejects.toThrow(
+      /sync passphrase/,
+    );
+    expect(server.slots.has('main')).toBe(true);
+    await decryptEnvelope(server.slots.get('main')!.data, SYNC_PASS);
   });
 });
 

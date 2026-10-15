@@ -198,7 +198,15 @@ function created(iso: string): string {
       <button type="button" @click="gate.open()">Try again</button>
     </section>
 
-    <VaultResetFlow v-else-if="resetOpen" @done="onResetDone" @cancel="closeReset" />
+    <VaultResetFlow v-else-if="resetOpen && gate.resetAllowed" @done="onResetDone" @cancel="closeReset" />
+
+    <section v-else-if="gate.step === 'corrupt'" class="muted-card" role="alert">
+      <p class="error">
+        Your vault can't be read: its header is damaged. Nothing can open it any more; reset it to start a new vault and
+        upload your keys again.
+      </p>
+      <button type="button" class="primary" @click="resetOpen = true">Reset vault…</button>
+    </section>
 
     <section v-else-if="gate.step === 'vault-locked'" class="unlock-card" aria-labelledby="keys-unlock">
       <h2 id="keys-unlock">Unlock your vault</h2>

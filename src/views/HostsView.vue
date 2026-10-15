@@ -461,6 +461,15 @@ async function open(host: HostEntry) {
       <p v-if="resecureError" class="error" role="alert">{{ resecureError }}</p>
     </section>
 
+    <section v-else-if="gate.step === 'corrupt'" class="unlock-card" role="alert">
+      <h1>Your vault can't be read</h1>
+      <p class="unlock-lede">
+        Its header is damaged, so nothing can open it any more. Reset it to start a new vault, then upload your keys
+        again.
+      </p>
+      <RouterLink class="button primary" :to="{ name: 'keys', query: { reset: '1' } }">Reset vault…</RouterLink>
+    </section>
+
     <section v-else-if="gate.step === 'error'" class="unlock-card" role="alert">
       <h1>Your account couldn't be opened</h1>
       <p class="error">{{ gate.error }}</p>

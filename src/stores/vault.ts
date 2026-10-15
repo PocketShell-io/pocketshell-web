@@ -23,7 +23,8 @@ import {
 } from '../vault/gatewayPolicy';
 import type { HostEntry } from '@pocketshell/core';
 
-export type VaultPhase = 'unknown' | 'absent' | 'locked' | 'unlocked';
+/** `corrupt`: a vault exists but its header cannot be read; only a reset helps. */
+export type VaultPhase = 'unknown' | 'absent' | 'locked' | 'unlocked' | 'corrupt';
 
 export type { VaultSecret } from '@pocketshell/core';
 import type { VaultSecret } from '@pocketshell/core';
@@ -162,8 +163,11 @@ export const useVaultStore = defineStore('vault', {
     async probe(): Promise<VaultPhase> {
       const r = await this.core().probe();
       if (r.kind === 'error') throw new Error(r.message);
-      if (r.kind === 'corrupt') throw new Error('Your vault header could not be read. Reset the vault to start again.');
       if (r.kind === 'unsupportedVersion') throw new Error(UNSUPPORTED_VERSION_MESSAGE);
+      if (r.kind === 'corrupt') {
+        this.phase = 'corrupt';
+        return this.phase;
+      }
       if (r.kind === 'noVault') this.phase = 'absent';
       // gated: a vault exists but stays hidden until a verify — locked.
       else this.phase = this.core().state === 'unlocked' ? 'unlocked' : 'locked';
