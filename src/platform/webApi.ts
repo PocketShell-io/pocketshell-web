@@ -32,9 +32,9 @@ import { LinkSshConnection } from '../terminal/linkConnection';
 import { useAuthStore } from '../stores/auth';
 import { useSyncStore } from '@ui/app/stores/sync';
 import { claimsOf } from '../auth/google';
-import { forgetPassphrase, recallPassphrase } from '../shared/passphraseVault';
 import { useHostPinsStore } from '../stores/hostPins';
 import { useHostsStore } from '../stores/hosts';
+import { useVaultGateStore } from '../stores/vaultGate';
 import { ShellService } from './shellService';
 import { HostHelper } from './hostHelper';
 import { ProjectsService } from './projectsService';
@@ -141,7 +141,16 @@ async function connectHost(payload: {
   // key lives in this browser) is the credential.
   const store = useHostsStore();
   const wantedPort = payload.port ?? 22;
+  // The alias names the host the user picked (the shared store sends it):
+  // it decides which vault binding is used. Address matching is only the
+  // fallback for requests without one, and an alias whose entry lives at a
+  // different address is not trusted to pick the credential.
+  const byAlias =
+    payload.hostAlias !== undefined && payload.hostAlias !== ''
+      ? store.hosts.find((h) => h.name === payload.hostAlias && h.hostname === payload.host && h.port === wantedPort)
+      : undefined;
   const entry: HostEntry | undefined =
+    byAlias ??
     store.hosts.find((h) => h.hostname === payload.host && h.port === wantedPort) ??
     store.hosts.find((h) => h.name === payload.privateKeyPath) ??
     store.hosts.find((h) => h.hostname === payload.host);
@@ -167,7 +176,7 @@ async function connectHost(payload: {
     if (!secret || (secret.password ?? '') === '') {
       return {
         ok: false,
-        error: 'No relay token attached for this link host yet — attach it as the host password and unlock again.',
+        error: 'No relay token in your vault for this link host yet. Add it as a password on the Keys page and assign it to the host.',
       };
     }
     return connectViaLink(entry, secret.password!);
@@ -175,7 +184,7 @@ async function connectHost(payload: {
   if (!secret || ((secret.privateKeyPem ?? '') === '' && (secret.password ?? '') === '')) {
     return {
       ok: false,
-      error: 'No key attached for this host yet — attach one on the hosts screen and unlock again.',
+      error: 'No vault key is assigned to this host yet. Pick one with Key… on the Hosts page.',
     };
   }
 
@@ -193,11 +202,7 @@ async function connectHost(payload: {
       user: entry.user || payload.user,
       auth:
         (secret.privateKeyPem ?? '') !== ''
-          ? {
-              kind: 'key' as const,
-              privateKey: secret.privateKeyPem!,
-              ...(secret.keyPassphrase ? { passphrase: secret.keyPassphrase } : {}),
-            }
+          ? { kind: 'key' as const, privateKey: secret.privateKeyPem! }
           : { kind: 'password' as const, password: secret.password! },
       knownHosts: knownHostsHooks(payload),
       onClosed: () => {
@@ -214,6 +219,36 @@ async function connectHost(payload: {
   connectionIdRef = id;
   emitState(id, 'connected');
   return { ok: true, connectionId: id };
+}
+
+/**
+ * One command on a synced host over a short-lived connection of its own,
+ * with `stdin` written to the channel (never on the command line). Reuses
+ * the session dial in full — gate, vault key, TOFU pin — so it can do
+ * nothing a Connect could not. The key-vault "Apply to host" rides this.
+ */
+export async function execOnHost(
+  entry: HostEntry,
+  command: string,
+  stdin?: string,
+): Promise<{ ok: true; exitCode: number | null; stdout: string; stderr: string } | { ok: false; error: string }> {
+  const dial = await connectHost({
+    host: entry.hostname,
+    port: entry.port,
+    user: entry.user,
+    hostAlias: entry.name,
+    ...(entry.link !== undefined ? { link: entry.link } : {}),
+    ...(entry.gateway !== undefined ? { gateway: entry.gateway } : {}),
+  });
+  if (!dial.ok) return dial;
+  try {
+    const out = await connections.get(dial.connectionId)!.exec(command, stdin !== undefined ? { stdin } : {});
+    if (out.error) return { ok: false, error: out.error };
+    return { ok: true, exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr };
+  } finally {
+    evictConnection(dial.connectionId);
+    emitState(dial.connectionId, 'lost');
+  }
 }
 
 /** One services bundle per connection id — the shared body of the SSH and
@@ -277,41 +312,30 @@ async function connectViaLink(
 }
 
 /**
- * The silent vault unlock, memoized per account. The web's old home was the
- * hosts screen, whose mount ran this — the shared picker became the home and
- * nothing ran it any more, so a returning user's synced hosts (and the keys
- * that dial them) never loaded. The host read is the moment the list is
- * needed, so `listConfigHosts` awaits it. A vault miss resolves having done
- * nothing; a stale passphrase is dropped exactly as the hosts screen drops
- * it, and the picker's locked note takes over the guidance.
+ * The silent account open, memoized per account: probe the key vault, unlock
+ * it with the key remembered on this device (if any), and open the host list
+ * with the sync passphrase the vault index carries. The web's old home was
+ * the hosts screen, whose mount ran this — the shared picker became the home,
+ * so `listConfigHosts` awaits it. Anything that needs a passphrase resolves
+ * having done nothing; the picker's locked note and /app take over.
  */
-let vaultUnlock: { sub: string; done: Promise<void> } | null = null;
+let accountOpen: { sub: string; done: Promise<void> } | null = null;
 function ensureHostsUnlocked(): Promise<void> {
   const auth = useAuthStore();
   if (!auth.signedIn) return Promise.resolve();
   const sub = claimsOf(auth.idToken).sub;
-  // A plain `vaultUnlock?.sub === sub` here reads true when BOTH are
+  // A plain `accountOpen?.sub === sub` here reads true when BOTH are
   // undefined — a token without a `sub` claim and no memo yet — and returns
   // `.done` off null.
-  if (vaultUnlock !== null && vaultUnlock.sub === sub) return vaultUnlock.done;
+  if (accountOpen !== null && accountOpen.sub === sub) return accountOpen.done;
   const done = (async () => {
-    const hosts = useHostsStore();
-    if (hosts.unlocked) return;
-    const saved = await recallPassphrase(sub);
-    if (saved === null || saved === '') return;
-    hosts.passphraseRemembered = true;
-    try {
-      await hosts.unlock(saved);
-      // The unlock just made the account list readable, so re-seed the shared
-      // sync cache: a picker mounted while the unlock was in flight seeded it
-      // too early and would keep the locked note up over a full host list.
-      void useSyncStore().refreshStatus().catch(() => undefined);
-    } catch {
-      hosts.passphraseRemembered = false;
-      await forgetPassphrase(sub);
-    }
+    if (useHostsStore().unlocked) return;
+    await useVaultGateStore().open();
+    // The open may have made the account list readable: re-seed the shared
+    // sync cache so a picker mounted meanwhile drops its locked note.
+    if (useHostsStore().unlocked) void useSyncStore().refreshStatus().catch(() => undefined);
   })().catch(() => undefined);
-  vaultUnlock = { sub, done };
+  accountOpen = { sub, done };
   return done;
 }
 

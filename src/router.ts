@@ -41,6 +41,7 @@ const titles: Record<string, string> = {
   'app-hosts': 'Your hosts — PocketShell',
   hosts: 'Hosts — PocketShell',
   account: 'Account & sync — PocketShell',
+  keys: 'Keys — PocketShell',
   device: 'Approve a CLI sign-in — PocketShell',
   'device-sessions': 'CLI sessions — PocketShell',
 };

@@ -88,18 +88,38 @@ directly — the same suite the core repo runs.
   slot. The parser (`src/sshConfigImport.ts`) is the desktop parser's web
   twin minus what a tab cannot do: no `Include`, `~` kept verbatim, host
   patterns (`*`, `?`, `!`) skipped because the bridge dials hosts directly.
-- A key's own passphrase (for encrypted OpenSSH keys) is collected in the
-  same dialog and stored under the same envelope as the key it unlocks; on
-  connect both ride the bridge's `connect` frame (`auth.passphrase`).
-- Key material syncs, encrypted: the browser asks for a key or password per
-  host and stores it in `localStorage`, encrypted with the sync passphrase
-  using the same envelope scheme — and pushes that envelope to the second
-  settings slot (`keys`), which only web clients read (the desktop's parser
-  has never seen it). On unlock a device merges the account's records with
-  its local cache, so a key attached once is usable on every device; the
-  server holds one more opaque blob it cannot open. On connect the secret
-  rides the already authenticated WebSocket to the bridge and is used once,
-  in memory.
+- SSH keys and host passwords live in the account **key vault** (design:
+  pocketshell-key-vault, implementation: `@pocketshell/core` keyVault). One
+  vault passphrase per account derives (Argon2id, 64 MiB) the key that
+  unwraps the vault's data key; the server stores only ciphertext in the
+  `vault` header slot and one `vk-<keyId>` slot per key. The decrypted index
+  also carries the sync passphrase, so one passphrase opens keys and hosts.
+  A lost vault passphrase cannot be recovered: `/keys?reset=1` wipes the
+  vault after a fresh Google sign-in and the keys are uploaded again.
+- Keys are added on the Keys page (`/keys`): parsed in the tab, an encrypted
+  key's own passphrase is asked once and the key is stored decrypted inside
+  the vault, so other devices need only the vault passphrase. Each host names
+  one vault entry plus a gateway auth policy (host / managed / both), which
+  "Apply to host" pushes to the host agent with the vault PUBLIC key.
+- Nothing plaintext is persisted. "Remember on this device" stores the
+  vault's data key (and its verifier input), wrapped by a non-extractable
+  AES-GCM key in IndexedDB; sign-out forgets it. Non-extractable means the
+  key's bytes cannot be read out, not that only PocketShell can use it: any
+  script running on this origin can ask the browser to unwrap the
+  remembered data key with it. That includes an XSS payload and the remote
+  web apps the port forwarder serves under this origin (`/fwd/…`, through
+  the root-scoped `public/sw.js`; `src/forward/forwardHttp.ts` strips their
+  CSP and frame headers so they render). The app sets no CSP yet. So
+  "Remember on this device" is only as safe as everything this origin runs:
+  type the passphrase every time on a browser you also use to open
+  forwarded apps you don't trust (follow-up: a CSP, and serving forwards
+  from a separate origin). Keys are decrypted only when connecting, into
+  memory; on connect the secret rides the already authenticated WebSocket to
+  the bridge and is used once, in memory. A locked vault shows an unlock
+  sheet, never a key prompt.
+- The pre-vault store (the web-only `keys` slot and the `ps.hostKeys`
+  cache, both under the sync passphrase) is migrated into the vault on the
+  first open after the upgrade, read back, and then deleted.
   (`identityFile` in the host blob is still just a path on whatever machine
   pushed it.)
 - That bridge handling is verified in source, not asserted:
@@ -112,12 +132,9 @@ directly — the same suite the core repo runs.
   the bridge's CloudWatch logs carry connection ids and error strings only.
   The ID token rides the `?token=` query string; the WebSocket API stage has
   no access logging configured, so the token is not written to logs either.
-- Stored credentials are deletable per host: "Remove key" on the Hosts
-  screen re-encrypts both envelopes — the local cache and the account's
-  `keys` slot — without that credential. Signing out clears the session
-  token and in-memory state but keeps the encrypted local envelope — it is
-  useless without the sync passphrase, and clearing site data removes it
-  entirely.
+- Stored credentials are deletable per key on the Keys page (every device
+  loses them at its next read). Signing out clears the session token, the
+  in-memory vault and the remembered vault key on this device.
 - `tests/publicClaims.test.ts` pins the public copy to this model: every
   key-safety surface must disclose the bridge hop, and absolute
   "keys never leave your browser" claims must not reappear.

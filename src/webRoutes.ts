@@ -11,6 +11,8 @@ import AccountView from '@ui/app/views/AccountView.vue';
  *   /app     the web's host surface: sync unlock, host/key management, config
  *            import — the pieces the desktop does in ~/.ssh/config files. The
  *            shared picker owns CONNECTING; this page owns preparing hosts.
+ *   /keys    the account key vault: keys, passwords, vault settings;
+ *            `?reset=1` opens Forgot / reset (Android and psc link here);
  *   /device  approve a `pocketshell login` (CLI device flow) request;
  *            `?code=XXXX-XXXX` only prefills the code field;
  *   /device/sessions  list and revoke the account's CLI sessions.
@@ -18,6 +20,7 @@ import AccountView from '@ui/app/views/AccountView.vue';
 export const webRoutes: RouteRecordRaw[] = [
   { path: '/account', name: 'account', component: AccountView },
   { path: '/app', name: 'app-hosts', component: () => import('./views/HostsView.vue') },
+  { path: '/keys', name: 'keys', component: () => import('./views/KeysView.vue') },
   { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
   { path: '/device', name: 'device', component: () => import('./views/DeviceView.vue') },
   { path: '/device/sessions', name: 'device-sessions', component: () => import('./views/CliSessionsView.vue') },

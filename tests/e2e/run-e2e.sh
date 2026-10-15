@@ -10,7 +10,7 @@
 #   refused remote "clear" must not wipe it).
 #
 # Usage: tests/e2e/run-e2e.sh [--keep-server]
-# Requires: docker, /usr/bin/python3 with playwright + paramiko.
+# Requires: docker, /usr/bin/python3 with playwright + cryptography.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -64,30 +64,43 @@ ssh-keygen -t ed25519 -N 'e2e-key-passphrase' -C pocketshell-web-e2e -f "$WORK/k
 chmod 600 "$WORK/key_enc"
 docker exec -i "$CNAME" sh -c 'cat >> /home/testuser/.ssh/authorized_keys && chmod 600 /home/testuser/.ssh/authorized_keys' < "$WORK/key_enc.pub"
 
-# The config the browser will import. The canary comment must appear in NO
+# The config the browser will import. All three hosts share one address on
+# purpose: the shared connect request names its host alias, and that alias,
+# not the address, picks the vault key. The canary comment must appear in NO
 # request body; the wildcard patterns must be skipped, not imported.
-cat > "$WORK/import.config" <<'EOF'
+cat > "$WORK/import.config" <<EOF
 # e2e-canary-7f3k4m — if this string leaves the browser, the test fails
 Host dockertest
   HostName 127.0.0.1
-  Port 3202
+  Port $FIXTURE_PORT
   User testuser
   IdentityFile ~/.ssh/key_enc
 
 Host manualbox
   HostName 127.0.0.1
-  Port 3202
+  Port $FIXTURE_PORT
 
 Host keylesstest
   HostName 127.0.0.1
-  Port 3202
+  Port $FIXTURE_PORT
   User testuser
 
 Host *.pool.example.com !keep.pool.example.com
   User patternuser
 EOF
 
-# --- 2. build + serve the real dist ----------------------------------------
+# --- 2. relay + build + serve the real dist -------------------------------
+# The browser dials SSH itself through the dumb dev relay (the production
+# browser-direct path), so the key that reaches sshd is the one the vault
+# decrypted in the tab.
+RELAY_PORT="$(free_port)"
+node relay/dev-relay.mjs "$RELAY_PORT" >"$WORK/relay.log" 2>&1 &
+RELAY_PID=$!
+for _ in $(seq 1 50); do
+  grep -q "dev relay" "$WORK/relay.log" 2>/dev/null && break
+  sleep 0.1
+done
+
 # Build into the run's own directory: the checkout's dist/ is contended by
 # concurrent agent builds in this repo, and vite's emptyOutDir race breaks
 # both. Type-checking still runs (vue-tsc via the build script).
@@ -98,7 +111,7 @@ BASE_PORT="$(free_port)"
 # a ~100 MB server per run.
 node_modules/.bin/vite preview --outDir "$WORK/dist" --port "$BASE_PORT" --strictPort >"$WORK/preview.log" 2>&1 &
 PREVIEW_PID=$!
-trap 'kill "$PREVIEW_PID" 2>/dev/null || true; docker rm -f "$CNAME" >/dev/null 2>&1 || true' EXIT
+trap 'kill "$PREVIEW_PID" "$RELAY_PID" 2>/dev/null || true; docker rm -f "$CNAME" >/dev/null 2>&1 || true' EXIT
 for _ in $(seq 1 50); do
   curl -sf -o /dev/null "http://localhost:$BASE_PORT/" && break
   sleep 0.2
@@ -106,7 +119,7 @@ done
 
 # --- 3. the browser flow ----------------------------------------------------
 /usr/bin/python3 tests/e2e/e2e_hosts_keys.py \
-  "http://localhost:$BASE_PORT" "$WORK" "$FIXTURE_PORT"
+  "http://localhost:$BASE_PORT" "$WORK" "$FIXTURE_PORT" "$RELAY_PORT" "$CNAME"
 status=$?
 
 echo "artifacts in $WORK (screenshots: $WORK/*.png)"

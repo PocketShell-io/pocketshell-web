@@ -14,6 +14,10 @@ import { makeSyncService, NotSignedInError, SyncApiError, SyncConflictError } fr
 import { decryptEnvelope, encryptToEnvelope, SyncCryptoError } from '../shared/syncCrypto';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
+import { useVaultStore } from '../stores/vault';
+import { useVaultGateStore } from '../stores/vaultGate';
+import { claimsOf } from '../auth/google';
+import { forgetPassphrase } from '../shared/passphraseVault';
 
 export class WebSync {
   /** The account's hosts this session last decrypted, or null. */
@@ -42,7 +46,19 @@ export class WebSync {
   }
 
   async logout(): Promise<void> {
-    useAuthStore().signOut();
+    const auth = useAuthStore();
+    let sub: string | null = null;
+    try {
+      sub = claimsOf(auth.idToken).sub;
+    } catch {
+      sub = null;
+    }
+    // Sign-out forgets the vault key remembered on this device, and any
+    // pre-vault remembered sync passphrase, too.
+    await useVaultStore().signOut(sub);
+    if (sub !== null) await forgetPassphrase(sub).catch(() => undefined);
+    useVaultGateStore().reset();
+    auth.signOut();
     useHostsStore().signOutLocal();
     this.accountHosts = null;
   }

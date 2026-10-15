@@ -146,8 +146,9 @@ describe('web#4: connectHost refuses gateway-marked hosts before any dial', () =
       expect(relayDials).toBe(0);
       expect(store.secretReads).toEqual([]);
       // The refusal is about the host the user tapped, never the unmarked
-      // `box` the address happened to resolve to (the store sends no alias).
-      expect(connection.error).toBe(transportRefusalMessage('gateway-unsupported', null));
+      // `box` the address happened to resolve to: the shared store sends the
+      // tapped host's alias (core e02e4a6), so the refusal names it.
+      expect(connection.error).toBe(transportRefusalMessage('gateway-unsupported', 'gw'));
       expect(connection.error).not.toContain('box');
     },
   );
@@ -213,5 +214,23 @@ describe('web#4: ordinary hosts still dial', () => {
     expect(store.secretReads).toEqual(['box']);
     expect(bridgeDials).toBe(1);
     expect(relayDials).toBe(0);
+  });
+});
+
+describe('host resolution: the alias decides which credential is read', () => {
+  it('two synced hosts at one address: the tapped host’s secret is read, not the first one’s', async () => {
+    const first = syncedHost('box', {});
+    const second = syncedHost('second', {});
+    store.hosts = [first, second];
+    await useConnectionStore().connect(second);
+    await settle();
+    expect(store.secretReads).toEqual(['second']);
+  });
+
+  it('an alias whose entry lives elsewhere is not trusted: falls back to the address', async () => {
+    store.hosts = [syncedHost('box', {}), { ...syncedHost('elsewhere', {}), hostname: 'other.example' } as HostEntry];
+    await webApi.ssh.connect({ host: 'gw-box.example', port: 22, user: 'me', hostAlias: 'elsewhere' });
+    await settle();
+    expect(store.secretReads).toEqual(['box']);
   });
 });

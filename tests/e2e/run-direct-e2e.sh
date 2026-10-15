@@ -44,16 +44,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The real key if it exists, else a generated stand-in with the same shape.
-if [ -f "$HOME/.ssh/id_hetzner" ]; then
-  cp "$HOME/.ssh/id_hetzner" "$WORK/key_real"
-  chmod 600 "$WORK/key_real"
-  echo "using the real ~/.ssh/id_hetzner key"
-else
-  ssh-keygen -t ed25519 -N ' ' -C pocketshell-web-direct-e2e -f "$WORK/key_real" -q
-  chmod 600 "$WORK/key_real"
-  echo "id_hetzner not found — using a generated one-space-passphrase key"
-fi
+# A throwaway key in the real-world shape (one-space passphrase), generated
+# per run: tests never touch a real private key.
+ssh-keygen -t ed25519 -N ' ' -C pocketshell-web-direct-e2e -f "$WORK/key_real" -q
+chmod 600 "$WORK/key_real"
 
 # The key must be authorized: append its public half to the fixture.
 ssh-keygen -y -f "$WORK/key_real" > "$WORK/key_real.pub"

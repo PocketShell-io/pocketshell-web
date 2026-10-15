@@ -1,41 +1,36 @@
-"""End-to-end: config import + key upload, against the real docker sshd.
+"""End-to-end: key vault + config import + connect, against the real docker sshd.
 
-Drives the built app in Chromium with three network fakes, everything else
+Drives the built app in Chromium with two network fakes, everything else
 real (see run-e2e.sh):
 
   /config.js + GIS    stubbed exactly like .tmp/auth-review-capture.py does
                       for visual captures — a fake button that signs in via
                       the app's own callback.
-  sync.e2e.test       a fake settings store: it records every body and only
-                      ever accepts/re-serves opaque envelopes. The test then
-                      decrypts the captured envelopes with the sync passphrase
-                      (cryptography is a test-side dependency, like the
-                      desktop app's node:crypto) to prove what LEFT the
-                      browser and that it was ciphertext until it left.
-  bridge.e2e.test     the bridge PROPER: it takes the `connect` frame's key
-                      (and passphrase, when the key is encrypted) and opens a
-                      REAL SSH session to the pocketshell-test:ssh container
-                      with paramiko. If the browser sent the wrong key or a
-                      wrong passphrase, this ssh handshake fails and the test
-                      fails — nothing about the final hop is stubbed.
-                      The session's PTY output also carries an OSC 52 yank,
-                      so the clipboard assertions prove the terminal answers
-                      the remote's copy sequence in-browser.
+  sync.e2e.test       a fake settings store, per slot, with the real API's
+                      versioning: it records every body and only ever
+                      accepts/re-serves opaque data. The test decrypts the
+                      host-list envelope with the passphrase (cryptography is
+                      a test-side dependency) and checks the vault slots are
+                      ciphertext-shaped.
 
-Usage: /usr/bin/python3 tests/e2e/e2e_hosts_keys.py <base-url> <workdir> <fixture-port>
+The SSH hop is real: the browser dials through the dumb dev relay to the
+pocketshell-test:ssh container, so the key sshd accepts (its VERBOSE log
+names the fingerprint) is the one the vault decrypted in the tab, including
+a passphrase-protected key that is stored decrypted inside the vault.
+
+Usage: /usr/bin/python3 tests/e2e/e2e_hosts_keys.py <base-url> <workdir> <fixture-port> <relay-port> <container>
 """
 
 import asyncio
 import base64
 import json
 import os
-import stat
 import sys
-import tempfile
 import time
 
-import paramiko
+import subprocess
 from cryptography.hazmat.primitives import hashes
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from playwright.async_api import async_playwright
@@ -43,20 +38,18 @@ from playwright.async_api import async_playwright
 BASE = sys.argv[1].rstrip('/')
 WORK = sys.argv[2]
 FIXTURE_PORT = int(sys.argv[3])
+RELAY_PORT = int(sys.argv[4])
+CONTAINER = sys.argv[5]
 
-SYNC_PASSPHRASE = 'e2e-sync-pass-entence'
+VAULT_PASSPHRASE = 'e2e-vault-pass-entence'
 KEY_PASSPHRASE = 'e2e-key-passphrase'
 CANARY = 'e2e-canary-7f3k4m'
-OSC52_CANARY = 'e2e-osc52-yank-qk9w2m'
 
-
-def osc52_yank(text: str) -> bytes:
-    """What a remote tmux yank paints on the PTY: ESC ] 52 ; Pc ; Pt BEL."""
-    return f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07".encode()
 
 CONFIG_STUB = (
     "window.POCKETSHELL_WEB = { syncApiUrl: 'https://sync.e2e.test', "
-    "googleClientId: 'stub.apps.googleusercontent.com', wsUrl: 'wss://bridge.e2e.test/link' };"
+    "googleClientId: 'stub.apps.googleusercontent.com', wsUrl: '', "
+    f"directWsUrl: 'ws://127.0.0.1:{RELAY_PORT}' }};"
 )
 
 GIS_STUB = """
@@ -77,7 +70,7 @@ def b64url(obj) -> str:
 
 
 def fake_jwt() -> str:
-    return f"{b64url({'alg': 'none'})}.{b64url({'email': 'e2e@pocketshell.test', 'exp': 4102444800})}.x"
+    return f"{b64url({'alg': 'none'})}.{b64url({'sub': 'e2e', 'email': 'e2e@pocketshell.test', 'exp': 4102444800})}.x"
 
 
 def decrypt_envelope(envelope: str, passphrase: str) -> str:
@@ -95,113 +88,68 @@ def decrypt_envelope(envelope: str, passphrase: str) -> str:
 
 
 class FakeSync:
-    """The account slot as the real API behaves: opaque data in, same out."""
+    """The settings API as the real one behaves, per slot: opaque data in,
+    same out, versioned, 409 on a stale base, 404 when absent. The phase-2
+    /vault/* routes are absent (404), as before their deploy."""
 
     def __init__(self):
-        self.version = 0
-        self.data: str | None = None
-        self.put_bodies: list[dict] = []
+        self.slots: dict[str, dict] = {}
+        self.put_bodies: list[tuple[str, dict]] = []
         self.all_bodies: list[tuple[str, str, str]] = []
+
+    @property
+    def data(self) -> str | None:
+        main = self.slots.get('main')
+        return main['data'] if main else None
 
     async def handle(self, route):
         req = route.request
         body = req.post_data or ''
         self.all_bodies.append((req.method, req.url, body))
-        if req.method == 'GET' and req.url.endswith('/settings/main'):
-            if self.data is None:
-                await route.fulfill(status=404, content_type='application/json', body='{"message":"no slot"}')
+        path = req.url.split('sync.e2e.test', 1)[1].split('?', 1)[0]
+        if path.startswith('/settings/'):
+            slot = path[len('/settings/'):]
+            cur = self.slots.get(slot)
+            if req.method == 'GET':
+                if cur is None:
+                    await route.fulfill(status=404, content_type='application/json', body='{"message":"no slot"}')
+                else:
+                    await route.fulfill(content_type='application/json', body=json.dumps({'slot': slot, **cur}))
+            elif req.method == 'PUT':
+                parsed = json.loads(body)
+                have = cur['version'] if cur else 0
+                if parsed['version'] != have:
+                    await route.fulfill(status=409, content_type='application/json', body=json.dumps({'currentVersion': have}))
+                    return
+                self.put_bodies.append((slot, parsed))
+                self.slots[slot] = {'version': have + 1, 'data': parsed['data']}
+                await route.fulfill(content_type='application/json', body=json.dumps({'version': have + 1}))
+            elif req.method == 'DELETE':
+                self.slots.pop(slot, None)
+                await route.fulfill(status=204, body='')
             else:
-                await route.fulfill(
-                    content_type='application/json',
-                    body=json.dumps({'slot': 'main', 'version': self.version, 'data': self.data}),
-                )
-        elif req.method == 'PUT' and req.url.endswith('/settings/main'):
-            parsed = json.loads(body)
-            assert parsed['version'] == self.version, f'base version {parsed["version"]} != {self.version}'
-            self.put_bodies.append(parsed)
-            self.data = parsed['data']
-            self.version += 1
-            await route.fulfill(content_type='application/json', body=json.dumps({'version': self.version}))
-        elif req.method == 'GET' and req.url.endswith('/me'):
+                await route.fulfill(status=405, body='')
+        elif req.method == 'GET' and path == '/settings':
+            rows = [{'slot': k, 'version': v['version'], 'size': len(v['data']), 'updatedAt': ''} for k, v in self.slots.items()]
+            await route.fulfill(content_type='application/json', body=json.dumps(rows))
+        elif req.method == 'GET' and path == '/me':
             await route.fulfill(content_type='application/json', body='{"sub":"e2e","email":"e2e@pocketshell.test"}')
         else:
-            await route.fulfill(status=404, content_type='application/json', body='{}')
+            await route.fulfill(status=404, content_type='application/json', body='{"message":"Not Found"}')
 
 
-class FakeBridge:
-    """Takes the connect frame's credentials at face value and really dials."""
+def fingerprint_of(private_key_path: str) -> str:
+    """SHA256:… of a key, as sshd's VERBOSE log prints it."""
+    pub = subprocess.run(['ssh-keygen', '-y', '-P', KEY_PASSPHRASE if private_key_path.endswith('key_enc') else '', '-f', private_key_path],
+                         check=True, capture_output=True, text=True).stdout
+    out = subprocess.run(['ssh-keygen', '-l', '-E', 'sha256', '-f', '-'], input=pub, check=True, capture_output=True, text=True).stdout
+    return out.split()[1]
 
-    def __init__(self, fixture_port: int):
-        self.fixture_port = fixture_port
-        self.connect_frames: list[dict] = []
-        self.ws_data_frames = 0
-        self.ssh_outputs: dict[str, str] = {}
-        self.ssh_errors: dict[str, str] = {}
-        self.last_ws = None
 
-    async def handle(self, ws):
-        async def run_ssh(frame: dict, tag: str):
-            def blocking():
-                auth = frame['auth']
-                fd, path = tempfile.mkstemp(suffix='.pem')
-                with os.fdopen(fd, 'w') as f:
-                    f.write(auth['privateKey'])
-                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-                try:
-                    client = paramiko.SSHClient()
-                    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    client.connect(
-                        '127.0.0.1',
-                        port=self.fixture_port,
-                        username=frame['username'],
-                        key_filename=path,
-                        passphrase=auth.get('passphrase'),
-                        look_for_keys=False,
-                        allow_agent=False,
-                        timeout=20,
-                        banner_timeout=20,
-                    )
-                    _, out, err = client.exec_command('echo PS-E2E-$(id -un)-OK')
-                    text = out.read().decode() + err.read().decode()
-                    client.close()
-                    return text, None
-                except Exception as e:  # noqa: BLE001 - the test reports it
-                    return None, str(e)
-                finally:
-                    os.unlink(path)
-
-            text, error = await asyncio.to_thread(blocking)
-            if text is None:
-                self.ssh_errors[tag] = error or 'unknown'
-                ws.send(json.dumps({'type': 'error', 'message': 'ssh connect failed'}))
-                return
-            self.ssh_outputs[tag] = text
-            # The PTY stream carries an OSC 52 yank, exactly like a tmux
-            # copy on the real box would; the terminal must answer it.
-            payload = text.encode() + osc52_yank(OSC52_CANARY)
-            ws.send(json.dumps({'type': 'data', 'data': base64.b64encode(payload).decode()}))
-
-        def on_frame(payload) -> None:
-            if not isinstance(payload, str):
-                return
-            frame = json.loads(payload)
-            if frame['type'] == 'connect':
-                tag = f"conn{len(self.connect_frames)}"
-                frame['_tag'] = tag
-                self.connect_frames.append(frame)
-                self.last_ws = ws
-                ws.send(json.dumps({'type': 'connected'}))
-                asyncio.ensure_future(run_ssh(frame, tag))
-            elif frame['type'] == 'ping':
-                ws.send(json.dumps({'type': 'pong'}))
-            elif frame['type'] == 'data':
-                self.ws_data_frames += 1
-
-        ws.on_message(on_frame)
-
-    def send_pty(self, raw: bytes) -> None:
-        """Push raw bytes at the browser as if the remote PTY printed them."""
-        self.last_ws.send(json.dumps({'type': 'data', 'data': base64.b64encode(raw).decode()}))
+def sshd_accepted(fingerprint: str) -> bool:
+    logs = subprocess.run(['docker', 'logs', CONTAINER], capture_output=True, text=True)
+    return any('Accepted publickey for testuser' in line and fingerprint in line
+               for line in (logs.stdout + logs.stderr).splitlines())
 
 
 async def wait_for(predicate, timeout: float, what: str):
@@ -215,17 +163,14 @@ async def wait_for(predicate, timeout: float, what: str):
 
 async def main() -> int:
     sync = FakeSync()
-    bridge = FakeBridge(FIXTURE_PORT)
     console_errors: list[str] = []
+    relay_frames: list[str] = []
+    plain_fp = fingerprint_of(os.path.join(WORK, 'key_plain'))
+    enc_fp = fingerprint_of(os.path.join(WORK, 'key_enc'))
 
     async with async_playwright() as p:
         browser = await p.chromium.launch()
-        # Clipboard grants let the test both write (OSC 52 handler) and read
-        # back what a yank landed in — navigator.clipboard, real Chromium.
-        context = await browser.new_context(
-            viewport={'width': 1280, 'height': 800},
-            permissions=['clipboard-read', 'clipboard-write'],
-        )
+        context = await browser.new_context(viewport={'width': 1280, 'height': 800})
         page = await context.new_page()
         page.on(
             'console',
@@ -235,20 +180,37 @@ async def main() -> int:
             if m.type == 'error' and 'Failed to load resource' not in m.text
             else None,
         )
+
+        def watch(ws):
+            ws.on('framesent', lambda f: relay_frames.append(f if isinstance(f, str) else str(f)))
+            ws.on('framereceived', lambda f: relay_frames.append(f if isinstance(f, str) else str(f)))
+        page.on('websocket', watch)
         await page.route('**/config.js', lambda r: r.fulfill(content_type='application/javascript', body=CONFIG_STUB))
         await page.route('**/accounts.google.com/gsi/client*', lambda r: r.fulfill(content_type='application/javascript', body=GIS_STUB))
         await page.route('**/sync.e2e.test/**', sync.handle)
-        await page.route_web_socket('**/bridge.e2e.test/**', bridge.handle)
 
-        # --- sign in and unlock (empty account) -----------------------------
+        async def back_to_hosts():
+            await page.goto(BASE + '/app', wait_until='networkidle')
+            await page.wait_for_selector('button:has-text("Import config")', timeout=30000)
+
+        # --- sign in, create the vault (empty account) ----------------------
         await page.goto(BASE + '/', wait_until='networkidle')
         await page.evaluate(f"window.__gsiInit.callback({{credential: '{fake_jwt()}'}})")
-        await page.wait_for_url('**/app')
-        await page.fill('input[type=password]', SYNC_PASSPHRASE)
-        await page.click('button.primary:has-text("Unlock")')
-        await page.wait_for_selector('text=No hosts synced yet')
+        # The home is the shared picker now; host preparation lives at /app.
+        await page.wait_for_function("!location.pathname.startsWith('/login')")
+        await page.goto(BASE + '/app', wait_until='networkidle')
+        # A brand-new account: create the vault (its passphrase also encrypts
+        # the host list), remembered on this device so the full page loads
+        # below reopen it silently.
+        await page.wait_for_selector('text=Create your vault passphrase')
+        await page.fill('#setup-new', VAULT_PASSPHRASE)
+        await page.fill('#setup-again', VAULT_PASSPHRASE)
+        await page.check('text=I understand that a forgotten passphrase')
+        await page.check('input[name="setup-remember"][value="remember"]')
+        await page.click('button:has-text("Create vault")')
+        await page.wait_for_selector('text=No hosts synced yet', timeout=30000)
 
-        # --- manual host + key file upload ----------------------------------
+        # --- manual host + key file upload into the vault ---------------------
         await page.click('button:has-text("Add host")')
         await page.fill('input[placeholder="Name (e.g. prod-box)"]', 'manualbox')
         await page.fill('input[placeholder="Hostname"]', '127.0.0.1')
@@ -258,26 +220,20 @@ async def main() -> int:
         await page.wait_for_selector('text=Saved manualbox')
 
         await page.locator('.host-row', has_text='manualbox').get_by_role('button', name='Key…').click()
+        box = page.locator('details.keybox', has_text='Key for manualbox')
         await page.set_input_files('input[aria-label="Private key file"]', os.path.join(WORK, 'key_plain'))
-        await page.fill('input[aria-label="Key passphrase"]', '')
-        await page.locator('details.keybox', has_text='Private key for manualbox').get_by_role('button', name='Save').click()
-        await page.wait_for_selector('text=Key for manualbox stored in this browser.')
-        # The credential envelope is in localStorage; it must be opaque.
-        local = await page.evaluate("localStorage.getItem('ps.hostKeys')")
-        assert 'BEGIN' not in local and KEY_PASSPHRASE not in local, 'plaintext credential in localStorage!'
+        await box.get_by_role('button', name='Add to vault').click()
+        await box.locator('#kf-entry').wait_for()
+        await box.get_by_role('button', name='Save').click()
+        await page.wait_for_selector('text=Saved the vault key choice for manualbox')
+        # Nothing about the key may sit in browser storage.
+        storage = await page.evaluate("JSON.stringify(Object.entries(localStorage)) + JSON.stringify(Object.entries(sessionStorage))")
+        assert 'BEGIN' not in storage and KEY_PASSPHRASE not in storage and VAULT_PASSPHRASE not in storage, 'plaintext in web storage!'
 
-        # --- connect: the fake bridge dials the REAL container --------------
+        # --- connect: the browser dials sshd with the vault key -------------
         await page.locator('.host-row', has_text='manualbox').get_by_role('button', name='Connect').click()
-        await wait_for(
-            lambda: any('PS-E2E-testuser-OK' in v for v in bridge.ssh_outputs.values()),
-            30,
-            'ssh session on the fixture using the uploaded key',
-        )
-        term_status = page.locator('.topbar').nth(1).locator('span.muted')
-        await page.wait_for_function("document.querySelectorAll('.topbar')[1]?.querySelector('span.muted')?.textContent === 'connected'")
-        assert (await term_status.inner_text()) == 'connected'
-        await page.locator('.topbar').nth(1).get_by_role('button', name='← Hosts').click()
-        await page.wait_for_selector('button:has-text("Import config")')
+        await wait_for(lambda: sshd_accepted(plain_fp), 60, 'sshd accepting the uploaded vault key')
+        await back_to_hosts()
 
         # --- import from SSH config -----------------------------------------
         await page.click('button:has-text("Import config")')
@@ -297,10 +253,15 @@ async def main() -> int:
         # --- missing credentials step → upload the ENCRYPTED key ------------
         await page.wait_for_selector('text=2 imported hosts have')
         await page.locator('.import-row', has_text='dockertest').get_by_role('button', name='Add key…').click()
+        box = page.locator('details.keybox', has_text='Key for dockertest')
+        await box.get_by_role('tab', name='Upload a key').click()
         await page.set_input_files('input[aria-label="Private key file"]', os.path.join(WORK, 'key_enc'))
-        await page.fill('input[aria-label="Key passphrase"]', KEY_PASSPHRASE)
-        await page.locator('details.keybox', has_text='Private key for dockertest').get_by_role('button', name='Save').click()
-        await page.wait_for_selector('text=Key for dockertest stored in this browser.')
+        await box.get_by_role('button', name='Add to vault').click()
+        # Encrypted: its own passphrase is asked once; the vault keeps it decrypted.
+        await box.locator('#kf-kpass').fill(KEY_PASSPHRASE)
+        await box.get_by_role('button', name='Add to vault').click()
+        await box.locator('#kf-entry').wait_for()
+        await box.get_by_role('button', name='Save').click()
         # Saving the one key re-opens the credentials step for the host that
         # still lacks one; Done leaves the flow.
         await page.wait_for_selector('button:has-text("Done for now")')
@@ -309,45 +270,28 @@ async def main() -> int:
         await page.click('button:has-text("Done for now")')
         await page.wait_for_selector('text=Imported 2 hosts')
 
-        # A host without a stored key must refuse to connect (client-side guard).
+        # A host without a vault key refuses to connect (client-side guard).
         await page.locator('.host-row', has_text='keylesstest').get_by_role('button', name='Connect').click()
-        await page.wait_for_selector('text=No key attached for this host yet')
-        await page.locator('.topbar').nth(1).get_by_role('button', name='← Hosts').click()
-        await page.wait_for_selector('button:has-text("Import config")')
+        try:
+            await page.wait_for_selector('text=No vault key is assigned to this host yet')
+        except Exception:
+            await page.screenshot(path=os.path.join(WORK, 'keyless.png'), full_page=True)
+            body = await page.evaluate('document.body.innerText')
+            raise AssertionError(f'keyless connect: no vault-key refusal shown; page text: {body[:1500]}')
+        await back_to_hosts()
 
-        # --- connect the imported host: passphrase must travel and work ----
+        # --- connect the imported host: no key passphrase needed any more ---
         await page.locator('.host-row', has_text='dockertest').get_by_role('button', name='Connect').click()
-        await wait_for(
-            lambda: any('PS-E2E-testuser-OK' in v for v in bridge.ssh_outputs.values()) and len(bridge.ssh_outputs) >= 2,
-            30,
-            'ssh session using the passphrase-protected key',
-        )
-        await page.wait_for_function("document.querySelectorAll('.topbar')[1]?.querySelector('span.muted')?.textContent === 'connected'")
+        await wait_for(lambda: sshd_accepted(enc_fp), 60, 'sshd accepting the decrypted vault copy of the encrypted key')
+        await back_to_hosts()
 
-        # --- OSC 52: the yank the PTY output carried is in the clipboard ----
-        deadline = time.monotonic() + 10
-        clip = ''
-        while time.monotonic() < deadline:
-            clip = await page.evaluate('navigator.clipboard.readText()')
-            if clip == OSC52_CANARY:
-                break
-            await asyncio.sleep(0.2)
-        assert clip == OSC52_CANARY, f'OSC 52 yank never reached the clipboard: {clip!r}'
-        # A remote must not be able to BLANK the clipboard: the empty-payload
-        # "clear" sequence is refused, so the yank survives it.
-        bridge.send_pty(b'\x1b]52;c;\x07')
-        await asyncio.sleep(0.5)
-        clip = await page.evaluate('navigator.clipboard.readText()')
-        assert clip == OSC52_CANARY, f'remote cleared the clipboard: {clip!r}'
-
-        # --- reload: everything comes back (account envelope + local one) ---
-        await page.reload()
-        # The reload lands on /term with a fresh store; the term topbar is
-        # rendered even for an unknown host, so route back and unlock again.
-        await page.click('button:has-text("← Hosts")')
-        await page.fill('input[type=password]', SYNC_PASSPHRASE)
+        # --- forget the device: the typed unlock opens keys AND hosts --------
+        await page.evaluate("localStorage.removeItem('ps.vaultDek.e2e')")
+        await page.goto(BASE + '/app', wait_until='networkidle')
+        await page.wait_for_selector('text=Unlock your vault')
+        await page.fill('#hv-pass', VAULT_PASSPHRASE)
         await page.click('button.primary:has-text("Unlock")')
-        await page.wait_for_selector('.host-row')
+        await page.wait_for_selector('.host-row', timeout=30000)
         names = await page.locator('.host-row .name').all_inner_texts()
         assert sorted(names) == ['dockertest', 'keylesstest', 'manualbox'], names
         await context.close()
@@ -357,34 +301,39 @@ async def main() -> int:
     # 1. The canary comment and all key material never rode ANY HTTP request.
     for method, url, body in sync.all_bodies:
         assert CANARY not in body, f'config text left the browser via {method} {url}'
-        assert 'BEGIN OPENSSH PRIVATE KEY' not in body, f'key material left via {method} {url}'
+        assert 'PRIVATE KEY' not in body, f'key material left via {method} {url}'
         assert KEY_PASSPHRASE not in body, f'key passphrase left via {method} {url}'
-    # 2. Every sync PUT carried exactly the envelope fields — ciphertext only.
-    for put in sync.put_bodies:
+        assert VAULT_PASSPHRASE not in body, f'vault passphrase left via {method} {url}'
+    # 2. Every sync PUT carried ciphertext only: the host list envelope, the
+    #    vault header, or a sealed key blob.
+    for slot, put in sync.put_bodies:
         assert set(put.keys()) == {'data', 'version'}
-        envelope = json.loads(put['data'])
-        assert set(envelope.keys()) == {'v', 'kdf', 'iter', 'salt', 'iv', 'ct'}, envelope.keys()
-    # 3. What left is decryptable with the passphrase and carries the merged list.
-    final_hosts = json.loads(decrypt_envelope(sync.data, SYNC_PASSPHRASE))['hosts']
-    assert [h['name'] for h in final_hosts] == ['manualbox', 'dockertest', 'keylesstest'], final_hosts
-    assert final_hosts[1]['identityFile'] == '~/.ssh/key_enc'
-    # 4. The bridge got exactly two connects, each with the right secret, and
-    #    both opened real SSH sessions on the fixture.
-    assert len(bridge.connect_frames) == 2, bridge.connect_frames
-    plain_text = open(os.path.join(WORK, 'key_plain')).read().strip()
-    enc_text = open(os.path.join(WORK, 'key_enc')).read().strip()
-    first = bridge.connect_frames[0]
-    assert first['host'] == '127.0.0.1' and first['port'] == FIXTURE_PORT and first['username'] == 'testuser'
-    assert first['auth'] == {'kind': 'key', 'privateKey': plain_text}, 'connect frame 1: unexpected auth'
-    second = bridge.connect_frames[1]
-    assert second['auth']['privateKey'] == enc_text
-    assert second['auth'].get('passphrase') == KEY_PASSPHRASE, 'connect frame 2: passphrase missing'
-    assert all('PS-E2E-testuser-OK' in v for v in bridge.ssh_outputs.values()), bridge.ssh_outputs
-    assert bridge.ssh_errors == {}, bridge.ssh_errors
+        doc = json.loads(put['data'])
+        if slot == 'main':
+            assert set(doc.keys()) == {'v', 'kdf', 'iter', 'salt', 'iv', 'ct'}, doc.keys()
+        elif slot == 'vault':
+            assert {'v', 'vaultId', 'kdf', 'wrappedDek', 'check', 'index', 'epoch'} <= set(doc.keys()), doc.keys()
+            assert doc['kdf']['alg'] == 'argon2id'
+        else:
+            assert slot.startswith('vk-'), slot
+            assert {'v', 'vaultId', 'keyId', 'n', 'ct'} <= set(doc.keys()), doc.keys()
+    assert sum(1 for k in sync.slots if k.startswith('vk-')) == 2, sync.slots.keys()
+    # 3. Decision #7: the vault passphrase must NOT open the host list (a
+    #    new account's list rides a generated passphrase only the vault
+    #    index holds); the list's contents were checked through the UI.
+    try:
+        decrypt_envelope(sync.data, VAULT_PASSPHRASE)
+        raise AssertionError('the vault passphrase opens the host list')
+    except InvalidTag:
+        pass
+    # 4. The relay only ever ferried ciphertext.
+    assert relay_frames, 'no relay frames observed'
+    for frame in relay_frames:
+        assert 'PRIVATE KEY' not in frame and CANARY not in frame, 'plaintext on the relay wire'
     assert len(console_errors) == 0, console_errors
 
-    print('E2E PASS: import + key + passphrase + OSC 52 verified against the real sshd fixture')
-    print(f"  sync PUTs: {len(sync.put_bodies)} envelopes; ssh sessions: {len(bridge.ssh_outputs)}; clipboard: OSC 52 yank ok")
+    print('E2E PASS: vault setup + remember + import + vault keys (incl. a decrypted encrypted key) + vault unlock verified against the real sshd fixture')
+    print(f"  sync PUTs: {len(sync.put_bodies)}; vault slots: {sorted(k for k in sync.slots if k != 'main')}; relay frames: {len(relay_frames)}")
     return 0
 
 
