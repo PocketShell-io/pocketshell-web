@@ -17,6 +17,7 @@ import { useHostsStore } from '../stores/hosts';
 import { useVaultStore } from '../stores/vault';
 import { useVaultGateStore } from '../stores/vaultGate';
 import { claimsOf } from '../auth/google';
+import { forgetPassphrase } from '../shared/passphraseVault';
 
 export class WebSync {
   /** The account's hosts this session last decrypted, or null. */
@@ -52,8 +53,10 @@ export class WebSync {
     } catch {
       sub = null;
     }
-    // Sign-out forgets the vault key remembered on this device, too.
+    // Sign-out forgets the vault key remembered on this device, and any
+    // pre-vault remembered sync passphrase, too.
     await useVaultStore().signOut(sub);
+    if (sub !== null) await forgetPassphrase(sub).catch(() => undefined);
     useVaultGateStore().reset();
     auth.signOut();
     useHostsStore().signOutLocal();

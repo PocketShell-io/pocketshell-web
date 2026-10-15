@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useVaultGateStore } from '../stores/vaultGate';
+import { hasUnreadable, legacyItems } from '../vault/legacyMigration';
 
 /**
  * The one-time move of pre-vault credentials into the vault. It starts by
@@ -15,7 +16,39 @@ const error = ref('');
 const passphrases = reactive<Record<string, string>>({});
 const confirmDrop = ref(false);
 
-const total = computed(() => gate.legacy?.items.length ?? 0);
+const total = computed(() => (gate.legacy ? legacyItems(gate.legacy).length : 0));
+const unreadable = computed(() => gate.legacy !== null && hasUnreadable(gate.legacy));
+const canRetryWithOld = computed(
+  () => gate.legacy !== null && [gate.legacy.account, gate.legacy.local].some((s) => s.state === 'unreadable' && s.reason === 'decrypt'),
+);
+const oldPassphrase = ref('');
+const confirmDeleteUnreadable = ref(false);
+
+async function retryWithOld() {
+  busy.value = true;
+  error.value = '';
+  try {
+    await gate.openLegacyWith(oldPassphrase.value);
+    oldPassphrase.value = '';
+    await gate.migrate({ ...passphrases });
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function deleteUnreadable() {
+  busy.value = true;
+  try {
+    await gate.deleteUnreadableLegacy();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    busy.value = false;
+    confirmDeleteUnreadable.value = false;
+  }
+}
 
 async function run() {
   busy.value = true;
@@ -41,7 +74,8 @@ async function dropRest() {
 }
 
 onMounted(() => {
-  if (gate.failures.length === 0) void run();
+  // Auto-run only when there is something readable to move.
+  if (gate.failures.length === 0 && total.value > 0) void run();
 });
 </script>
 
@@ -80,6 +114,28 @@ onMounted(() => {
         <button type="button" @click="confirmDrop = false">Keep them for now</button>
       </div>
     </form>
+    <div v-if="unreadable && gate.failures.length === 0 && !busy" class="unlock-form">
+      <p class="muted" role="status">{{ gate.legacyNotice }}</p>
+      <form v-if="canRetryWithOld" @submit.prevent="retryWithOld">
+        <label class="flabel" for="mig-oldpass">Old sync passphrase</label>
+        <div class="unlock-row">
+          <input id="mig-oldpass" v-model="oldPassphrase" type="password" autocomplete="off" />
+          <button class="primary" type="submit" :disabled="oldPassphrase === ''">Open them</button>
+        </div>
+      </form>
+      <div class="form-actions">
+        <button type="button" @click="gate.deferLegacy()">Continue without them for now</button>
+        <button type="button" @click="confirmDeleteUnreadable = true">Delete them…</button>
+      </div>
+      <div v-if="confirmDeleteUnreadable" class="drop-confirm" role="alertdialog" aria-labelledby="del-unreadable">
+        <p id="del-unreadable">
+          These old copies could not be read, so nothing in them was moved. Deleting them is permanent; any key only stored
+          there is gone.
+        </p>
+        <button type="button" class="primary" @click="deleteUnreadable">Delete permanently</button>
+        <button type="button" @click="confirmDeleteUnreadable = false">Keep them</button>
+      </div>
+    </div>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
   </section>
 </template>

@@ -10,8 +10,11 @@ import { useVaultStore } from './vault';
 import {
   deleteLegacy,
   hasLegacy,
+  hasUnreadable,
   LEGACY_KEYS_SLOT,
+  legacyItems,
   migrateLegacy,
+  openLegacyWith,
   readLegacy,
   type LegacyState,
   type MigrationFailure,
@@ -46,6 +49,9 @@ export const useVaultGateStore = defineStore('vaultGate', {
     mainExists: false,
     legacy: null as LegacyState | null,
     failures: [] as MigrationFailure[],
+    /** The user chose to continue without the unreadable old copies (this
+     * session only; they are kept and offered again next time). */
+    legacyDeferred: false,
     error: '',
   }),
   getters: {
@@ -58,8 +64,27 @@ export const useVaultGateStore = defineStore('vaultGate', {
         return hosts.unlocked || !this.mainExists ? 'create-vault' : 'sync-passphrase';
       }
       if (!hosts.unlocked) return 'sync-passphrase';
-      if (this.legacy !== null && hasLegacy(this.legacy)) return 'migrate';
+      if (this.legacy !== null && this.legacyPending) return 'migrate';
       return 'ready';
+    },
+    /** Something legacy still needs moving, deleting or the user's answer. */
+    legacyPending(): boolean {
+      const l = this.legacy;
+      if (l === null || !hasLegacy(l)) return false;
+      const readLeft = l.account.state === 'read' || l.local.state === 'read';
+      return readLeft || (hasUnreadable(l) && !this.legacyDeferred);
+    },
+    /** Why an old copy was kept, for the migration card. */
+    legacyNotice(): string {
+      const l = this.legacy;
+      if (l === null) return '';
+      if (l.account.state === 'unreadable' && l.account.reason === 'fetch') {
+        return 'Your old saved keys on the account could not be read right now (the server did not answer). They are kept; this runs again next time.';
+      }
+      if (hasUnreadable(l)) {
+        return 'Some old saved keys could not be read with your current sync passphrase. They are kept. If you changed the sync passphrase, enter the old one to move them.';
+      }
+      return '';
     },
   },
   actions: {
@@ -107,6 +132,9 @@ export const useVaultGateStore = defineStore('vaultGate', {
       const vault = useVaultStore();
       const hosts = useHostsStore();
       if (!vault.unlocked) return;
+      // The pre-vault remembered SYNC passphrase is superseded by the
+      // remembered vault key: once the vault opens, it goes.
+      await forgetPassphrase(claimsOf(useAuthStore().idToken).sub).catch(() => undefined);
       if (!hosts.unlocked) {
         const sp = vault.syncPassphrase();
         if (sp === '' && this.mainExists) return; // ask for it (sync-passphrase step)
@@ -147,6 +175,7 @@ export const useVaultGateStore = defineStore('vaultGate', {
         return;
       }
       this.legacy = await readLegacy(hosts.passphrase, useAuthStore());
+      this.failures = [];
     },
 
     async submitVaultPassphrase(passphrase: string, remember: boolean): Promise<void> {
@@ -171,31 +200,49 @@ export const useVaultGateStore = defineStore('vaultGate', {
       const hosts = useHostsStore();
       const syncPassphrase = hosts.unlocked ? hosts.passphrase : passphrase;
       await useVaultStore().create(passphrase, syncPassphrase, remember);
+      await forgetPassphrase(claimsOf(useAuthStore().idToken).sub).catch(() => undefined);
       if (!hosts.unlocked) await hosts.unlock(syncPassphrase);
       this.seedSyncStore();
       await this.checkLegacy();
     },
 
-    /** Move legacy credentials in; delete the legacy copies only when every
-     * one of them made it (or nothing was left to move). */
+    /** Move the READ legacy copies in; delete them only when every one of
+     * their credentials made it. Unreadable copies are never touched here. */
     async migrate(keyPassphrases: Record<string, string> = {}): Promise<void> {
       if (this.legacy === null) return;
-      const result = await migrateLegacy(useVaultStore().core(), this.legacy.items, keyPassphrases);
+      const items = legacyItems(this.legacy);
+      const result = await migrateLegacy(useVaultStore().core(), items, keyPassphrases);
       useVaultStore().refresh();
       await useVaultStore().mirrorToHostList();
       this.failures = result.failed;
-      if (result.failed.length === 0) await this.finishMigration();
-      else {
-        const left = new Set(result.failed.map((f) => f.host));
-        this.legacy = { ...this.legacy, items: this.legacy.items.filter((i) => left.has(i.hostAlias)) };
+      if (result.failed.length === 0) {
+        this.legacy = await deleteLegacy(this.legacy, useAuthStore());
       }
     },
 
-    /** Also the explicit "drop what could not be moved" path. */
+    /** Retry the copies this sync passphrase did not open with an old one. */
+    async openLegacyWith(passphrase: string): Promise<void> {
+      if (this.legacy === null) return;
+      this.legacy = await openLegacyWith(this.legacy, passphrase);
+    },
+
+    /** "Skip these": drop the credentials that would not move from the
+     * read copies (the user confirmed); unreadable copies stay. */
     async finishMigration(): Promise<void> {
-      await deleteLegacy(useAuthStore(), claimsOf(useAuthStore().idToken).sub);
-      this.legacy = null;
+      if (this.legacy === null) return;
+      this.legacy = await deleteLegacy(this.legacy, useAuthStore());
       this.failures = [];
+    },
+
+    /** Explicit, confirmed: also delete the copies that could not be read. */
+    async deleteUnreadableLegacy(): Promise<void> {
+      if (this.legacy === null) return;
+      this.legacy = await deleteLegacy(this.legacy, useAuthStore(), { unreadable: true });
+    },
+
+    /** Continue without the unreadable copies for this session. */
+    deferLegacy(): void {
+      this.legacyDeferred = true;
     },
 
     reset(): void {

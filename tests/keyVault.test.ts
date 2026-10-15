@@ -36,9 +36,12 @@ vi.hoisted(() => {
 const server = vi.hoisted(() => ({
   slots: new Map<string, { version: number; data: string }>(),
   pushes: [] as { slot: string; data: string }[],
+  /** Slots whose GET fails like a 5xx / network error. */
+  failPull: new Set<string>(),
   reset() {
     server.slots.clear();
     server.pushes.length = 0;
+    server.failPull.clear();
   },
 }));
 
@@ -64,6 +67,7 @@ vi.mock('../src/api/sync', () => {
     NotSignedInError,
     makeSyncService: () => ({
       pull: async (slot: string) => {
+        if (server.failPull.has(slot)) throw new SyncApiError(503, 'sync API returned HTTP 503');
         const s = server.slots.get(slot);
         return s ? { slot, version: s.version, data: s.data } : null;
       },
@@ -184,6 +188,24 @@ describe('first setup and unlock', () => {
     expect(vault.retryAt).toBeGreaterThan(Date.now());
     await expect(vault.unlock(VAULT_PASS, false)).rejects.toThrow(/Try again in/);
     expect(vault.unlocked).toBe(false);
+  });
+
+  it('the pre-vault remembered sync passphrase goes when the vault opens, and on sign-out (review item 7)', async () => {
+    await seedMain([host('box')]);
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await gate.createVault(VAULT_PASS, false);
+    await rememberPassphrase(SUB, SYNC_PASS); // e.g. another tab of the old build
+    newTab();
+    await useVaultGateStore().open();
+    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+    expect(localStorage.getItem(`ps.passVault.${SUB}`)).toBeNull();
+
+    await rememberPassphrase(SUB, SYNC_PASS);
+    const { WebSync } = await import('../src/platform/webSync');
+    await new WebSync().logout();
+    expect(localStorage.getItem(`ps.passVault.${SUB}`)).toBeNull();
   });
 
   it('remember on this device unlocks silently next time; type-every-time does not; sign-out forgets', async () => {
@@ -484,6 +506,71 @@ describe('hard-cut migration of the legacy keys slot', () => {
     await gate.migrate();
     expect(vault.bindings.box.keyId).toBe(r.entry.keyId);
     expect(localStorage.getItem('ps.hostKeys')).toBeNull();
+  });
+});
+
+describe('legacy migration never deletes what it could not read (review item 1)', () => {
+  it('A: the account slot fails to load while a local cache exists: only the local copy is migrated and deleted', async () => {
+    await seedMain([host('box'), host('local')]);
+    server.slots.set('keys', {
+      version: 3,
+      data: await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { box: { privateKeyPem: plainKey } } }), SYNC_PASS),
+    });
+    localStorage.setItem('ps.hostKeys', await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { local: { privateKeyPem: otherKey } } }), SYNC_PASS));
+    server.failPull.add('keys');
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await gate.createVault(VAULT_PASS, false);
+    await gate.migrate();
+    expect(useHostsStore().secretHosts).toEqual(['local']);
+    expect(localStorage.getItem('ps.hostKeys')).toBeNull();
+    expect(server.slots.has('keys')).toBe(true); // unread: kept
+    expect(gate.legacyNotice).toMatch(/could not be read/);
+
+    // Next open, the slot loads: it migrates and only then goes.
+    server.failPull.delete('keys');
+    await gate.checkLegacy();
+    await gate.migrate();
+    expect(useHostsStore().secretHosts.sort()).toEqual(['box', 'local']);
+    expect(server.slots.has('keys')).toBe(false);
+  });
+
+  it('B: a slot under an older sync passphrase is kept, and opens with that passphrase', async () => {
+    await seedMain([host('box')]);
+    server.slots.set('keys', {
+      version: 3,
+      data: await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { box: { privateKeyPem: plainKey } } }), 'an older sync passphrase'),
+    });
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await gate.createVault(VAULT_PASS, false);
+    expect(gate.step).toBe('migrate');
+    await gate.migrate();
+    expect(server.slots.has('keys')).toBe(true);
+    expect(gate.legacyNotice).toMatch(/could not be read/);
+
+    await expect(gate.openLegacyWith('wrong old passphrase')).rejects.toThrow();
+    await gate.openLegacyWith('an older sync passphrase');
+    await gate.migrate();
+    expect(useHostsStore().secretHosts).toEqual(['box']);
+    expect(server.slots.has('keys')).toBe(false);
+    expect(gate.step).toBe('ready');
+  });
+
+  it('B2: one malformed entry makes the slot unreadable, and it is kept', async () => {
+    await seedMain([host('box')]);
+    server.slots.set('keys', {
+      version: 1,
+      data: await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { box: { privateKeyPem: plainKey }, '': 'junk' } }), SYNC_PASS),
+    });
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await gate.createVault(VAULT_PASS, false);
+    await gate.migrate();
+    expect(server.slots.has('keys')).toBe(true);
   });
 });
 
