@@ -155,7 +155,7 @@ beforeEach(() => {
 });
 
 describe('first setup and unlock', () => {
-  it('a brand-new account creates the vault, and its passphrase also encrypts the host list', async () => {
+  it('a brand-new account creates the vault; the host list gets a generated sync passphrase, never the vault one', async () => {
     const gate = useVaultGateStore();
     expect(await gate.open()).toBe('create-vault');
     await gate.createVault(VAULT_PASS, false);
@@ -165,6 +165,11 @@ describe('first setup and unlock', () => {
     expect(JSON.parse(header)).toMatchObject({ v: 1, epoch: 1, kdf: { alg: 'argon2id' } });
 
     await useHostsStore().saveHost(host('box'));
+    // Decision #7: the vault passphrase must not open `main` (a cheap
+    // PBKDF2 oracle for it); a generated 32-byte passphrase does, from the index.
+    await expect(decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS)).rejects.toThrow();
+    expect(useVaultStore().syncPassphrase()).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    await decryptEnvelope(server.slots.get('main')!.data, useVaultStore().syncPassphrase());
     newDevice();
     expect(await useVaultGateStore().open()).toBe('vault-locked');
     await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
@@ -452,7 +457,9 @@ describe('hard-cut migration of the legacy keys slot', () => {
     const gate = useVaultGateStore();
     // The pre-vault remembered sync passphrase opens the list silently.
     expect(await gate.open()).toBe('create-vault');
-    await gate.createVault(SYNC_PASS, false); // "keep using my sync passphrase"
+    // Reusing the sync passphrase is refused (decision #7).
+    await expect(gate.createVault(SYNC_PASS, false)).rejects.toThrow(/different from your sync passphrase/);
+    await gate.createVault(VAULT_PASS, false);
     expect(gate.step).toBe('migrate');
     await gate.migrate();
     expect(gate.failures).toEqual([]);
@@ -571,6 +578,83 @@ describe('legacy migration never deletes what it could not read (review item 1)'
     await gate.createVault(VAULT_PASS, false);
     await gate.migrate();
     expect(server.slots.has('keys')).toBe(true);
+  });
+});
+
+describe('the vault passphrase never encrypts the host list (decision #7)', () => {
+  it('a vault passphrase that opens the existing host list is refused at setup', async () => {
+    await seedMain([host('box')]);
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await expect(gate.createVault(SYNC_PASS, false)).rejects.toThrow(/different from your sync passphrase/);
+    expect(server.slots.has('vault')).toBe(false);
+    await gate.createVault(VAULT_PASS, false);
+    expect(useVaultStore().syncPassphrase()).toBe(SYNC_PASS);
+  });
+
+  it('change passphrase refuses the sync passphrase', async () => {
+    await seedMain([host('box')]);
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await gate.createVault(VAULT_PASS, false);
+    await expect(gate.changePassphrase(VAULT_PASS, SYNC_PASS)).rejects.toThrow(/different from your sync passphrase/);
+    await gate.changePassphrase(VAULT_PASS, 'a fresh vault passphrase');
+  });
+
+  it('an account set up with equal passphrases is offered a one-click re-secure of its host list', async () => {
+    await seedMain([host('box')], VAULT_PASS);
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(VAULT_PASS);
+    // The old build allowed this; create it below the gate's check.
+    await useVaultStore().create(VAULT_PASS, VAULT_PASS, false);
+    newDevice();
+    await useVaultGateStore().open();
+    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+    expect(useVaultGateStore().step).toBe('resecure');
+    await useVaultGateStore().resecureHostList();
+    expect(useVaultGateStore().step).toBe('ready');
+    await expect(decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS)).rejects.toThrow();
+    const fresh = useVaultStore().syncPassphrase();
+    expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.parse(await decryptEnvelope(server.slots.get('main')!.data, fresh)).hosts[0].name).toBe('box');
+    newDevice();
+    await useVaultGateStore().open();
+    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+    expect(useVaultGateStore().step).toBe('ready');
+    expect(useHostsStore().hosts.map((h) => h.name)).toEqual(['box']);
+  });
+
+  it('reset: a new passphrase equal to the sync passphrase is refused; forgot-too gets a generated one', async () => {
+    await seedMain([host('box')]);
+    const gate = useVaultGateStore();
+    await gate.open();
+    await gate.submitSyncPassphrase(SYNC_PASS);
+    await gate.createVault(VAULT_PASS, false);
+    await expect(gate.resetVault(SYNC_PASS, { mode: 'known' }, false)).rejects.toThrow(/different from your sync passphrase/);
+    await gate.resetVault('the new vault passphrase', { mode: 'forgot' }, false);
+    expect(server.slots.has('main') ? JSON.parse(await decryptEnvelope(server.slots.get('main')!.data, useVaultStore().syncPassphrase())).hosts : []).toEqual([]);
+    expect(useVaultStore().syncPassphrase()).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(useVaultStore().syncPassphrase()).not.toBe('the new vault passphrase');
+  });
+});
+
+describe('a newer-format vault is never reset (review item 3)', () => {
+  it('opening shows an update error; reset refuses and wipes nothing', async () => {
+    await seedMain([host('box')]);
+    const newer = { v: 2, vaultId: 'AAAAAAAAAAAAAAAAAAAAAA', epoch: 1, future: true };
+    server.slots.set('vault', { version: 4, data: JSON.stringify(newer) });
+    server.slots.set('vk-AAAAAAAAAAAAAAAAAAAAAA', { version: 1, data: '{"v":2}' });
+    const gate = useVaultGateStore();
+    expect(await gate.open()).toBe('error');
+    expect(gate.error).toMatch(/newer version of PocketShell/);
+    await expect(useVaultStore().reset('a brand new passphrase', { hosts: {}, syncPassphrase: SYNC_PASS }, false)).rejects.toThrow(
+      /newer version of PocketShell/,
+    );
+    expect(server.slots.get('vault')!.data).toBe(JSON.stringify(newer));
+    expect(server.slots.has('vk-AAAAAAAAAAAAAAAAAAAAAA')).toBe(true);
   });
 });
 

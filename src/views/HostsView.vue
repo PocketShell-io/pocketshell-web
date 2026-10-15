@@ -105,6 +105,22 @@ async function unlock() {
   }
 }
 
+const resecuring = ref(false);
+const resecureError = ref('');
+
+async function resecure() {
+  resecuring.value = true;
+  resecureError.value = '';
+  try {
+    await gate.resecureHostList();
+    if (gate.step === 'ready') void warnings.sweep().catch(() => {});
+  } catch (e) {
+    resecureError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    resecuring.value = false;
+  }
+}
+
 function onVaultUnlocked() {
   if (gate.step === 'ready') void warnings.sweep().catch(() => {});
 }
@@ -423,6 +439,33 @@ async function open(host: HostEntry) {
     </section>
 
     <VaultSetupCard v-else-if="gate.step === 'create-vault'" />
+
+    <section v-else-if="gate.step === 'resecure'" class="unlock-card" aria-labelledby="resecure-title">
+      <div class="unlock-mark" aria-hidden="true">&gt;_</div>
+      <h1 id="resecure-title">Re-secure your host list</h1>
+      <p class="unlock-lede">
+        Your vault passphrase also opens your synced host list, which is protected more weakly than your keys. Re-secure
+        it: the host list gets a new random passphrase that only your vault knows, and you keep typing just your vault
+        passphrase.
+      </p>
+      <p class="muted fine-note">
+        The PocketShell desktop app still asks for the sync passphrase. After this it can open your host list only once
+        it supports the key vault.
+      </p>
+      <div class="form-actions">
+        <button class="primary" type="button" :disabled="resecuring" @click="resecure">
+          {{ resecuring ? 'Re-securing…' : 'Re-secure host list' }}
+        </button>
+        <button type="button" :disabled="resecuring" @click="gate.deferResecure()">Not now</button>
+      </div>
+      <p v-if="resecureError" class="error" role="alert">{{ resecureError }}</p>
+    </section>
+
+    <section v-else-if="gate.step === 'error'" class="unlock-card" role="alert">
+      <h1>Your account couldn't be opened</h1>
+      <p class="error">{{ gate.error }}</p>
+      <button type="button" @click="gate.open()">Try again</button>
+    </section>
 
     <MigrationCard v-else-if="gate.step === 'migrate'" />
 

@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
-import { SYNC_SLOT } from '@pocketshell/core';
-import { makeSyncService } from '../api/sync';
 import { claimsOf, renderLoginButton } from '../auth/google';
-import { decryptEnvelope } from '../shared/syncCrypto';
 import { useAuthStore } from '../stores/auth';
 import { useHostsStore } from '../stores/hosts';
 import { useVaultStore } from '../stores/vault';
@@ -17,7 +14,8 @@ import NewPassphraseFields from './NewPassphraseFields.vue';
  * bindings and the sync passphrase carry over when this tab still knows them
  * (it is unlocked); otherwise the sync passphrase is asked for and checked
  * against the host list — or, if that is forgotten too, the host list is
- * deleted as well.
+ * deleted as well and a generated sync passphrase starts a new one. The new
+ * vault passphrase must differ from the sync passphrase (decision #7).
  */
 const emit = defineEmits<{ done: []; cancel: [] }>();
 
@@ -88,36 +86,13 @@ async function runReset() {
   busy.value = true;
   error.value = '';
   try {
-    let syncPassphrase: string;
-    let wipeHostList = false;
-    if (syncMode.value === 'known') {
-      syncPassphrase = knownSync!;
-    } else if (syncMode.value === 'forgot' || !gate.mainExists) {
-      // No usable host list: the new vault passphrase encrypts a fresh one.
-      syncPassphrase = newPassphrase.value;
-      wipeHostList = gate.mainExists;
-    } else {
-      // Prove the sync passphrase against the host list before the wipe.
-      const main = await makeSyncService(auth).pull(SYNC_SLOT);
-      if (main !== null) {
-        try {
-          await decryptEnvelope(main.data, syncInput.value);
-        } catch {
-          error.value = "That sync passphrase doesn't open your host list. Nothing was reset.";
-          return;
-        }
-      }
-      syncPassphrase = syncInput.value;
-    }
-    await vault.reset(newPassphrase.value, { hosts: carry.hosts, syncPassphrase }, remember.value === 'remember');
-    if (wipeHostList) {
-      await makeSyncService(auth).remove(SYNC_SLOT);
-      gate.mainExists = false;
-    }
-    hosts.signOutLocal();
-    await hosts.unlock(syncPassphrase);
-    gate.seedSyncStore();
-    await gate.checkLegacy();
+    const sync =
+      syncMode.value === 'known'
+        ? ({ mode: 'known' } as const)
+        : syncMode.value === 'enter' && gate.mainExists
+          ? ({ mode: 'enter', passphrase: syncInput.value } as const)
+          : ({ mode: 'forgot' } as const);
+    await gate.resetVault(newPassphrase.value, sync, remember.value === 'remember');
     step.value = 'done';
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);

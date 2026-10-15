@@ -159,7 +159,7 @@ async function changePassphrase() {
   changeBusy.value = true;
   changeError.value = '';
   try {
-    await vault.changePassphrase(currentPass.value, nextPass.value);
+    await gate.changePassphrase(currentPass.value, nextPass.value);
     currentPass.value = '';
     newFields.value?.clear();
     changeOpen.value = false;
@@ -182,11 +182,18 @@ function created(iso: string): string {
   <main class="page keys-page">
     <h1>Keys</h1>
 
-    <VaultResetFlow v-if="resetOpen" @done="onResetDone" @cancel="closeReset" />
-
-    <template v-else-if="gate.step === 'checking'">
+    <!-- Reset only once the vault was probed: an unreadable (newer-format)
+         vault must be updated for, never wiped. -->
+    <template v-if="gate.step === 'checking'">
       <p class="muted" role="status">Opening your vault…</p>
     </template>
+
+    <section v-else-if="gate.step === 'error'" class="muted-card" role="alert">
+      <p class="error">{{ gate.error }}</p>
+      <button type="button" @click="gate.open()">Try again</button>
+    </section>
+
+    <VaultResetFlow v-else-if="resetOpen" @done="onResetDone" @cancel="closeReset" />
 
     <section v-else-if="gate.step === 'vault-locked'" class="unlock-card" aria-labelledby="keys-unlock">
       <h2 id="keys-unlock">Unlock your vault</h2>

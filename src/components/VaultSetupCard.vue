@@ -7,20 +7,19 @@ import NewPassphraseFields from './NewPassphraseFields.vue';
 /**
  * First setup (design section 5): create the account's vault passphrase.
  * One passphrase from now on — the vault also carries the sync passphrase.
- * An upgrading account may simply keep its sync passphrase as the vault
- * passphrase.
+ * It must differ from the sync passphrase (decision #7): the host list is
+ * protected more weakly and would otherwise be a cheap way to guess it.
  */
 const hosts = useHostsStore();
 const gate = useVaultGateStore();
-const reuse = ref<'new' | 'sync'>('new');
 const fresh = ref('');
 const remember = ref<'every-time' | 'remember'>('every-time');
 const understood = ref(false);
 const busy = ref(false);
 const error = ref('');
 
-const canReuse = computed(() => hosts.unlocked && hosts.passphrase !== '');
-const chosen = computed(() => (canReuse.value && reuse.value === 'sync' ? hosts.passphrase : fresh.value));
+const hasHostList = computed(() => hosts.unlocked && gate.mainExists);
+const chosen = computed(() => fresh.value);
 
 async function create() {
   if (chosen.value === '' || !understood.value) return;
@@ -45,18 +44,11 @@ async function create() {
       account. One passphrase unlocks your keys and your host list on every device.
     </p>
     <form class="unlock-form" @submit.prevent="create">
-      <fieldset v-if="canReuse" class="choice">
-        <legend class="flabel">Passphrase</legend>
-        <label class="unlock-remember">
-          <input v-model="reuse" type="radio" value="new" name="setup-reuse" />
-          <span>Choose a new vault passphrase</span>
-        </label>
-        <label class="unlock-remember">
-          <input v-model="reuse" type="radio" value="sync" name="setup-reuse" />
-          <span>Keep using my sync passphrase</span>
-        </label>
-      </fieldset>
-      <NewPassphraseFields v-if="!canReuse || reuse === 'new'" id-prefix="setup" @update:valid="fresh = $event" />
+      <p v-if="hasHostList" class="muted fine">
+        Use a passphrase different from your sync passphrase. After this you only type the vault passphrase; it opens
+        your host list too.
+      </p>
+      <NewPassphraseFields id-prefix="setup" @update:valid="fresh = $event" />
 
       <p class="warn-text">
         <strong>If you forget it, your keys cannot be recovered.</strong> You'll reset the vault and upload them
@@ -111,6 +103,11 @@ async function create() {
   border-radius: 6px;
   font-size: var(--text-small);
   color: var(--fg);
+}
+
+.fine {
+  margin: 12px 0 0;
+  font-size: var(--text-small);
 }
 
 .create {

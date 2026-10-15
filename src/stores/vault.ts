@@ -461,6 +461,7 @@ export const useVaultStore = defineStore('vault', {
         if (res.kind === 'ok') await this.applyRemember(remember);
         return res;
       });
+      if (r.kind === 'unsupportedVersion') throw new Error(UNSUPPORTED_VERSION_MESSAGE);
       if (r.kind === 'freshAuthRequired') throw new Error('Sign in with Google again (within the last 5 minutes) to reset the vault.');
       if (r.kind === 'exists') throw new Error('A new vault was just created on another device. Reload and unlock it.');
       if (r.kind === 'indexFull') throw new Error(describeWriteFailure(r));

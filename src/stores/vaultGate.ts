@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { SYNC_SLOT } from '@pocketshell/core';
+import { generateSyncPassphrase, SYNC_SLOT, vaultPassphraseReusesSync, type HostKeyBinding } from '@pocketshell/core';
 import { useSyncStore } from '@ui/app/stores/sync';
 import { makeSyncService } from '../api/sync';
 import { claimsOf } from '../auth/google';
@@ -36,6 +36,11 @@ export type GateStep =
   | 'create-vault'
   /** Vault open, legacy credentials still around: move them in. */
   | 'migrate'
+  /** The vault passphrase also opens the host list (set up by an older
+   * build): offer to re-encrypt the list under a generated passphrase. */
+  | 'resecure'
+  /** The account could not be opened at all (gate.error says why). */
+  | 'error'
   | 'ready';
 
 /**
@@ -52,18 +57,23 @@ export const useVaultGateStore = defineStore('vaultGate', {
     /** The user chose to continue without the unreadable old copies (this
      * session only; they are kept and offered again next time). */
     legacyDeferred: false,
+    /** The vault passphrase just typed also opens `main` (decision #7). */
+    needsResecure: false,
+    resecureDeferred: false,
     error: '',
   }),
   getters: {
     step(): GateStep {
       const vault = useVaultStore();
       const hosts = useHostsStore();
-      if (!this.checked || vault.phase === 'unknown') return 'checking';
+      if (!this.checked) return 'checking';
+      if (vault.phase === 'unknown') return this.error !== '' ? 'error' : 'checking';
       if (vault.phase === 'locked') return 'vault-locked';
       if (vault.phase === 'absent') {
         return hosts.unlocked || !this.mainExists ? 'create-vault' : 'sync-passphrase';
       }
       if (!hosts.unlocked) return 'sync-passphrase';
+      if (this.needsResecure && !this.resecureDeferred) return 'resecure';
       if (this.legacy !== null && this.legacyPending) return 'migrate';
       return 'ready';
     },
@@ -181,6 +191,100 @@ export const useVaultGateStore = defineStore('vaultGate', {
     async submitVaultPassphrase(passphrase: string, remember: boolean): Promise<void> {
       await useVaultStore().unlock(passphrase, remember);
       await this.afterVault();
+      // An older build let the vault passphrase double as the sync one.
+      this.needsResecure = await vaultPassphraseReusesSync(passphrase, { syncPassphrase: useVaultStore().syncPassphrase() });
+    },
+
+    /** Decision #7's check for a NEW vault passphrase. */
+    async assertNotSync(passphrase: string, syncPassphrase: string | null): Promise<void> {
+      const hosts = useHostsStore();
+      const reuses = await vaultPassphraseReusesSync(passphrase, {
+        syncPassphrase,
+        opensHostList: this.mainExists ? (p) => hosts.opensHostList(p) : undefined,
+      });
+      if (reuses) {
+        throw new Error(
+          'Choose a vault passphrase different from your sync passphrase. The host list is protected more weakly, so sharing one passphrase would expose your keys.',
+        );
+      }
+    },
+
+    /** Change the vault passphrase (never to the sync passphrase). */
+    async changePassphrase(current: string, next: string): Promise<void> {
+      await this.assertNotSync(next, useVaultStore().syncPassphrase() || null);
+      await useVaultStore().changePassphrase(current, next);
+      this.needsResecure = false;
+    },
+
+    /**
+     * Re-encrypt the host list under a generated sync passphrase and record
+     * it in the index. `main` first, then the index; if the index write
+     * fails, `main` goes back to the old passphrase so nothing is stranded.
+     */
+    async resecureHostList(): Promise<void> {
+      const hosts = useHostsStore();
+      const vault = useVaultStore();
+      const old = hosts.passphrase;
+      const fresh = generateSyncPassphrase();
+      await hosts.reencrypt(fresh);
+      try {
+        await vault.setSyncPassphrase(fresh);
+      } catch (err) {
+        hosts.passphrase = fresh;
+        await hosts.reencrypt(old).catch(() => undefined);
+        throw err;
+      }
+      try {
+        useSyncStore().passphrase = fresh;
+      } catch {
+        // optional
+      }
+      this.needsResecure = false;
+    },
+
+    deferResecure(): void {
+      this.resecureDeferred = true;
+    },
+
+    /**
+     * Forgot passphrase, after a fresh Google sign-in. The sync passphrase
+     * the new vault records: the one this tab knows (`known`), one the user
+     * typed and that opens the host list (`enter`), or — `forgot`, or no
+     * host list at all — a generated one, the old list being deleted.
+     */
+    async resetVault(
+      passphrase: string,
+      sync: { mode: 'known' } | { mode: 'enter'; passphrase: string } | { mode: 'forgot' },
+      remember: boolean,
+    ): Promise<void> {
+      const hosts = useHostsStore();
+      const vault = useVaultStore();
+      const carry = vault.carryForReset();
+      const known = carry.syncPassphrase ?? (hosts.unlocked ? hosts.passphrase : null);
+      let syncPassphrase: string;
+      let wipeHostList = false;
+      if (sync.mode === 'known' && known !== null && known !== '') {
+        syncPassphrase = known;
+      } else if (sync.mode === 'enter' && this.mainExists) {
+        if (!(await hosts.opensHostList(sync.passphrase))) {
+          throw new Error("That sync passphrase doesn't open your host list. Nothing was reset.");
+        }
+        syncPassphrase = sync.passphrase;
+      } else {
+        syncPassphrase = generateSyncPassphrase();
+        wipeHostList = this.mainExists;
+      }
+      if (!wipeHostList) await this.assertNotSync(passphrase, syncPassphrase);
+      await vault.reset(passphrase, { hosts: carry.hosts as Record<string, HostKeyBinding>, syncPassphrase }, remember);
+      if (wipeHostList) {
+        await makeSyncService(useAuthStore()).remove(SYNC_SLOT);
+        this.mainExists = false;
+      }
+      hosts.signOutLocal();
+      await hosts.unlock(syncPassphrase);
+      this.needsResecure = false;
+      this.seedSyncStore();
+      await this.checkLegacy();
     },
 
     /** The sync passphrase step: opens `main`; keeps the vault index in step. */
@@ -193,12 +297,15 @@ export const useVaultGateStore = defineStore('vaultGate', {
       if (vault.unlocked) await this.checkLegacy();
     },
 
-    /** First setup. The vault records the sync passphrase this tab already
-     * holds; a brand-new account's list is encrypted with the vault
-     * passphrase itself. */
+    /** First setup. The vault records the sync passphrase of an existing
+     * host list (and must differ from it); an account without one gets a
+     * generated sync passphrase, held only in the vault index. */
     async createVault(passphrase: string, remember: boolean): Promise<void> {
       const hosts = useHostsStore();
-      const syncPassphrase = hosts.unlocked ? hosts.passphrase : passphrase;
+      const existing = hosts.unlocked && this.mainExists ? hosts.passphrase : null;
+      await this.assertNotSync(passphrase, existing);
+      const syncPassphrase = existing ?? generateSyncPassphrase();
+      if (hosts.unlocked && hosts.passphrase !== syncPassphrase) hosts.signOutLocal();
       await useVaultStore().create(passphrase, syncPassphrase, remember);
       await forgetPassphrase(claimsOf(useAuthStore().idToken).sub).catch(() => undefined);
       if (!hosts.unlocked) await hosts.unlock(syncPassphrase);

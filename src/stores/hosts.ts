@@ -125,6 +125,44 @@ export const useHostsStore = defineStore('hosts', {
       if (changed.length > 0) await this.pushUpserted(changed);
     },
 
+    /** Does `passphrase` open the account's host list? (Decision #7: a
+     * vault passphrase that does is refused.) */
+    async opensHostList(passphrase: string): Promise<boolean> {
+      const blob = await makeSyncService(useAuthStore()).pull(SYNC_SLOT);
+      if (blob === null) return false;
+      try {
+        await decryptEnvelope(blob.data, passphrase);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    /**
+     * Re-encrypt `main` under a new sync passphrase: re-pull, decrypt with
+     * the current one, push on the pulled version (409 re-pulls and retries).
+     */
+    async reencrypt(next: string): Promise<void> {
+      const sync = makeSyncService(useAuthStore());
+      for (let attempt = 0; ; attempt++) {
+        const blob = await sync.pull(SYNC_SLOT);
+        if (blob === null) {
+          this.passphrase = next;
+          return;
+        }
+        const plaintext = await decryptEnvelope(blob.data, this.passphrase);
+        try {
+          const { version } = await sync.push(SYNC_SLOT, await encryptToEnvelope(plaintext, next), blob.version);
+          this.version = version;
+          this.hosts = parseSyncPayload(plaintext);
+          this.passphrase = next;
+          return;
+        } catch (err) {
+          if (!(err instanceof SyncConflictError) || attempt >= 2) throw err;
+        }
+      }
+    },
+
     /** The host's credential, decrypted from the vault into memory.
      * Throws VaultLockedError while the vault is locked. */
     async getHostSecret(name: string): Promise<HostSecret | undefined> {
