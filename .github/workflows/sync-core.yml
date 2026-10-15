@@ -1,18 +1,9 @@
-# Keeps the live site in lockstep with @pocketshell/core — the repo where the
-# shared contract layer AND the shared interface package (@pocketshell/ui)
-# now live, so a change merged there must reach the web without anyone
-# touching this repo.
-#
-# Every 15 minutes: compare the core commit the deployed bundle was built
-# from (served as /core-sha.txt by the site itself — the deployed artifact is
-# the state, there is no branch or variable to keep in step) against core
-# main. A mismatch dispatches the Deploy site workflow, which checks out the
-# new core sibling, rebuilds, and refreshes the pin.
-#
-# This is a PULL, not a push: no cross-repo PAT exists, so core cannot reach
-# into this repo — and it does not need to. The in-flight guard below also
-# absorbs a stale CloudFront read of the pin (dispatch once and let the
-# running deploy finish rather than queueing duplicates every tick).
+# Reports drift between @pocketshell/core main and the core commit this
+# site is pinned to (the `ref:` of the core checkout in test.yml and
+# deploy.yml). It never deploys: a core push must not reach users without a
+# reviewed pin bump in this repo (key-vault review item 6). Every 15
+# minutes: compare the live /core-sha.txt and the pin with core main, and
+# leave a warning on the run when they differ.
 name: sync core
 
 on:
@@ -22,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
   group: sync-core
@@ -35,23 +25,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compare the live core pin with core main
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Compare the live and pinned core with core main
         run: |
           set -euo pipefail
-          live="$(curl -fsSL --max-time 20 "https://app.pocketshell.io/core-sha.txt?nocache=$RANDOM" | tr -d '[:space:]')"
+          live="$(curl -fsSL --max-time 20 "https://app.pocketshell.io/core-sha.txt?nocache=$RANDOM" | tr -d '[:space:]' || echo unknown)"
+          pin="$(sed -n 's/^ *ref: \([0-9a-f]\{40\}\) *$/\1/p' .github/workflows/deploy.yml | head -1)"
           head="$(git ls-remote https://github.com/PocketShell-io/pocketshell-core refs/heads/main | cut -f1)"
-          echo "live pin: $live"
+          echo "live: $live"
+          echo "pinned: $pin"
           echo "core main: $head"
-          if [ "$live" = "$head" ]; then
-            echo "site is in lockstep with core main"
-            exit 0
+          if [ "$live" != "$pin" ]; then
+            echo "::warning::the live site ($live) is not built from the pinned core ($pin); merge or redeploy main"
           fi
-          if gh run list --workflow deploy.yml --limit 1 --json status \
-             --jq '.[0].status | select(. == "in_progress" or . == "queued")' | grep -q .; then
-            echo "a deploy is already in flight for this change; re-checking after it lands"
-            exit 0
+          if [ "$head" != "$pin" ]; then
+            echo "::warning::core main ($head) moved past the pinned core ($pin); review it and bump the ref in test.yml + deploy.yml by PR"
           fi
-          echo "core main moved past the deployed pin - dispatching Deploy site"
-          gh workflow run deploy.yml --ref main

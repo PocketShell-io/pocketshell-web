@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
-const REQUIRED = ['gatewayDialRefusal.test.ts', 'dialPathsRefusal.test.ts'];
+const REQUIRED = ['gatewayDialRefusal.test.ts', 'dialPathsRefusal.test.ts', 'keyVault.test.ts', 'corePin.test.ts'];
 
 const path = process.argv[2] ?? 'vitest-results.json';
 const report = JSON.parse(readFileSync(path, 'utf8'));
