@@ -3,7 +3,7 @@ import { makeSyncService, SyncConflictError } from '../api/sync';
 import { SYNC_SLOT } from '@pocketshell/core';
 import { parseSyncPayload, serializeSyncPayload } from '@pocketshell/core';
 import { decryptEnvelope, encryptToEnvelope } from '../shared/syncCrypto';
-import type { HostEntry } from '@pocketshell/core';
+import { mirrorGatewayAuth, type HostEntry, type HostKeyBinding } from '@pocketshell/core';
 import { upsertHost } from '../hostForm';
 import { useAuthStore } from './auth';
 import { useVaultStore } from './vault';
@@ -111,6 +111,18 @@ export const useHostsStore = defineStore('hosts', {
           baseVersion = blob.version;
         }
       }
+    },
+
+    /**
+     * Mirror the vault's per-host gateway policy onto the synced entries
+     * (design s7), so the host agent side and other clients can read it
+     * without the vault. Pushes only when something changed.
+     */
+    async mirrorGatewayAuth(bindings: Record<string, HostKeyBinding>): Promise<void> {
+      if (!this.unlocked) return;
+      const next = mirrorGatewayAuth(this.hosts, bindings);
+      const changed = next.filter((h, i) => h.gatewayAuth !== this.hosts[i]?.gatewayAuth);
+      if (changed.length > 0) await this.pushUpserted(changed);
     },
 
     /** The host's credential, decrypted from the vault into memory.

@@ -182,6 +182,7 @@ export const useVaultGateStore = defineStore('vaultGate', {
       if (this.legacy === null) return;
       const result = await migrateLegacy(useVaultStore().core(), this.legacy.items, keyPassphrases);
       useVaultStore().refresh();
+      await useVaultStore().mirrorToHostList();
       this.failures = result.failed;
       if (result.failed.length === 0) await this.finishMigration();
       else {

@@ -64,15 +64,14 @@ ssh-keygen -t ed25519 -N 'e2e-key-passphrase' -C pocketshell-web-e2e -f "$WORK/k
 chmod 600 "$WORK/key_enc"
 docker exec -i "$CNAME" sh -c 'cat >> /home/testuser/.ssh/authorized_keys && chmod 600 /home/testuser/.ssh/authorized_keys' < "$WORK/key_enc.pub"
 
-# The config the browser will import. Each host gets its own loopback
-# address: the shared connect request carries no host alias, so the web
-# resolves the synced entry by address (follow-up: send the alias).
-# The config the browser will import. The canary comment must appear in NO
+# The config the browser will import. All three hosts share one address on
+# purpose: the shared connect request names its host alias, and that alias,
+# not the address, picks the vault key. The canary comment must appear in NO
 # request body; the wildcard patterns must be skipped, not imported.
 cat > "$WORK/import.config" <<EOF
 # e2e-canary-7f3k4m — if this string leaves the browser, the test fails
 Host dockertest
-  HostName 127.0.0.2
+  HostName 127.0.0.1
   Port $FIXTURE_PORT
   User testuser
   IdentityFile ~/.ssh/key_enc
@@ -82,7 +81,7 @@ Host manualbox
   Port $FIXTURE_PORT
 
 Host keylesstest
-  HostName localhost
+  HostName 127.0.0.1
   Port $FIXTURE_PORT
   User testuser
 

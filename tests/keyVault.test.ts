@@ -246,6 +246,19 @@ describe('keys, bindings and connect', () => {
     expect((await useHostsStore().getHostSecret('box'))?.privateKeyPem).toContain('PRIVATE KEY');
   });
 
+  it('the host list mirrors each binding\'s gatewayAuth (design s7), and drops it on unbind', async () => {
+    await ready();
+    const vault = useVaultStore();
+    const r = await vault.addKey(plainKey, 'k');
+    if (r.kind !== 'ok') throw new Error('add failed');
+    await vault.bindHost('box', r.entry.keyId, 'managed');
+    const mainHosts = async () => JSON.parse(await decryptEnvelope(server.slots.get('main')!.data, SYNC_PASS)).hosts as HostEntry[];
+    expect((await mainHosts()).find((h) => h.name === 'box')?.gatewayAuth).toBe('managed');
+    expect((await mainHosts()).find((h) => h.name === 'relay')?.gatewayAuth).toBeUndefined();
+    await vault.bindHost('box', null);
+    expect((await mainHosts()).find((h) => h.name === 'box')?.gatewayAuth).toBeUndefined();
+  });
+
   it('an encrypted key asks for its passphrase once and is stored decrypted', async () => {
     await ready();
     const vault = useVaultStore();
@@ -490,3 +503,4 @@ describe('index carries the sync passphrase', () => {
     await decryptEnvelope(server.slots.get('main')!.data, SYNC_PASS);
   });
 });
+

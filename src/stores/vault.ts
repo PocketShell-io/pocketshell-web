@@ -342,6 +342,17 @@ export const useVaultStore = defineStore('vault', {
     async bindHost(host: string, keyId: string | null, gatewayAuth: GatewayAuth = 'both'): Promise<void> {
       throwIfFailed(keyId === null ? await this.core().unbindHost(host) : await this.core().bindHost(host, keyId, gatewayAuth));
       this.markPending([host]);
+      await this.mirrorToHostList();
+    },
+
+    /** Keep the host list's non-secret gatewayAuth flags in step with the
+     * index. Best effort: the binding itself is already saved. */
+    async mirrorToHostList(): Promise<void> {
+      if (core === null || core.store.state !== 'unlocked') return;
+      const { useHostsStore } = await import('./hosts');
+      await useHostsStore()
+        .mirrorGatewayAuth(core.store.listHostBindings())
+        .catch(() => undefined);
     },
 
     markPending(hosts: string[]): void {

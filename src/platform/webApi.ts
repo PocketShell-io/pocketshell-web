@@ -141,7 +141,16 @@ async function connectHost(payload: {
   // key lives in this browser) is the credential.
   const store = useHostsStore();
   const wantedPort = payload.port ?? 22;
+  // The alias names the host the user picked (the shared store sends it):
+  // it decides which vault binding is used. Address matching is only the
+  // fallback for requests without one, and an alias whose entry lives at a
+  // different address is not trusted to pick the credential.
+  const byAlias =
+    payload.hostAlias !== undefined && payload.hostAlias !== ''
+      ? store.hosts.find((h) => h.name === payload.hostAlias && h.hostname === payload.host && h.port === wantedPort)
+      : undefined;
   const entry: HostEntry | undefined =
+    byAlias ??
     store.hosts.find((h) => h.hostname === payload.host && h.port === wantedPort) ??
     store.hosts.find((h) => h.name === payload.privateKeyPath) ??
     store.hosts.find((h) => h.hostname === payload.host);
