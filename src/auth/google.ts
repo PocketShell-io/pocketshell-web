@@ -11,6 +11,10 @@ export interface GoogleIdClaims {
   sub: string;
   email: string;
   exp: number;
+  /** Issued-at; the vault reset's freshness check falls back to it. */
+  iat?: number;
+  /** When the user last actively authenticated, when Google includes it. */
+  auth_time?: number;
 }
 
 /** Options for `google.accounts.id.initialize`, exported for tests. */

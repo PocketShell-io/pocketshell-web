@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 const USER_FACING = [
   'index.html',
   'src/views/HostsView.vue',
+  'src/views/KeysView.vue',
+  'src/components/KeyUploadForm.vue',
   'README.md',
 ] as const;
 
@@ -25,15 +27,18 @@ describe('public claims match the credential-transfer model', () => {
   });
 
   it('the hosts screen says credentials go to the bridge only on connect', () => {
-    expect(read('src/views/HostsView.vue')).toContain('sent to the bridge only when you connect');
+    expect(read('src/views/HostsView.vue').replace(/\s+/g, ' ')).toContain('sent to the bridge only when you connect');
   });
 
   it('the config import pins its precise locality claim (the FILE stays; ticked hosts sync encrypted)', () => {
     const view = read('src/views/HostsView.vue');
     expect(view).toContain('the file itself never leaves it');
     expect(view).toContain('the config file stays in this browser');
-    // The passphrase rides the same protection as the key it unlocks.
-    expect(view).toContain('stored encrypted alongside it and used only when you connect');
+    // A key's own passphrase is used once, at upload, to decrypt it; the
+    // vault stores the key sealed under the vault passphrase instead.
+    expect(read('src/components/KeyUploadForm.vue').replace(/\s+/g, ' ')).toContain(
+      'the vault keeps the key decrypted, sealed under your vault passphrase',
+    );
   });
 
   it('the README security model keeps the verified bridge and logging facts', () => {

@@ -8,8 +8,13 @@ import { useWarningsStore } from '../stores/warnings';
 import { formatAge, type AplexerWarning } from '../aplexer/warnings';
 import { normalizeHostDraft } from '../hostForm';
 import { parseSshConfigText } from '../sshConfigImport';
-import { claimsOf } from '../auth/google';
-import { forgetPassphrase, recallPassphrase, rememberPassphrase } from '../shared/passphraseVault';
+import { useVaultStore } from '../stores/vault';
+import { useVaultGateStore } from '../stores/vaultGate';
+import type { GatewayAuthPolicy as GatewayAuth, VaultKeyEntry } from '@pocketshell/core';
+import VaultUnlockForm from '../components/VaultUnlockForm.vue';
+import VaultSetupCard from '../components/VaultSetupCard.vue';
+import MigrationCard from '../components/MigrationCard.vue';
+import KeyUploadForm from '../components/KeyUploadForm.vue';
 import type { HostEntry } from '@pocketshell/core';
 
 const auth = useAuthStore();
@@ -17,23 +22,24 @@ const connection = useConnectionStore();
 const hosts = useHostsStore();
 const warnings = useWarningsStore();
 const router = useRouter();
+const vault = useVaultStore();
+const gate = useVaultGateStore();
 
 const passphrase = ref('');
 /** Re-focused when an unlock attempt fails: the error announces, focus returns. */
 const passphraseField = ref<HTMLInputElement | null>(null);
 const unlocking = ref(false);
-/** "Remember on this computer" — stores the passphrase in the passphraseVault
- * (key in IndexedDB, ciphertext in localStorage, this account only). */
-const remember = ref(false);
-/** True while mount checks for a saved passphrase: the card waits (no
- * password-field flash, no autofocus steal) for a possible auto-unlock. */
-const checkingVault = ref(true);
-const keyDraft = ref('');
 const keyHost = ref<HostEntry | null>(null);
 const keySaved = ref('');
 const keyRemoved = ref('');
-const keyPassphrase = ref('');
-const keyFileName = ref('');
+/** The key dialog's choice: a vault entry id, or '' for none. */
+const keyChoice = ref('');
+const keyPolicy = ref<GatewayAuth>('both');
+const keyMode = ref<'pick' | 'upload' | 'password'>('pick');
+const passwordDraft = ref('');
+const passwordName = ref('');
+const keyError = ref('');
+const keyBusy = ref(false);
 
 const formOpen = ref(false);
 const draft = ref({ name: '', hostname: '', port: '22', user: '' });
@@ -68,61 +74,29 @@ function setNotice(slot: Ref<string>, message: string) {
 }
 
 onMounted(async () => {
-  try {
-    // Unsigned visitors poking /app get the sign-in screen, not a host error.
-    if (!auth.signedIn) {
-      router.replace({ name: 'login' });
-      return;
-    }
-    // Already unlocked (in-session navigation back to this view): refresh
-    // the aplexer warnings sweep here; the fresh-unlock paths sweep below.
-    // The store no-ops concurrent sweeps, so double-firing is safe.
-    if (hosts.unlocked) void warnings.sweep().catch(() => {});
-    // A saved passphrase for this account unlocks silently. Anything that
-    // fails falls through to the card: recall already dropped a stale blob,
-    // and a passphrase the server no longer accepts (changed on another
-    // device) gets forgotten here explicitly.
-    const saved = await recallPassphrase(claimsOf(auth.idToken).sub);
-    if (saved !== null && saved !== '') {
-      hosts.passphraseRemembered = true;
-      try {
-        await hosts.unlock(saved);
-        void warnings.sweep().catch(() => {});
-        return;
-      } catch {
-        hosts.passphraseRemembered = false;
-        void forgetPassphrase(claimsOf(auth.idToken).sub);
-        hosts.error = 'The saved passphrase no longer works — it was probably changed on another device.';
-      }
-    }
-  } catch {
-    // No readable vault (or no decodable token to namespace it by): the
-    // unlock card is the answer, same as it ever was.
-  } finally {
-    checkingVault.value = false;
+  // Unsigned visitors poking /app get the sign-in screen, not a host error.
+  if (!auth.signedIn) {
+    router.replace({ name: 'login' });
+    return;
   }
+  // Already open (in-session navigation back to this view): refresh the
+  // aplexer warnings sweep. Otherwise the silent open (remembered vault key
+  // -> sync passphrase from the index -> host list) runs first, and the
+  // gate's step decides the card.
+  if (gate.step !== 'ready') await gate.open();
+  if (gate.step === 'ready') void warnings.sweep().catch(() => {});
 });
 
+/** The sync-passphrase step: a pre-vault account opens its host list once,
+ * then creates the vault (or a vault whose recorded sync passphrase went
+ * stale is brought up to date). */
 async function unlock() {
   unlocking.value = true;
   hosts.error = '';
   try {
-    await hosts.unlock(passphrase.value);
-    // Credentials are in place: check every keyed host for unacknowledged
-    // aplexer warnings (issue #1). The catch keeps a freak store error from
-    // surfacing — the sweep's own contract is to degrade quietly.
-    void warnings.sweep().catch(() => {});
-    const sub = claimsOf(auth.idToken).sub;
-    if (remember.value) {
-      await rememberPassphrase(sub, passphrase.value);
-      hosts.passphraseRemembered = true;
-    } else if (hosts.passphraseRemembered) {
-      // A stale vault (the passphrase just changed somewhere else) must not
-      // survive an unticked unlock: what is saved would fail next time.
-      await forgetPassphrase(sub);
-      hosts.passphraseRemembered = false;
-    }
+    await gate.submitSyncPassphrase(passphrase.value);
     passphrase.value = '';
+    if (gate.step === 'ready') void warnings.sweep().catch(() => {});
   } catch (e) {
     hosts.error = e instanceof Error ? e.message : String(e);
     passphraseField.value?.focus();
@@ -131,11 +105,8 @@ async function unlock() {
   }
 }
 
-/** The vault's explicit exit, next to where the save is announced. The
- * unlocked session is untouched — only this browser's saved copy goes. */
-async function forgetSaved() {
-  await forgetPassphrase(claimsOf(auth.idToken).sub);
-  hosts.passphraseRemembered = false;
+function onVaultUnlocked() {
+  if (gate.step === 'ready') void warnings.sweep().catch(() => {});
 }
 
 function describe(host: HostEntry): string {
@@ -201,37 +172,64 @@ async function saveHost() {
   }
 }
 
-/* --- Private key per host ------------------------------------------------ */
+/* --- Vault key per host -------------------------------------------------- */
 
 function attachKey(host: HostEntry) {
   keyHost.value = host;
-  keyDraft.value = '';
-  keyPassphrase.value = '';
-  keyFileName.value = '';
+  const bound = vault.bindings[host.name];
+  keyChoice.value = bound?.keyId ?? '';
+  keyPolicy.value = bound?.gatewayAuth ?? 'both';
+  keyMode.value = vault.entries.length === 0 ? 'upload' : 'pick';
+  passwordDraft.value = '';
+  passwordName.value = '';
+  keyError.value = '';
   keySaved.value = '';
   formOpen.value = false;
   importOpen.value = false;
 }
 
-async function onKeyFile(ev: Event) {
-  const input = ev.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (file === undefined) return;
-  // Read locally; the key joins the encrypted local store on Save, nothing else.
-  keyDraft.value = await file.text();
-  keyFileName.value = file.name;
-  input.value = '';
+function entryLabel(e: VaultKeyEntry): string {
+  return e.type === 'password' ? `${e.name} (password)` : `${e.name} · ${e.fingerprint ?? e.type}`;
+}
+
+/** A key just uploaded from the dialog is the host's choice. */
+function onKeyUploaded(entry: VaultKeyEntry) {
+  keyChoice.value = entry.keyId;
+  keyMode.value = 'pick';
+}
+
+async function addPasswordEntry() {
+  if (keyHost.value === null || passwordDraft.value === '') return;
+  keyBusy.value = true;
+  keyError.value = '';
+  try {
+    const entry = await vault.addPassword(
+      passwordDraft.value,
+      passwordName.value.trim() || `${keyHost.value.name} ${keyHost.value.link ? 'relay token' : 'password'}`,
+    );
+    passwordDraft.value = '';
+    onKeyUploaded(entry);
+  } catch (e) {
+    keyError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    keyBusy.value = false;
+  }
 }
 
 async function saveKey() {
   if (keyHost.value === null) return;
-  const pem = keyDraft.value.trim();
-  const secret = pem === ''
-    ? {}
-    : { privateKeyPem: pem, ...(keyPassphrase.value === '' ? {} : { keyPassphrase: keyPassphrase.value }) };
-  await hosts.setHostSecret(keyHost.value.name, secret);
-  setNotice(keySaved, keyHost.value.name);
-  keyHost.value = null;
+  keyBusy.value = true;
+  keyError.value = '';
+  try {
+    await vault.bindHost(keyHost.value.name, keyChoice.value === '' ? null : keyChoice.value, keyPolicy.value);
+    setNotice(keySaved, keyHost.value.name);
+    keyHost.value = null;
+  } catch (e) {
+    keyError.value = e instanceof Error ? e.message : String(e);
+    return;
+  } finally {
+    keyBusy.value = false;
+  }
   if (importResume.value) {
     importResume.value = false;
     if (missingCredentials.value.length > 0) {
@@ -244,8 +242,13 @@ async function saveKey() {
 }
 
 async function removeKey(host: HostEntry) {
-  await hosts.removeHostSecret(host.name);
+  await vault.bindHost(host.name, null);
   setNotice(keyRemoved, host.name);
+}
+
+function keyNameFor(host: HostEntry): string {
+  const b = vault.bindings[host.name];
+  return b ? (vault.entries.find((e) => e.keyId === b.keyId)?.name ?? '') : '';
 }
 
 /* --- Import from an SSH config ------------------------------------------- */
@@ -354,14 +357,27 @@ async function open(host: HostEntry) {
 
 <template>
   <main class="page">
-    <!-- Locked: the passphrase card IS the screen, in the accepted auth-card
-         idiom, and its title is the page's only heading. While the saved
-         passphrase is being tried, the card waits invisible — no flash. -->
-    <section v-if="!hosts.unlocked && !checkingVault" class="unlock-card" aria-labelledby="unlock-title">
+    <!-- Not open yet: the gate's card IS the screen, in the accepted
+         auth-card idiom, and its title is the page's only heading. While the
+         silent open runs (remembered vault key), nothing flashes. -->
+    <section v-if="gate.step === 'vault-locked'" class="unlock-card" aria-labelledby="unlock-title">
+      <div class="unlock-mark" aria-hidden="true">&gt;_</div>
+      <h1 id="unlock-title">Unlock your vault</h1>
+      <p class="unlock-lede">
+        Your vault passphrase opens your SSH keys and your host list. It never leaves this browser.
+      </p>
+      <VaultUnlockForm id-prefix="hv" @unlocked="onVaultUnlocked" @forgot="router.push({ name: 'keys', query: { reset: '1' } })" />
+    </section>
+
+    <section v-else-if="gate.step === 'sync-passphrase'" class="unlock-card" aria-labelledby="unlock-title">
       <div class="unlock-mark" aria-hidden="true">&gt;_</div>
       <h1 id="unlock-title">Unlock your hosts</h1>
       <p class="unlock-lede">
-        Enter the sync passphrase to decrypt your saved hosts (they never leave this browser unencrypted).
+        <template v-if="vault.unlocked">{{ gate.error || 'Enter the sync passphrase your host list is encrypted with.' }}</template>
+        <template v-else>
+          Enter your sync passphrase to decrypt your saved hosts. Next you'll set up the key vault that keeps your SSH
+          keys.
+        </template>
       </p>
       <form class="unlock-form" @submit.prevent="unlock">
         <label class="flabel" for="sync-passphrase">Sync passphrase</label>
@@ -378,20 +394,15 @@ async function open(host: HostEntry) {
             {{ unlocking ? 'Decrypting…' : 'Unlock' }}
           </button>
         </div>
-        <label class="unlock-remember">
-          <input v-model="remember" type="checkbox" />
-          <!-- The nbsp binds "this computer" so the 390px wrap point leaves
-               two words on line 2, not a lone-word orphan. -->
-          <span>Remember the passphrase on this&nbsp;computer</span>
-        </label>
-        <p class="unlock-remember-hint">
-          Stored encrypted with a key only this browser holds — the server never sees it.
-        </p>
         <p v-if="hosts.error" class="error" role="alert">{{ hosts.error }}</p>
       </form>
     </section>
 
-    <template v-else>
+    <VaultSetupCard v-else-if="gate.step === 'create-vault'" />
+
+    <MigrationCard v-else-if="gate.step === 'migrate'" />
+
+    <template v-else-if="gate.step === 'ready'">
       <h1>Hosts</h1>
 
       <div :class="{ empty: hosts.hosts.length === 0 && !formOpen && !importOpen }">
@@ -401,6 +412,7 @@ async function open(host: HostEntry) {
           </span>
           <span class="spacer" />
           <div class="head-actions">
+            <RouterLink class="button" :to="{ name: 'keys' }">Keys</RouterLink>
             <RouterLink class="button" :to="{ name: 'device-sessions' }">CLI sessions</RouterLink>
             <button @click="startImport">Import config</button>
             <button class="primary" @click="newHost">Add host</button>
@@ -410,16 +422,8 @@ async function open(host: HostEntry) {
         <!-- One quiet confirmation idiom; spacing, not boxes, separates them. -->
         <p v-if="hostSaved" class="notice" role="status">Saved {{ hostSaved }} to your account — desktops pick it up on their next sync.</p>
         <p v-if="importDone" class="notice" role="status">{{ importDone }}</p>
-        <p v-if="keySaved" class="notice" role="status">Key for {{ keySaved }} stored encrypted and synced to your account.</p>
-        <p v-if="keyRemoved" class="notice" role="status">Key for {{ keyRemoved }} removed from this browser.</p>
-
-        <!-- The vault's persistent presence: appears the moment a passphrase
-             is saved (the tick's feedback) and stays for later sessions, so
-             Forget is discoverable whenever the save is in force. -->
-        <div v-if="hosts.passphraseRemembered" class="remember-row" role="status">
-          <span class="muted">Passphrase saved on this computer — this browser unlocks without it.</span>
-          <button type="button" @click="forgetSaved">Forget</button>
-        </div>
+        <p v-if="keySaved" class="notice" role="status">Saved the vault key choice for {{ keySaved }}. Every device uses it after its next unlock.</p>
+        <p v-if="keyRemoved" class="notice" role="status">{{ keyRemoved }} no longer uses a vault key. The key itself stays in your vault.</p>
 
         <!-- The list, in the landing's own hosts-mock: one bordered card with
              a mono caption bar and hairline-separated mono rows. -->
@@ -429,7 +433,8 @@ async function open(host: HostEntry) {
             <div class="host-text">
               <div class="name">{{ host.name }}</div>
               <div class="meta">
-                {{ describe(host) }}<span v-if="host.identityFile" class="key-name"> · key {{ keyFile(host.identityFile) }}</span
+                {{ describe(host) }}<span v-if="keyNameFor(host)" class="key-name"> · {{ keyNameFor(host) }}</span
+                ><span v-else-if="host.identityFile" class="key-name"> · key {{ keyFile(host.identityFile) }}</span
                 ><template v-if="!hosts.secretHosts.includes(host.name)"> · key needed</template>
               </div>
               <!-- Crash/OOM warnings from the host's aplexer (issue #1): the
@@ -457,7 +462,7 @@ async function open(host: HostEntry) {
               </section>
             </div>
             <div class="actions">
-              <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Remove key</button>
+              <button v-if="hosts.secretHosts.includes(host.name)" @click="removeKey(host)">Unassign key</button>
               <button @click="editHost(host)">Edit</button>
               <button @click="attachKey(host)">Key…</button>
               <button class="primary" @click="open(host)">Connect</button>
@@ -571,44 +576,71 @@ async function open(host: HostEntry) {
           </div>
         </details>
 
-        <!-- Private key: same card; the empty-save-removes semantics live in
-             the store and are unchanged. -->
+        <!-- Vault key for a host: pick an entry (or add one right here), and
+             the gateway policy. Keys live in the vault; a host only names one. -->
         <details v-if="keyHost" class="keybox" open>
-          <summary><span class="sumtitle">Private key for {{ keyHost.name }}</span></summary>
+          <summary><span class="sumtitle">Key for {{ keyHost.name }}</span></summary>
           <div class="cardbox-body">
-            <p class="card-lede">Stored encrypted, synced to your account; sent to the bridge only when you connect.</p>
-            <div class="keyfile-row">
+            <p class="card-lede">
+              Keys are stored in your vault, encrypted with your vault passphrase, decrypted in memory and sent to the
+              bridge only when you connect.
+            </p>
+            <div class="mode-tabs" role="tablist" aria-label="Key source">
+              <button type="button" role="tab" :aria-selected="keyMode === 'pick'" :disabled="vault.entries.length === 0" @click="keyMode = 'pick'">From vault</button>
+              <button type="button" role="tab" :aria-selected="keyMode === 'upload'" @click="keyMode = 'upload'">Upload a key</button>
+              <button type="button" role="tab" :aria-selected="keyMode === 'password'" @click="keyMode = 'password'">
+                {{ keyHost.link ? 'Relay token' : 'Password' }}
+              </button>
+            </div>
+
+            <div v-if="keyMode === 'upload'">
+              <KeyUploadForm id-prefix="kf" submit-label="Add to vault" @added="onKeyUploaded" @cancel="keyMode = 'pick'" />
+            </div>
+
+            <form v-else-if="keyMode === 'password'" class="pw-form" @submit.prevent="addPasswordEntry">
               <div class="field">
-                <label class="flabel" for="kf-file">Key file</label>
-                <label class="filepick" for="kf-file">
-                  <span class="filepick-btn" aria-hidden="true">Choose file</span>
-                  <span class="filepick-name" aria-hidden="true">{{ keyFileName || 'No file chosen' }}</span>
-                  <input id="kf-file" type="file" aria-label="Private key file" @change="onKeyFile" />
+                <label class="flabel" for="kf-pw">{{ keyHost.link ? 'Relay token' : 'Password' }}</label>
+                <input id="kf-pw" v-model="passwordDraft" type="password" autocomplete="new-password" />
+              </div>
+              <div class="field">
+                <label class="flabel" for="kf-pwname">Name</label>
+                <input id="kf-pwname" v-model="passwordName" :placeholder="`${keyHost.name} ${keyHost.link ? 'relay token' : 'password'}`" autocomplete="off" />
+              </div>
+              <div class="form-actions">
+                <button class="primary" type="submit" :disabled="keyBusy || passwordDraft === ''">Add to vault</button>
+                <button type="button" @click="keyMode = 'pick'">Cancel</button>
+              </div>
+            </form>
+
+            <form v-else class="pick-form" @submit.prevent="saveKey">
+              <div class="field">
+                <label class="flabel" for="kf-entry">Vault key</label>
+                <select id="kf-entry" v-model="keyChoice">
+                  <option value="">None</option>
+                  <option v-for="e in vault.entries" :key="e.keyId" :value="e.keyId">{{ entryLabel(e) }}</option>
+                </select>
+              </div>
+              <fieldset class="policy">
+                <legend class="flabel">Through the PocketShell gateway, sign in with</legend>
+                <label class="unlock-remember">
+                  <input v-model="keyPolicy" type="radio" value="both" name="kf-policy" />
+                  <span>This vault key, then the host's own keys</span>
                 </label>
+                <label class="unlock-remember">
+                  <input v-model="keyPolicy" type="radio" value="managed" name="kf-policy" />
+                  <span>Only this vault key</span>
+                </label>
+                <label class="unlock-remember">
+                  <input v-model="keyPolicy" type="radio" value="host" name="kf-policy" />
+                  <span>Only the host's own keys (no vault needed)</span>
+                </label>
+              </fieldset>
+              <div class="form-actions">
+                <button class="primary" type="submit" :disabled="keyBusy">{{ keyBusy ? 'Saving…' : 'Save' }}</button>
+                <button type="button" @click="keyHost = null">Cancel</button>
               </div>
-            </div>
-            <div class="field">
-              <label class="flabel" for="kf-pem">Private key (PEM)</label>
-              <textarea id="kf-pem" v-model="keyDraft" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-            </div>
-            <div class="keypass-row">
-              <div class="field">
-                <label class="flabel" for="kf-pass">Key passphrase</label>
-                <input
-                  id="kf-pass"
-                  v-model="keyPassphrase"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="Key passphrase"
-                  aria-label="Key passphrase"
-                />
-              </div>
-            </div>
-            <p class="muted keypass-hint">If the key is encrypted, its passphrase is stored encrypted alongside it and used only when you connect.</p>
-            <div class="form-actions">
-              <button class="primary" @click="saveKey">Save</button>
-              <button @click="keyHost = null">Cancel</button>
-            </div>
+            </form>
+            <p v-if="keyError" class="error" role="alert">{{ keyError }}</p>
           </div>
         </details>
       </div>

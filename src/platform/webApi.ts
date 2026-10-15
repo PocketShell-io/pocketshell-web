@@ -32,9 +32,9 @@ import { LinkSshConnection } from '../terminal/linkConnection';
 import { useAuthStore } from '../stores/auth';
 import { useSyncStore } from '@ui/app/stores/sync';
 import { claimsOf } from '../auth/google';
-import { forgetPassphrase, recallPassphrase } from '../shared/passphraseVault';
 import { useHostPinsStore } from '../stores/hostPins';
 import { useHostsStore } from '../stores/hosts';
+import { useVaultGateStore } from '../stores/vaultGate';
 import { ShellService } from './shellService';
 import { HostHelper } from './hostHelper';
 import { ProjectsService } from './projectsService';
@@ -167,7 +167,7 @@ async function connectHost(payload: {
     if (!secret || (secret.password ?? '') === '') {
       return {
         ok: false,
-        error: 'No relay token attached for this link host yet — attach it as the host password and unlock again.',
+        error: 'No relay token in your vault for this link host yet. Add it as a password on the Keys page and assign it to the host.',
       };
     }
     return connectViaLink(entry, secret.password!);
@@ -175,7 +175,7 @@ async function connectHost(payload: {
   if (!secret || ((secret.privateKeyPem ?? '') === '' && (secret.password ?? '') === '')) {
     return {
       ok: false,
-      error: 'No key attached for this host yet — attach one on the hosts screen and unlock again.',
+      error: 'No vault key is assigned to this host yet. Pick one with Key… on the Hosts page.',
     };
   }
 
@@ -193,11 +193,7 @@ async function connectHost(payload: {
       user: entry.user || payload.user,
       auth:
         (secret.privateKeyPem ?? '') !== ''
-          ? {
-              kind: 'key' as const,
-              privateKey: secret.privateKeyPem!,
-              ...(secret.keyPassphrase ? { passphrase: secret.keyPassphrase } : {}),
-            }
+          ? { kind: 'key' as const, privateKey: secret.privateKeyPem! }
           : { kind: 'password' as const, password: secret.password! },
       knownHosts: knownHostsHooks(payload),
       onClosed: () => {
@@ -277,41 +273,30 @@ async function connectViaLink(
 }
 
 /**
- * The silent vault unlock, memoized per account. The web's old home was the
- * hosts screen, whose mount ran this — the shared picker became the home and
- * nothing ran it any more, so a returning user's synced hosts (and the keys
- * that dial them) never loaded. The host read is the moment the list is
- * needed, so `listConfigHosts` awaits it. A vault miss resolves having done
- * nothing; a stale passphrase is dropped exactly as the hosts screen drops
- * it, and the picker's locked note takes over the guidance.
+ * The silent account open, memoized per account: probe the key vault, unlock
+ * it with the key remembered on this device (if any), and open the host list
+ * with the sync passphrase the vault index carries. The web's old home was
+ * the hosts screen, whose mount ran this — the shared picker became the home,
+ * so `listConfigHosts` awaits it. Anything that needs a passphrase resolves
+ * having done nothing; the picker's locked note and /app take over.
  */
-let vaultUnlock: { sub: string; done: Promise<void> } | null = null;
+let accountOpen: { sub: string; done: Promise<void> } | null = null;
 function ensureHostsUnlocked(): Promise<void> {
   const auth = useAuthStore();
   if (!auth.signedIn) return Promise.resolve();
   const sub = claimsOf(auth.idToken).sub;
-  // A plain `vaultUnlock?.sub === sub` here reads true when BOTH are
+  // A plain `accountOpen?.sub === sub` here reads true when BOTH are
   // undefined — a token without a `sub` claim and no memo yet — and returns
   // `.done` off null.
-  if (vaultUnlock !== null && vaultUnlock.sub === sub) return vaultUnlock.done;
+  if (accountOpen !== null && accountOpen.sub === sub) return accountOpen.done;
   const done = (async () => {
-    const hosts = useHostsStore();
-    if (hosts.unlocked) return;
-    const saved = await recallPassphrase(sub);
-    if (saved === null || saved === '') return;
-    hosts.passphraseRemembered = true;
-    try {
-      await hosts.unlock(saved);
-      // The unlock just made the account list readable, so re-seed the shared
-      // sync cache: a picker mounted while the unlock was in flight seeded it
-      // too early and would keep the locked note up over a full host list.
-      void useSyncStore().refreshStatus().catch(() => undefined);
-    } catch {
-      hosts.passphraseRemembered = false;
-      await forgetPassphrase(sub);
-    }
+    if (useHostsStore().unlocked) return;
+    await useVaultGateStore().open();
+    // The open may have made the account list readable: re-seed the shared
+    // sync cache so a picker mounted meanwhile drops its locked note.
+    if (useHostsStore().unlocked) void useSyncStore().refreshStatus().catch(() => undefined);
   })().catch(() => undefined);
-  vaultUnlock = { sub, done };
+  accountOpen = { sub, done };
   return done;
 }
 

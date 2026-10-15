@@ -4331,3 +4331,43 @@ main.page button.danger {
   margin-top: 2px;
   color: var(--error);
 }
+
+/* Key vault: the per-host key dialog's source tabs and gateway policy. */
+.mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.mode-tabs button[aria-selected='true'] {
+  background: var(--state-hover);
+  font-weight: var(--fw-semibold);
+}
+
+details.keybox .policy {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+details.keybox .policy input[type='radio'] {
+  accent-color: var(--accent-dim);
+  flex-shrink: 0;
+}
+
+details.keybox select {
+  width: 100%;
+  min-height: 33px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-fine);
+}
+
+details.keybox .pw-form .field,
+details.keybox .pick-form .field {
+  margin-top: 8px;
+}

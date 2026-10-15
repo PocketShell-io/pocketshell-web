@@ -20,6 +20,8 @@
  */
 import { unsupportedTransport, type HostEntry, type TransportCapabilities } from '@pocketshell/core';
 import { useHostsStore, type HostSecret } from '../stores/hosts';
+import { VaultLockedError } from '../stores/vault';
+import { requestVaultUnlock } from '../vault/unlockSheet';
 
 export const WEB_DIAL_PATHS = {
   session: { gateway: false, link: true },
@@ -86,6 +88,16 @@ export async function authorizeDial(
     // that happens to share it would be plain SSH to the wrong place.
     return { ok: false, error: `“${entry.name}” is not the relay-link host this dial asked for. Nothing was dialled.` };
   }
-  const secret = await useHostsStore().getHostSecret(entry.name);
+  let secret: HostSecret | undefined;
+  try {
+    secret = await useHostsStore().getHostSecret(entry.name);
+  } catch (err) {
+    if (!(err instanceof VaultLockedError)) throw err;
+    // A locked vault is answered with the unlock sheet, never a "pick a key"
+    // prompt. Only the interactive session path can show it; the background
+    // paths report the lock.
+    if (path !== 'session' || !(await requestVaultUnlock(err))) return { ok: false, error: err.message };
+    secret = await useHostsStore().getHostSecret(entry.name);
+  }
   return { ok: true, transport: hasOwn(entry, 'link') ? 'link' : 'ssh', secret };
 }

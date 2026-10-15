@@ -116,13 +116,13 @@ async function dispatch(msg: FwdRequest, target: ForwardTarget, search: string):
   if (!grant.ok) return htmlReply(msg.id, 503, escapeHtml(grant.error));
   const secret = grant.secret;
   if (secret?.privateKeyPem === undefined || secret.privateKeyPem === '') {
-    return htmlReply(msg.id, 503, 'No key attached for this host yet — open PocketShell → Hosts → Key… and attach one.');
+    return htmlReply(msg.id, 503, 'No vault key is assigned to this host yet. Open PocketShell → Hosts → Key… and pick one.');
   }
   if (!hosts.unlocked) {
     return htmlReply(msg.id, 503, 'PocketShell is locked in the app tab — unlock it there and reload this page.');
   }
 
-  const sig = [entry.hostname, entry.port, entry.user, secret.privateKeyPem.length, secret.keyPassphrase?.length ?? 0].join('|');
+  const sig = [entry.hostname, entry.port, entry.user, secret.privateKeyPem.length].join('|');
   const existing = channels.get(entry.name);
   if (existing !== undefined && existing.sig !== sig) {
     existing.channel.close();
@@ -137,7 +137,6 @@ async function dispatch(msg: FwdRequest, target: ForwardTarget, search: string):
       port: entry.port,
       user: entry.user,
       privateKey: secret.privateKeyPem ?? '',
-      passphrase: secret.keyPassphrase,
       relayUrl: config.directWsUrl,
       idToken: auth.getIdToken(),
     });

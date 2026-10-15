@@ -199,27 +199,3 @@ describe('hosts store importHosts (the config import writing the ticked set)', (
     expect(names).toEqual(['a', 'c', 'd']);
   });
 });
-
-describe('hosts store secrets (key + key passphrase, encrypted before anything leaves)', () => {
-  it('stores the key passphrase with the key and returns it; the local envelope never holds plaintext', async () => {
-    const store = useHostsStore();
-    store.passphrase = PASSPHRASE;
-
-    await store.setHostSecret('a', { privateKeyPem: '-----BEGIN TEST KEY-----', keyPassphrase: 'open-sesame' });
-
-    expect(await store.getHostSecret('a')).toEqual({ privateKeyPem: '-----BEGIN TEST KEY-----', keyPassphrase: 'open-sesame' });
-    expect(store.secretHosts).toEqual(['a']);
-    const raw = localStorage.getItem('ps.hostKeys')!;
-    expect(raw).not.toContain('BEGIN TEST KEY');
-    expect(raw).not.toContain('open-sesame');
-    // Same envelope shape the account uses: opaque without the passphrase.
-    expect(JSON.parse(raw)).toMatchObject({ v: 1, kdf: 'pbkdf2-sha256' });
-  });
-
-  it('a passphrase alone is not a usable credential for the secret-hosts marker', async () => {
-    const store = useHostsStore();
-    store.passphrase = PASSPHRASE;
-    await store.setHostSecret('a', { keyPassphrase: 'orphan' });
-    expect(store.secretHosts).toEqual([]);
-  });
-});

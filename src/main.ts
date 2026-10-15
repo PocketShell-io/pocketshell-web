@@ -15,6 +15,7 @@ import { recordDiagError } from '@ui/app/diag';
 import { webApi } from './platform/webApi';
 import { armNavGuard } from './platform/navGuard';
 import { useConnectionStore } from '@ui/app/stores/connection';
+import VaultUnlockSheet from './components/VaultUnlockSheet.vue';
 
 provideApi(webApi);
 
@@ -38,6 +39,14 @@ window.addEventListener('error', (e) => {
 
 const pinia = createPinia();
 app.use(pinia).use(router).mount('#app');
+
+// The connect-time vault unlock sheet: its own root over the same pinia and
+// router, so any dial (picker, reconnect, workspace) can raise it without the
+// shared app tree knowing about the vault.
+const sheetHost = document.createElement('div');
+sheetHost.id = 'vault-sheet';
+document.body.appendChild(sheetHost);
+createApp(VaultUnlockSheet).use(pinia).use(router).mount(sheetHost);
 
 // Sleep/wake (FEATURES.md F12): the desktop's main announces the OS resume;
 // the browser has no such announcement, but the subscription is cheap and
