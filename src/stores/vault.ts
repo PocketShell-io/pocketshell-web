@@ -3,6 +3,7 @@ import { makeSyncService } from '../api/sync';
 import { claimsOf } from '../auth/google';
 import { useAuthStore } from './auth';
 import {
+  clampVaultName,
   KeyVaultStore,
   VAULT_KDF_DEFAULT,
   type GatewayAuthPolicy as GatewayAuth,
@@ -89,6 +90,10 @@ export function describeWriteFailure(r: Exclude<VaultWriteResult, { kind: 'ok' }
   }
 }
 
+/** A vault written by a newer format: update the app, never reset it. */
+export const UNSUPPORTED_VERSION_MESSAGE =
+  'Your vault was created by a newer version of PocketShell. Reload this page to update the app; do not reset the vault.';
+
 function throwIfFailed(r: VaultWriteResult): void {
   if (r.kind !== 'ok') throw new Error(describeWriteFailure(r));
 }
@@ -156,6 +161,7 @@ export const useVaultStore = defineStore('vault', {
       const r = await this.core().probe();
       if (r.kind === 'error') throw new Error(r.message);
       if (r.kind === 'corrupt') throw new Error('Your vault header could not be read. Reset the vault to start again.');
+      if (r.kind === 'unsupportedVersion') throw new Error(UNSUPPORTED_VERSION_MESSAGE);
       if (r.kind === 'noVault') this.phase = 'absent';
       // gated: a vault exists but stays hidden until a verify — locked.
       else this.phase = this.core().state === 'unlocked' ? 'unlocked' : 'locked';
@@ -218,6 +224,8 @@ export const useVaultStore = defineStore('vault', {
           throw new Error('This account has no vault yet.');
         case 'corrupt':
           throw new Error('Your vault header could not be read. Reset the vault to start again.');
+        case 'unsupportedVersion':
+          throw new Error(UNSUPPORTED_VERSION_MESSAGE);
         case 'error':
           throw new Error(r.message);
       }
@@ -295,13 +303,13 @@ export const useVaultStore = defineStore('vault', {
     /* --- keys and bindings --------------------------------------------- */
 
     async addKey(pem: string, name: string, keyPassphrase?: string): Promise<AddKeyResult> {
-      const r = await this.core().addKey(pem, name, keyPassphrase);
+      const r = await this.core().addKey(pem, clampVaultName(name, 'SSH key'), keyPassphrase);
       this.refresh();
       return r;
     },
 
     async addPassword(password: string, name: string): Promise<VaultKeyEntry> {
-      const r = await this.core().addPassword(password, name);
+      const r = await this.core().addPassword(password, clampVaultName(name, 'Password'));
       if (r.kind !== 'ok') throw new Error(describeWriteFailure(r));
       this.refresh();
       return r.entry;
@@ -312,12 +320,12 @@ export const useVaultStore = defineStore('vault', {
     },
 
     async renameKey(keyId: string, name: string): Promise<void> {
-      throwIfFailed(await this.core().renameKey(keyId, name));
+      throwIfFailed(await this.core().renameKey(keyId, clampVaultName(name, 'Key')));
     },
 
     /** Rotate: add the new key, move every host from the old one onto it. */
     async rotateKey(oldKeyId: string, pem: string, name: string, keyPassphrase?: string): Promise<AddKeyResult> {
-      const added = await this.core().addKey(pem, name, keyPassphrase);
+      const added = await this.core().addKey(pem, clampVaultName(name, 'SSH key'), keyPassphrase);
       if (added.kind !== 'ok') return added;
       if (added.entry.keyId === oldKeyId) {
         return { kind: 'invalid', message: 'That is the same key. Upload the new key to rotate to.' };
@@ -409,7 +417,16 @@ export const useVaultStore = defineStore('vault', {
         if (res.kind === 'ok' && this.remembered) await this.applyRemember(true);
         return res;
       });
-      if (r.kind === 'ok') return;
+      if (r.kind === 'ok') {
+        // The server verifier could not be updated yet: retry once quietly;
+        // core retries again on the next unlock.
+        if (r.verifierPending) void this.core().retryVerifierPublish().catch(() => undefined);
+        return;
+      }
+      if (r.kind === 'passphraseChangedElsewhere') {
+        this.lock();
+        throw new Error('Your vault passphrase was just changed on another device. Unlock with the new passphrase, then try again.');
+      }
       if (r.kind === 'wrongPassphrase') throw new WrongPassphraseError(r.retryAfterMs);
       if (r.kind === 'backoff') throw new Error(`Too many attempts. Try again in ${Math.ceil(r.retryAfterMs / 1000)}s.`);
       throw new Error(describeWriteFailure(r));

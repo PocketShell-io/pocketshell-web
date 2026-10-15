@@ -139,7 +139,7 @@ beforeAll(() => {
   plainKey = keygen('plain', '');
   encKey = keygen('enc', KEY_PASS);
   otherKey = keygen('other', '');
-  vaultTuning.kdf = { m: 32768, t: 1, p: 1 }; // tests only: the cheapest params core accepts
+  vaultTuning.kdf = { m: 32768, t: 3, p: 1 }; // tests only: the cheapest params core accepts
   // Phase 2 not deployed: every /vault/* call is a 404.
   globalThis.fetch = (async () => new Response('{"message":"Not Found"}', { status: 404 })) as typeof fetch;
 });
