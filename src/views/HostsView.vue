@@ -246,6 +246,7 @@ async function removeKey(host: HostEntry) {
   setNotice(keyRemoved, host.name);
 }
 
+const connectError = ref<{ host: string; message: string } | null>(null);
 const applying = ref('');
 const applied = ref('');
 const applyError = ref<{ host: string; message: string } | null>(null);
@@ -369,8 +370,12 @@ async function open(host: HostEntry) {
     void router.push({ name: 'host-sessions', params: { name: host.name } });
     return;
   }
+  connectError.value = null;
   const ok = await connection.connect(host);
   if (ok) void router.push({ name: 'host-sessions', params: { name: host.name } });
+  // A refused dial (no vault key for the host, locked vault cancelled, …)
+  // says why right here, next to the row the user clicked.
+  else connectError.value = { host: host.name, message: connection.error ?? 'Could not connect.' };
 }
 </script>
 
@@ -442,6 +447,7 @@ async function open(host: HostEntry) {
         <p v-if="hostSaved" class="notice" role="status">Saved {{ hostSaved }} to your account — desktops pick it up on their next sync.</p>
         <p v-if="importDone" class="notice" role="status">{{ importDone }}</p>
         <p v-if="keySaved" class="notice" role="status">Saved the vault key choice for {{ keySaved }}. Every device uses it after its next unlock.</p>
+        <p v-if="connectError" class="error" role="alert">{{ connectError.host }}: {{ connectError.message }}</p>
         <p v-if="applied" class="notice" role="status">{{ applied }}</p>
         <p v-if="applyError" class="error" role="alert">{{ applyError.host }}: {{ applyError.message }}</p>
         <p v-if="vault.pendingApply.length > 0" class="notice" role="status">
