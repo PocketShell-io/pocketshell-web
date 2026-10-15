@@ -122,9 +122,14 @@ async function confirmDelete() {
   const e = deleting.value;
   if (e === null) return;
   await guard(async () => {
+    const hosts = usedBy.value[e.keyId] ?? [];
     await vault.removeKey(e.keyId);
     deleting.value = null;
-    say(`${e.name} deleted from your vault.`);
+    say(
+      hosts.length > 0
+        ? `${e.name} deleted from your vault. ${hosts.join(', ')} still accept it until you use Apply to host on the Hosts page.`
+        : `${e.name} deleted from your vault.`,
+    );
   });
 }
 
@@ -276,7 +281,8 @@ function created(iso: string): string {
               <p :id="`del-${e.keyId}`">
                 Delete {{ e.name }} from your vault on every device?
                 <template v-if="usedBy[e.keyId]?.length">
-                  {{ usedBy[e.keyId].join(', ') }} will need another key.
+                  {{ usedBy[e.keyId].join(', ') }} will need another key. Deleting does not revoke it on those hosts:
+                  they keep accepting this key until you use Apply to host on the Hosts page.
                 </template>
               </p>
               <button class="primary" type="button" @click="confirmDelete">Delete</button>

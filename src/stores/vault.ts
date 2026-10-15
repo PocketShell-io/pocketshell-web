@@ -114,8 +114,9 @@ export const useVaultStore = defineStore('vault', {
     remembered: false,
     /** Epoch ms before which Unlock stays disabled (backoff / server lock). */
     retryAt: 0,
-    /** Hosts whose key or policy changed in this session and whose host
-     * agent has not been told yet ("Apply to host"). */
+    /** Hosts whose key or policy changed and whose host agent has not been
+     * told yet ("Apply to host"). Kept per account in localStorage (host
+     * names only), so a reload does not lose the reminder. */
     pendingApply: [] as string[],
   }),
   getters: {
@@ -143,6 +144,7 @@ export const useVaultStore = defineStore('vault', {
       const store = core?.store;
       if (!store) return;
       if (store.state === 'unlocked') {
+        if (this.phase !== 'unlocked') this.loadPending();
         this.phase = 'unlocked';
         this.entries = store.listKeys();
         this.bindings = store.listHostBindings();
@@ -315,8 +317,14 @@ export const useVaultStore = defineStore('vault', {
       return r.entry;
     },
 
+    /** Deleting a key does not revoke it on hosts: their host agents keep
+     * trusting its public key until "Apply to host", so flag them. */
     async removeKey(keyId: string): Promise<void> {
+      const bound = Object.entries(this.core().listHostBindings())
+        .filter(([, b]) => b.keyId === keyId)
+        .map(([h]) => h);
       throwIfFailed(await this.core().removeKey(keyId));
+      this.markPending(bound);
     },
 
     async renameKey(keyId: string, name: string): Promise<void> {
@@ -357,6 +365,27 @@ export const useVaultStore = defineStore('vault', {
 
     markPending(hosts: string[]): void {
       this.pendingApply = [...new Set([...this.pendingApply, ...hosts])];
+      this.persistPending();
+    },
+
+    persistPending(): void {
+      try {
+        const key = `ps.vaultPendingApply.${accountSub()}`;
+        if (this.pendingApply.length === 0) localStorage.removeItem(key);
+        else localStorage.setItem(key, JSON.stringify(this.pendingApply));
+      } catch {
+        // Storage unavailable: the reminder lives for this session only.
+      }
+    },
+
+    loadPending(): void {
+      try {
+        const raw = localStorage.getItem(`ps.vaultPendingApply.${accountSub()}`);
+        const list: unknown = raw === null ? [] : JSON.parse(raw);
+        this.pendingApply = Array.isArray(list) ? list.filter((h): h is string => typeof h === 'string') : [];
+      } catch {
+        this.pendingApply = [];
+      }
     },
 
     async setSyncPassphrase(passphrase: string): Promise<void> {
@@ -415,6 +444,7 @@ export const useVaultStore = defineStore('vault', {
       const report = out.exitCode === 0 ? parseGatewayAuthReport(out.stdout) : null;
       if (report === null) throw new Error(describeApplyFailure(out.exitCode, out.stderr));
       this.pendingApply = this.pendingApply.filter((h) => h !== entry.name);
+      this.persistPending();
       return report;
     },
 

@@ -286,6 +286,26 @@ describe('keys, bindings and connect', () => {
     expect((await mainHosts()).find((h) => h.name === 'box')?.gatewayAuth).toBeUndefined();
   });
 
+  it('"Apply to host" reminders survive a reload, and deleting a key flags its hosts (review item 4)', async () => {
+    await ready();
+    const vault = useVaultStore();
+    const r = await vault.addKey(plainKey, 'k');
+    if (r.kind !== 'ok') throw new Error('add failed');
+    await vault.bindHost('box', r.entry.keyId, 'managed');
+    expect(vault.pendingApply).toEqual(['box']);
+    vault.pendingApply = vault.pendingApply.filter((h) => h !== 'box'); // as if applied
+    vault.persistPending();
+
+    // A deleted key stays authorized on its hosts until applied: flag them.
+    await vault.removeKey(r.entry.keyId);
+    expect(vault.pendingApply).toEqual(['box']);
+
+    newTab();
+    await useVaultGateStore().open();
+    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+    expect(useVaultStore().pendingApply).toEqual(['box']);
+  });
+
   it('an encrypted key asks for its passphrase once and is stored decrypted', async () => {
     await ready();
     const vault = useVaultStore();
