@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onBeforeUnmount, ref } from 'vue';
 import { describeWriteFailure, useVaultStore } from '../stores/vault';
 import type { VaultAddKeyResult as AddKeyResult, VaultKeyEntry } from '@pocketshell/core';
 
@@ -22,6 +22,21 @@ const needsPassphrase = ref(false);
 const busy = ref(false);
 const error = ref('');
 const id = (s: string) => `${props.idPrefix}-${s}`;
+
+/** The pasted key and its passphrase never outlive the form. */
+function clearSecrets() {
+  pem.value = '';
+  keyPassphrase.value = '';
+  fileName.value = '';
+  needsPassphrase.value = false;
+}
+
+function cancel() {
+  clearSecrets();
+  emit('cancel');
+}
+
+onBeforeUnmount(clearSecrets);
 
 async function onFile(ev: Event) {
   const input = ev.target as HTMLInputElement;
@@ -115,7 +130,7 @@ async function submit() {
       <button class="primary" type="submit" :disabled="busy || pem.trim() === '' || (needsPassphrase && keyPassphrase === '')">
         {{ busy ? 'Encrypting…' : (props.submitLabel ?? (props.rotateFrom ? 'Rotate key' : 'Add to vault')) }}
       </button>
-      <button type="button" @click="emit('cancel')">Cancel</button>
+      <button type="button" @click="cancel">Cancel</button>
     </div>
   </form>
 </template>

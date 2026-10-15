@@ -103,8 +103,17 @@ directly — the same suite the core repo runs.
   "Apply to host" pushes to the host agent with the vault PUBLIC key.
 - Nothing plaintext is persisted. "Remember on this device" stores the
   vault's data key (and its verifier input), wrapped by a non-extractable
-  AES-GCM key in IndexedDB that only this browser and this Google account
-  can use; sign-out forgets it. Keys are decrypted only when connecting, into
+  AES-GCM key in IndexedDB; sign-out forgets it. Non-extractable means the
+  key's bytes cannot be read out, not that only PocketShell can use it: any
+  script running on this origin can ask the browser to unwrap the
+  remembered data key with it. That includes an XSS payload and the remote
+  web apps the port forwarder serves under this origin (`/fwd/…`, through
+  the root-scoped `public/sw.js`; `src/forward/forwardHttp.ts` strips their
+  CSP and frame headers so they render). The app sets no CSP yet. So
+  "Remember on this device" is only as safe as everything this origin runs:
+  type the passphrase every time on a browser you also use to open
+  forwarded apps you don't trust (follow-up: a CSP, and serving forwards
+  from a separate origin). Keys are decrypted only when connecting, into
   memory; on connect the secret rides the already authenticated WebSocket to
   the bridge and is used once, in memory. A locked vault shows an unlock
   sheet, never a key prompt.
