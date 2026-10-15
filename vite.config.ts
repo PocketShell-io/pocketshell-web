@@ -53,6 +53,17 @@ export default defineConfig({
       '@pocketshell/core/attachments': fileURLToPath(new URL('../pocketshell-core/src/attachments', import.meta.url)),
       '@pocketshell/core/preview': fileURLToPath(new URL('../pocketshell-core/src/preview', import.meta.url)),
       '@pocketshell/core': fileURLToPath(new URL('../pocketshell-core/src', import.meta.url)),
+      // The polyfill plugin injects `vite-plugin-node-polyfills/shims/*`
+      // imports into every module that touches `global`/`Buffer`/`process`,
+      // including core's dependencies (hash-wasm, the key vault's Argon2id).
+      // Those resolve from the core sibling's node_modules, which does not
+      // carry the plugin; pin the shims to this repo's copy.
+      ...Object.fromEntries(
+        (['buffer', 'global', 'process'] as const).map((shim) => [
+          `vite-plugin-node-polyfills/shims/${shim}`,
+          fileURLToPath(new URL(`./node_modules/vite-plugin-node-polyfills/shims/${shim}/dist/index.js`, import.meta.url)),
+        ]),
+      ),
     },
     // Every shared lib the app tree imports would otherwise resolve to the
     // ui package's own node_modules copy — a SECOND pinia/vue/xterm instance
