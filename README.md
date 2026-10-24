@@ -1,5 +1,7 @@
 # PocketShell Web
 
+See [SCOPE.md](SCOPE.md) for ownership and product boundaries.
+
 Browser client for PocketShell: sign in with the same Google account the
 desktop app syncs with, see the hosts saved on that account, and open
 terminal sessions on them — nothing to install.
