@@ -29,6 +29,8 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    # Guard so a hung step can never burn the org's Actions quota.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
