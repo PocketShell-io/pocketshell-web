@@ -89,13 +89,16 @@ def decrypt_envelope(envelope: str, passphrase: str) -> str:
 
 class FakeSync:
     """The settings API as the real one behaves, per slot: opaque data in,
-    same out, versioned, 409 on a stale base, 404 when absent. The phase-2
-    /vault/* routes are absent (404), as before their deploy."""
+    same out, versioned, 409 on a stale base, 404 when absent. First vault
+    setup uses the atomic header+verifier route; existing reads still
+    exercise the client-side passphrase check."""
 
     def __init__(self):
         self.slots: dict[str, dict] = {}
         self.put_bodies: list[tuple[str, dict]] = []
         self.all_bodies: list[tuple[str, str, str]] = []
+        self.vault_auth: str | None = None
+        self.initializations = 0
 
     @property
     def data(self) -> str | None:
@@ -107,7 +110,20 @@ class FakeSync:
         body = req.post_data or ''
         self.all_bodies.append((req.method, req.url, body))
         path = req.url.split('sync.e2e.test', 1)[1].split('?', 1)[0]
-        if path.startswith('/settings/'):
+        if path == '/vault/status' and req.method == 'GET':
+            current = self.slots.get('vault')
+            epoch = json.loads(current['data'])['epoch'] if current else 1
+            await route.fulfill(content_type='application/json', body=json.dumps({'epoch': epoch, 'hasVerifier': self.vault_auth is not None, 'retryAfter': 0}))
+        elif path == '/vault/initialize' and req.method == 'POST':
+            parsed = json.loads(body)
+            if self.vault_auth is not None or 'vault' in self.slots or parsed['epoch'] != 1:
+                await route.fulfill(status=409, content_type='application/json', body='{"error":"conflict"}')
+                return
+            self.slots['vault'] = {'version': 1, 'data': parsed['data']}
+            self.vault_auth = parsed['auth']
+            self.initializations += 1
+            await route.fulfill(status=201, content_type='application/json', body='{"ok":true,"epoch":1,"version":1}')
+        elif path.startswith('/settings/'):
             slot = path[len('/settings/'):]
             cur = self.slots.get(slot)
             if req.method == 'GET':
@@ -222,9 +238,12 @@ async def main() -> int:
         await page.locator('.host-row', has_text='manualbox').get_by_role('button', name='Key…').click()
         box = page.locator('details.keybox', has_text='Key for manualbox')
         await page.set_input_files('input[aria-label="Private key file"]', os.path.join(WORK, 'key_plain'))
-        await box.get_by_role('button', name='Add to vault').click()
-        await box.locator('#kf-entry').wait_for()
-        await box.get_by_role('button', name='Save').click()
+        await box.locator('#kf-vaultpass').fill('wrong-vault-passphrase')
+        await box.get_by_role('button', name='Save key for host').click()
+        await box.get_by_role('alert').filter(has_text="That passphrase didn't unlock your vault.").wait_for()
+        assert not any(slot.startswith('vk-') for slot in sync.slots), 'wrong vault phrase uploaded a key'
+        await box.locator('#kf-vaultpass').fill(VAULT_PASSPHRASE)
+        await box.get_by_role('button', name='Save key for host').click()
         await page.wait_for_selector('text=Saved the vault key choice for manualbox')
         # Nothing about the key may sit in browser storage.
         storage = await page.evaluate("JSON.stringify(Object.entries(localStorage)) + JSON.stringify(Object.entries(sessionStorage))")
@@ -256,12 +275,10 @@ async def main() -> int:
         box = page.locator('details.keybox', has_text='Key for dockertest')
         await box.get_by_role('tab', name='Upload a key').click()
         await page.set_input_files('input[aria-label="Private key file"]', os.path.join(WORK, 'key_enc'))
-        await box.get_by_role('button', name='Add to vault').click()
-        # Encrypted: its own passphrase is asked once; the vault keeps it decrypted.
+        # Detect the key's own encryption before asking for the single vault confirmation.
         await box.locator('#kf-kpass').fill(KEY_PASSPHRASE)
-        await box.get_by_role('button', name='Add to vault').click()
-        await box.locator('#kf-entry').wait_for()
-        await box.get_by_role('button', name='Save').click()
+        await box.locator('#kf-vaultpass').fill(VAULT_PASSPHRASE)
+        await box.get_by_role('button', name='Save key for host').click()
         # Saving the one key re-opens the credentials step for the host that
         # still lacks one; Done leaves the flow.
         await page.wait_for_selector('button:has-text("Done for now")')
@@ -332,7 +349,8 @@ async def main() -> int:
         assert 'PRIVATE KEY' not in frame and CANARY not in frame, 'plaintext on the relay wire'
     assert len(console_errors) == 0, console_errors
 
-    print('E2E PASS: vault setup + remember + import + vault keys (incl. a decrypted encrypted key) + vault unlock verified against the real sshd fixture')
+    assert sync.initializations == 1, f'expected one atomic vault initialization, got {sync.initializations}'
+    print('E2E PASS: atomic vault setup + remember + import + vault keys (incl. a decrypted encrypted key) + vault unlock verified against the real sshd fixture')
     print(f"  sync PUTs: {len(sync.put_bodies)}; vault slots: {sorted(k for k in sync.slots if k != 'main')}; relay frames: {len(relay_frames)}")
     return 0
 

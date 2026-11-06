@@ -1,5 +1,5 @@
 /**
- * The web's agent group: `pocketshell agent --help` / `profiles list` ride
+ * The web's agent group: `a engines --json` / `profiles list` ride
  * the existing PocketshellProbe (same commands, same parsers), and the env
  * verbs here are the browser twin of the desktop's (PocketshellClient
  * envList/envGet/envSet) — same command lines, same write-only default (rows
@@ -25,7 +25,7 @@ export class AgentService {
   /** Which engines this host's helper can launch, or null (we never got an
    * answer) — never flattened into [] (a host claiming it can start nothing). */
   kinds() {
-    return this.probe.agentSupport().then((support) => support.subcommands);
+    return this.probe.agentSupport().then((support) => support.engineIds);
   }
 
   /** Agent config-dir profiles for the picker, [] on any failure. */

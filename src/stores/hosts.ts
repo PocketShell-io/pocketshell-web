@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
-import { makeSyncService, SyncConflictError } from '../api/sync';
+import { makeSyncService, NotSignedInError, SyncConflictError } from '../api/sync';
+import {claimsOf} from '../auth/google';
 import { SYNC_SLOT } from '@pocketshell/core';
 import { parseSyncPayload, serializeSyncPayload } from '@pocketshell/core';
 import { decryptEnvelope, encryptToEnvelope } from '../shared/syncCrypto';
@@ -34,13 +35,17 @@ export interface HostSecret {
 export const useHostsStore = defineStore('hosts', {
   state: () => ({
     passphrase: '',
+    ownerSub: '',
     hosts: [] as HostEntry[],
     version: 0,
     pulled: false,
     error: '',
   }),
   getters: {
-    unlocked: (s) => s.pulled && s.passphrase !== '',
+    unlocked: (s) => {
+      try{return s.pulled && s.passphrase !== '' && s.ownerSub === claimsOf(useAuthStore().getIdToken()).sub;}
+      catch{return false;}
+    },
     /** Names of hosts bound to a vault entry (empty while the vault is locked). */
     secretHosts(): string[] {
       const vault = useVaultStore();
@@ -54,12 +59,20 @@ export const useHostsStore = defineStore('hosts', {
   actions: {
     /** Pull `main` and decrypt it with the sync passphrase. */
     async unlock(passphrase: string): Promise<void> {
-      const sync = makeSyncService(useAuthStore());
+      const auth=useAuthStore();const sub=claimsOf(auth.getIdToken()).sub;
+      const sync=makeSyncService({getIdToken:(force)=>{
+        const token=auth.getIdToken(force);
+        if(claimsOf(token).sub!==sub)throw new NotSignedInError('Your account changed. Start again.');
+        return token;
+      }});
       const blob = await sync.pull(SYNC_SLOT);
-      this.version = blob?.version ?? 0;
       // No account blob yet: an empty list is correct, not an error.
-      this.hosts = blob === null ? [] : parseSyncPayload(await decryptEnvelope(blob.data, passphrase));
+      const hosts = blob === null ? [] : parseSyncPayload(await decryptEnvelope(blob.data, passphrase));
+      if(claimsOf(auth.getIdToken()).sub!==sub)throw new NotSignedInError('Your account changed. Start again.');
+      this.version = blob?.version ?? 0;
+      this.hosts = hosts;
       this.passphrase = passphrase;
+      this.ownerSub = sub;
       this.pulled = true;
       this.error = '';
     },
@@ -91,15 +104,26 @@ export const useHostsStore = defineStore('hosts', {
     },
 
     async pushUpserted(entries: HostEntry[]): Promise<void> {
-      const sync = makeSyncService(useAuthStore());
+      const auth=useAuthStore();const sub=claimsOf(auth.getIdToken()).sub;
+      if(this.ownerSub!==sub || !this.unlocked)throw new NotSignedInError('Unlock this account before changing its hosts.');
+      const passphrase=this.passphrase;
+      const current=()=>auth.signedIn && claimsOf(auth.getIdToken()).sub===sub && this.passphrase===passphrase;
+      const sync = makeSyncService({getIdToken:(force)=>{
+        const token=auth.getIdToken(force);
+        if(claimsOf(token).sub!==sub)throw new NotSignedInError('Your account changed. Start again.');
+        return token;
+      }});
       let base = this.hosts;
       let baseVersion = this.version;
       for (let attempt = 0; ; attempt++) {
+        if(!current())throw new Error('Your account changed. Start again.');
         let next = base;
         for (const entry of entries) next = upsertHost(next, entry);
-        const envelope = await encryptToEnvelope(serializeSyncPayload(next), this.passphrase);
+        const envelope = await encryptToEnvelope(serializeSyncPayload(next), passphrase);
+        if(!current())throw new Error('Your account changed. Start again.');
         try {
           const { version } = await sync.push(SYNC_SLOT, envelope, baseVersion);
+          if(!current())throw new Error('Your account changed. Start again.');
           this.hosts = next;
           this.version = version;
           return;
@@ -107,7 +131,8 @@ export const useHostsStore = defineStore('hosts', {
           if (!(err instanceof SyncConflictError) || attempt >= 2) throw err;
           const blob = await sync.pull(SYNC_SLOT);
           if (blob === null) throw new Error('your synced list changed on the server — reload and try again');
-          base = parseSyncPayload(await decryptEnvelope(blob.data, this.passphrase));
+          base = parseSyncPayload(await decryptEnvelope(blob.data, passphrase));
+          if(!current())throw new Error('Your account changed. Start again.');
           baseVersion = blob.version;
         }
       }
@@ -174,6 +199,7 @@ export const useHostsStore = defineStore('hosts', {
     signOutLocal() {
       // In-memory state only; the vault store forgets its own session.
       this.passphrase = '';
+      this.ownerSub = '';
       this.hosts = [];
       this.pulled = false;
       this.error = '';

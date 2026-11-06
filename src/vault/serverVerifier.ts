@@ -33,12 +33,26 @@ export function makeServerVerifier(idToken: () => string, fetchFn: typeof fetch 
   const ms = (b: Record<string, unknown>) => num(b.retryAfter) * 1000;
 
   return {
+    scoped() {
+      const token = idToken();
+      return makeServerVerifier(() => token, fetchFn);
+    },
+    async initialize({data,auth,epoch}) {
+      const res=await call('POST','/vault/initialize',{data,auth:b64url(auth),epoch});
+      if(res===null)return {kind:'error',message:'Vault setup is temporarily unavailable. Try again.'};
+      const b=await json(res);
+      if(res.status===201 && b.ok===true && b.version===1 && b.epoch===epoch)return {kind:'ok',version:1};
+      if(res.status===409)return {kind:'conflict',currentVersion:0};
+      return {kind:'error',message:'Vault creation was not confirmed. Retry with the same passphrase.'};
+    },
     async status() {
       const res = await call('GET', '/vault/status');
       if (res === null || !res.ok) return { kind: 'unavailable' };
       const b = await json(res);
+      if(!Number.isSafeInteger(b.epoch) || num(b.epoch)<1 || typeof b.hasVerifier!=='boolean')return {kind:'unavailable'};
       const out: VaultServerStatus = { kind: 'ok', epoch: num(b.epoch), hasVerifier: b.hasVerifier === true, retryAfterMs: ms(b) };
       const kdf = b.kdf === undefined ? null : parseKdfParams(b.kdf);
+      if(b.kdf!==undefined && kdf===null)return {kind:'unavailable'};
       if (kdf !== null) out.kdf = kdf;
       return out;
     },

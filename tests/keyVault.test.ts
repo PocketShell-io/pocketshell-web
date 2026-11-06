@@ -40,11 +40,13 @@ const server = vi.hoisted(() => ({
   failPull: new Set<string>(),
   /** Slots whose PUT fails like a 5xx / network error. */
   failPush: new Set<string>(),
+  initializedAuth: null as string | null,
   reset() {
     server.slots.clear();
     server.pushes.length = 0;
     server.failPull.clear();
     server.failPush.clear();
+    server.initializedAuth = null;
   },
 }));
 
@@ -142,14 +144,41 @@ async function seedMain(hosts: HostEntry[], passphrase = SYNC_PASS) {
   server.slots.set('main', { version: 1, data: await encryptToEnvelope(serializeSyncPayload(hosts), passphrase) });
 }
 
+/** An account written by an old build, before distinct sync/vault phrases. */
+async function seedEqualPassphraseAccount() {
+  await seedMain([host('box')], VAULT_PASS);
+  const gate = useVaultGateStore();
+  await gate.open();
+  await gate.submitSyncPassphrase(VAULT_PASS);
+  await useVaultStore().create(VAULT_PASS, VAULT_PASS, false);
+  newDevice();
+  await useVaultGateStore().open();
+  await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+}
+
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'vault-web-'));
   plainKey = keygen('plain', '');
   encKey = keygen('enc', KEY_PASS);
   otherKey = keygen('other', '');
   vaultTuning.kdf = { m: 32768, t: 3, p: 1 }; // tests only: the cheapest params core accepts
-  // Phase 2 not deployed: every /vault/* call is a 404.
-  globalThis.fetch = (async () => new Response('{"message":"Not Found"}', { status: 404 })) as typeof fetch;
+  // First setup uses the same atomic header+verifier contract as CLI/Android.
+  // Existing reads still exercise the phase-1, client-side check path.
+  globalThis.fetch = (async (input,init) => {
+    const path=new URL(String(input),'https://synthetic.invalid').pathname;
+    const reply=(status:number,body:unknown)=>new Response(JSON.stringify(body),{status});
+    const current=server.slots.get('vault');
+    const epoch=current ? (JSON.parse(current.data).epoch ?? 1) : 1;
+    if(path==='/vault/status')return reply(200,{epoch,hasVerifier:server.initializedAuth!==null,retryAfter:0});
+    if(path==='/vault/initialize'){
+      const body=JSON.parse(String(init?.body));
+      if(current || server.initializedAuth!==null || body.epoch!==epoch)return reply(409,{error:'conflict'});
+      server.slots.set('vault',{version:1,data:body.data});server.initializedAuth=body.auth;
+      server.pushes.push({slot:'vault',data:body.data});
+      return reply(201,{ok:true,version:1,epoch});
+    }
+    return reply(404,{message:'Not Found'});
+  }) as typeof fetch;
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -256,11 +285,11 @@ describe('keys, bindings and connect', () => {
   it('an uploaded key is sealed, bound by host name, and decrypted only on demand', async () => {
     await ready();
     const vault = useVaultStore();
-    const added = await vault.addKey(plainKey, 'laptop');
+    const added = await vault.addKey(plainKey, 'laptop', undefined, VAULT_PASS);
     expect(added.kind).toBe('ok');
     if (added.kind !== 'ok') return;
     expect(added.entry.fingerprint).toMatch(/^SHA256:/);
-    await vault.bindHost('box', added.entry.keyId, 'managed');
+    await vault.bindHost('box', added.entry.keyId, 'managed', VAULT_PASS);
     const blob = server.slots.get(`vk-${added.entry.keyId}`)!.data;
     expect(blob).not.toContain('PRIVATE KEY');
     expect(server.slots.get('vault')!.data).not.toContain('laptop');
@@ -277,25 +306,28 @@ describe('keys, bindings and connect', () => {
     expect((await useHostsStore().getHostSecret('box'))?.privateKeyPem).toContain('PRIVATE KEY');
   });
 
-  it('the host list mirrors each binding\'s gatewayAuth (design s7), and drops it on unbind', async () => {
-    await ready();
-    const vault = useVaultStore();
-    const r = await vault.addKey(plainKey, 'k');
-    if (r.kind !== 'ok') throw new Error('add failed');
-    await vault.bindHost('box', r.entry.keyId, 'managed');
-    const mainHosts = async () => JSON.parse(await decryptEnvelope(server.slots.get('main')!.data, SYNC_PASS)).hosts as HostEntry[];
-    expect((await mainHosts()).find((h) => h.name === 'box')?.gatewayAuth).toBe('managed');
-    expect((await mainHosts()).find((h) => h.name === 'relay')?.gatewayAuth).toBeUndefined();
-    await vault.bindHost('box', null);
-    expect((await mainHosts()).find((h) => h.name === 'box')?.gatewayAuth).toBeUndefined();
+  describe('with an existing unlocked host list and vault', () => {
+    beforeEach(ready);
+
+    it('the host list mirrors each binding\'s gatewayAuth (design s7), and drops it on unbind', async () => {
+      const vault = useVaultStore();
+      const r = await vault.addKey(plainKey, 'k', undefined, VAULT_PASS);
+      if (r.kind !== 'ok') throw new Error('add failed');
+      await vault.bindHost('box', r.entry.keyId, 'managed', VAULT_PASS);
+      const mainHosts = async () => JSON.parse(await decryptEnvelope(server.slots.get('main')!.data, SYNC_PASS)).hosts as HostEntry[];
+      expect((await mainHosts()).find((h) => h.name === 'box')?.gatewayAuth).toBe('managed');
+      expect((await mainHosts()).find((h) => h.name === 'relay')?.gatewayAuth).toBeUndefined();
+      await vault.bindHost('box', null);
+      expect((await mainHosts()).find((h) => h.name === 'box')?.gatewayAuth).toBeUndefined();
+    });
   });
 
   it('"Apply to host" reminders survive a reload, and deleting a key flags its hosts (review item 4)', async () => {
     await ready();
     const vault = useVaultStore();
-    const r = await vault.addKey(plainKey, 'k');
+    const r = await vault.addKey(plainKey, 'k', undefined, VAULT_PASS);
     if (r.kind !== 'ok') throw new Error('add failed');
-    await vault.bindHost('box', r.entry.keyId, 'managed');
+    await vault.bindHost('box', r.entry.keyId, 'managed', VAULT_PASS);
     expect(vault.pendingApply).toEqual(['box']);
     vault.pendingApply = vault.pendingApply.filter((h) => h !== 'box'); // as if applied
     vault.persistPending();
@@ -313,12 +345,12 @@ describe('keys, bindings and connect', () => {
   it('an encrypted key asks for its passphrase once and is stored decrypted', async () => {
     await ready();
     const vault = useVaultStore();
-    expect((await vault.addKey(encKey, 'enc')).kind).toBe('needsPassphrase');
-    expect((await vault.addKey(encKey, 'enc', 'wrong')).kind).toBe('wrongPassphrase');
-    const r = await vault.addKey(encKey, 'enc', KEY_PASS);
+    expect((await vault.addKey(encKey, 'enc', undefined, VAULT_PASS)).kind).toBe('needsPassphrase');
+    expect((await vault.addKey(encKey, 'enc', 'wrong', VAULT_PASS)).kind).toBe('wrongPassphrase');
+    const r = await vault.addKey(encKey, 'enc', KEY_PASS, VAULT_PASS);
     expect(r.kind).toBe('ok');
     if (r.kind !== 'ok') return;
-    await vault.bindHost('box', r.entry.keyId);
+    await vault.bindHost('box', r.entry.keyId, undefined, VAULT_PASS);
     const pem = (await useHostsStore().getHostSecret('box'))!.privateKeyPem!;
     const out = join(dir, 'stored');
     require('node:fs').writeFileSync(out, pem, { mode: 0o600 });
@@ -329,14 +361,14 @@ describe('keys, bindings and connect', () => {
   it('passwords (and relay tokens) are vault entries too; rotate moves hosts; delete unbinds', async () => {
     await ready();
     const vault = useVaultStore();
-    const pw = await vault.addPassword('hunter2-relay', 'relay token');
-    await vault.bindHost('relay', pw.keyId);
+    const pw = await vault.addPassword('hunter2-relay', 'relay token', VAULT_PASS);
+    await vault.bindHost('relay', pw.keyId, undefined, VAULT_PASS);
     expect(await useHostsStore().getHostSecret('relay')).toEqual({ password: 'hunter2-relay' });
 
-    const a = await vault.addKey(plainKey, 'old');
+    const a = await vault.addKey(plainKey, 'old', undefined, VAULT_PASS);
     if (a.kind !== 'ok') throw new Error('add failed');
-    await vault.bindHost('box', a.entry.keyId, 'both');
-    const rotated = await vault.rotateKey(a.entry.keyId, otherKey, 'new');
+    await vault.bindHost('box', a.entry.keyId, 'both', VAULT_PASS);
+    const rotated = await vault.rotateKey(a.entry.keyId, otherKey, 'new', undefined, VAULT_PASS);
     expect(rotated.kind).toBe('ok');
     if (rotated.kind !== 'ok') return;
     expect(vault.bindings.box).toEqual({ keyId: rotated.entry.keyId, gatewayAuth: 'both' });
@@ -354,9 +386,9 @@ describe('keys, bindings and connect', () => {
   it('a locked vault answers a session dial with the unlock sheet, never a key prompt', async () => {
     await ready();
     const vault = useVaultStore();
-    const r = await vault.addKey(plainKey, 'k');
+    const r = await vault.addKey(plainKey, 'k', undefined, VAULT_PASS);
     if (r.kind !== 'ok') throw new Error('add failed');
-    await vault.bindHost('box', r.entry.keyId);
+    await vault.bindHost('box', r.entry.keyId, undefined, VAULT_PASS);
     vault.lock();
 
     const dial = authorizeDial('session', host('box'));
@@ -391,7 +423,7 @@ describe('change passphrase and reset', () => {
     await gate.open();
     await gate.createVault(VAULT_PASS, true);
     const vault = useVaultStore();
-    const r = await vault.addKey(plainKey, 'k');
+    const r = await vault.addKey(plainKey, 'k', undefined, VAULT_PASS);
     if (r.kind !== 'ok') throw new Error('add failed');
     const blobBefore = server.slots.get(`vk-${r.entry.keyId}`)!.data;
 
@@ -432,9 +464,9 @@ describe('change passphrase and reset', () => {
     await gate.submitSyncPassphrase(SYNC_PASS);
     await gate.createVault(VAULT_PASS, true);
     const vault = useVaultStore();
-    const r = await vault.addKey(plainKey, 'k');
+    const r = await vault.addKey(plainKey, 'k', undefined, VAULT_PASS);
     if (r.kind !== 'ok') throw new Error('add failed');
-    await vault.bindHost('box', r.entry.keyId);
+    await vault.bindHost('box', r.entry.keyId, undefined, VAULT_PASS);
     const otherBrowserRecord = localStorage.getItem(`ps.vaultDek.${SUB}`);
 
     const carry = vault.carryForReset();
@@ -445,7 +477,7 @@ describe('change passphrase and reset', () => {
     expect(vault.bindings.box?.keyId).toBe(r.entry.keyId);
 
     // Re-uploading the same key reattaches it (content-derived keyId).
-    await vault.addKey(plainKey, 'k again');
+    await vault.addKey(plainKey, 'k again', undefined, 'the new vault passphrase');
     expect(useHostsStore().secretHosts).toEqual(['box']);
 
     // A browser still remembering the old epoch falls back to the passphrase.
@@ -527,9 +559,9 @@ describe('hard-cut migration of the legacy keys slot', () => {
     await gate.submitSyncPassphrase(SYNC_PASS);
     await gate.createVault(VAULT_PASS, false);
     const vault = useVaultStore();
-    const r = await vault.addKey(otherKey, 'current');
+    const r = await vault.addKey(otherKey, 'current', undefined, VAULT_PASS);
     if (r.kind !== 'ok') throw new Error('add failed');
-    await vault.bindHost('box', r.entry.keyId);
+    await vault.bindHost('box', r.entry.keyId, undefined, VAULT_PASS);
 
     localStorage.setItem('ps.hostKeys', await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { box: { privateKeyPem: plainKey } } }), SYNC_PASS));
     await gate.checkLegacy();
@@ -541,30 +573,36 @@ describe('hard-cut migration of the legacy keys slot', () => {
 });
 
 describe('legacy migration never deletes what it could not read (review item 1)', () => {
-  it('A: the account slot fails to load while a local cache exists: only the local copy is migrated and deleted', async () => {
-    await seedMain([host('box'), host('local')]);
-    server.slots.set('keys', {
-      version: 3,
-      data: await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { box: { privateKeyPem: plainKey } } }), SYNC_PASS),
+  describe('with an unread account slot and a readable local cache', () => {
+    beforeEach(async () => {
+      await seedMain([host('box'), host('local')]);
+      server.slots.set('keys', {
+        version: 3,
+        data: await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { box: { privateKeyPem: plainKey } } }), SYNC_PASS),
+      });
+      localStorage.setItem('ps.hostKeys', await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { local: { privateKeyPem: otherKey } } }), SYNC_PASS));
+      server.failPull.add('keys');
+      const gate = useVaultGateStore();
+      await gate.open();
+      await gate.submitSyncPassphrase(SYNC_PASS);
+      await gate.createVault(VAULT_PASS, false);
     });
-    localStorage.setItem('ps.hostKeys', await encryptToEnvelope(JSON.stringify({ v: 1, secrets: { local: { privateKeyPem: otherKey } } }), SYNC_PASS));
-    server.failPull.add('keys');
-    const gate = useVaultGateStore();
-    await gate.open();
-    await gate.submitSyncPassphrase(SYNC_PASS);
-    await gate.createVault(VAULT_PASS, false);
-    await gate.migrate();
-    expect(useHostsStore().secretHosts).toEqual(['local']);
-    expect(localStorage.getItem('ps.hostKeys')).toBeNull();
-    expect(server.slots.has('keys')).toBe(true); // unread: kept
-    expect(gate.legacyNotice).toMatch(/could not be read/);
 
-    // Next open, the slot loads: it migrates and only then goes.
-    server.failPull.delete('keys');
-    await gate.checkLegacy();
-    await gate.migrate();
-    expect(useHostsStore().secretHosts.sort()).toEqual(['box', 'local']);
-    expect(server.slots.has('keys')).toBe(false);
+    it('A: the account slot fails to load while a local cache exists: only the local copy is migrated and deleted', async () => {
+      const gate = useVaultGateStore();
+      await gate.migrate();
+      expect(useHostsStore().secretHosts).toEqual(['local']);
+      expect(localStorage.getItem('ps.hostKeys')).toBeNull();
+      expect(server.slots.has('keys')).toBe(true); // unread: kept
+      expect(gate.legacyNotice).toMatch(/could not be read/);
+
+      // Next open, the slot loads: it migrates and only then goes.
+      server.failPull.delete('keys');
+      await gate.checkLegacy();
+      await gate.migrate();
+      expect(useHostsStore().secretHosts.sort()).toEqual(['box', 'local']);
+      expect(server.slots.has('keys')).toBe(false);
+    });
   });
 
   it('B: a slot under an older sync passphrase is kept, and opens with that passphrase', async () => {
@@ -627,28 +665,23 @@ describe('the vault passphrase never encrypts the host list (decision #7)', () =
     await gate.changePassphrase(VAULT_PASS, 'a fresh vault passphrase');
   });
 
-  it('an account set up with equal passphrases is offered a one-click re-secure of its host list', async () => {
-    await seedMain([host('box')], VAULT_PASS);
-    const gate = useVaultGateStore();
-    await gate.open();
-    await gate.submitSyncPassphrase(VAULT_PASS);
-    // The old build allowed this; create it below the gate's check.
-    await useVaultStore().create(VAULT_PASS, VAULT_PASS, false);
-    newDevice();
-    await useVaultGateStore().open();
-    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
-    expect(useVaultGateStore().step).toBe('resecure');
-    await useVaultGateStore().resecureHostList();
-    expect(useVaultGateStore().step).toBe('ready');
-    await expect(decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS)).rejects.toThrow();
-    const fresh = useVaultStore().syncPassphrase();
-    expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(JSON.parse(await decryptEnvelope(server.slots.get('main')!.data, fresh)).hosts[0].name).toBe('box');
-    newDevice();
-    await useVaultGateStore().open();
-    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
-    expect(useVaultGateStore().step).toBe('ready');
-    expect(useHostsStore().hosts.map((h) => h.name)).toEqual(['box']);
+  describe('with an account whose passphrases were equal', () => {
+    beforeEach(seedEqualPassphraseAccount);
+
+    it('an account set up with equal passphrases is offered a one-click re-secure of its host list', async () => {
+      expect(useVaultGateStore().step).toBe('resecure');
+      await useVaultGateStore().resecureHostList();
+      expect(useVaultGateStore().step).toBe('ready');
+      await expect(decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS)).rejects.toThrow();
+      const fresh = useVaultStore().syncPassphrase();
+      expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(JSON.parse(await decryptEnvelope(server.slots.get('main')!.data, fresh)).hosts[0].name).toBe('box');
+      newDevice();
+      await useVaultGateStore().open();
+      await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+      expect(useVaultGateStore().step).toBe('ready');
+      expect(useHostsStore().hosts.map((h) => h.name)).toEqual(['box']);
+    });
   });
 
   it('reset: a new passphrase equal to the sync passphrase is refused; forgot-too gets a generated one', async () => {
@@ -702,42 +735,47 @@ describe('verification regressions (A, B, C)', () => {
   });
 
   async function equalPassphraseAccount() {
-    await seedMain([host('box')], VAULT_PASS);
-    const gate = useVaultGateStore();
-    await gate.open();
-    await gate.submitSyncPassphrase(VAULT_PASS);
-    await useVaultStore().create(VAULT_PASS, VAULT_PASS, false);
-    newDevice();
-    await useVaultGateStore().open();
-    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+    await seedEqualPassphraseAccount();
     expect(useVaultGateStore().step).toBe('resecure');
   }
 
-  it('B: re-secure writes the index first; a failed host-list write is finished on the next unlock', async () => {
-    await equalPassphraseAccount();
-    server.failPush.add('main');
-    await expect(useVaultGateStore().resecureHostList()).rejects.toThrow();
-    const fresh = useVaultStore().syncPassphrase();
-    expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/); // the index already has it
-    await decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS); // main untouched, still readable
-    server.failPush.delete('main');
+  describe('re-secure recovery', () => {
+    // Build the existing equal-passphrase account as a fixture. The recovery
+    // itself, including real crypto and the next-device unlock, stays in each test.
+    beforeEach(equalPassphraseAccount);
 
-    newDevice();
-    await useVaultGateStore().open();
-    await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
-    expect(useVaultGateStore().step).toBe('ready');
-    expect(useHostsStore().hosts.map((h) => h.name)).toEqual(['box']);
-    await decryptEnvelope(server.slots.get('main')!.data, fresh);
-    await expect(decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS)).rejects.toThrow();
-  });
+    describe('with an interrupted host-list write', () => {
+      let fresh = '';
+      beforeEach(async () => {
+        // Prepare the interrupted transaction with the real failed write.
+        // These fixture assertions are gates too: recovery must start with
+        // the new index passphrase and the unchanged, readable old host list.
+        server.failPush.add('main');
+        await expect(useVaultGateStore().resecureHostList()).rejects.toThrow();
+        fresh = useVaultStore().syncPassphrase();
+        expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        await decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS);
+        server.failPush.delete('main');
+      });
 
-  it('B: a failed index write changes nothing', async () => {
-    await equalPassphraseAccount();
-    const mainBefore = server.slots.get('main')!.data;
-    server.failPush.add('vault');
-    await expect(useVaultGateStore().resecureHostList()).rejects.toThrow();
-    expect(server.slots.get('main')!.data).toBe(mainBefore);
-    expect(useVaultStore().syncPassphrase()).toBe(VAULT_PASS);
+      it('B: re-secure writes the index first; a failed host-list write is finished on the next unlock', async () => {
+        newDevice();
+        await useVaultGateStore().open();
+        await useVaultGateStore().submitVaultPassphrase(VAULT_PASS, false);
+        expect(useVaultGateStore().step).toBe('ready');
+        expect(useHostsStore().hosts.map((h) => h.name)).toEqual(['box']);
+        await decryptEnvelope(server.slots.get('main')!.data, fresh);
+        await expect(decryptEnvelope(server.slots.get('main')!.data, VAULT_PASS)).rejects.toThrow();
+      });
+    });
+
+    it('B: a failed index write changes nothing', async () => {
+      const mainBefore = server.slots.get('main')!.data;
+      server.failPush.add('vault');
+      await expect(useVaultGateStore().resecureHostList()).rejects.toThrow();
+      expect(server.slots.get('main')!.data).toBe(mainBefore);
+      expect(useVaultStore().syncPassphrase()).toBe(VAULT_PASS);
+    });
   });
 
   it('C: reset "known" without a known sync passphrase refuses instead of deleting the host list', async () => {

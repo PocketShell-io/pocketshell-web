@@ -494,7 +494,7 @@ export const webApi: PocketShellApi = {
       ),
     // The browser transport has no `command -v` probe yet. null is core's
     // "never asked" answer: it refuses nothing, so the launch picker falls
-    // back to the subcommand list instead of guessing a binary is absent.
+    // back to the live engine catalog or core's offline fallback.
     binaries: () => Promise.resolve(null),
     profiles: (connectionId) => servicesOf(connectionId).agent.profiles(),
     envList: (connectionId, dir) => servicesOf(connectionId).agent.envList(dir),

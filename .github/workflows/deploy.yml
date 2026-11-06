@@ -53,7 +53,7 @@ jobs:
           # The REVIEWED core this site builds against. Bump it only by PR,
           # together with test.yml/deploy.yml (tests/corePin.test.ts checks
           # both match); sync-core.yml reports when core main moves past it.
-          ref: 93db1bc082a806ecdf2d96641d30edf5afba585d
+          ref: 3449b8af617e74bad8f86c3f2025a801c580022e
           path: pocketshell-core
           persist-credentials: false
       - name: Build @pocketshell/core (file sibling)

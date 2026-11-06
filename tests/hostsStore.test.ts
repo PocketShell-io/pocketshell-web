@@ -57,6 +57,7 @@ vi.mock('../src/api/sync', () => {
   }
   return {
     SyncConflictError,
+    NotSignedInError: class NotSignedInError extends Error {},
     makeSyncService: () => ({
       pull: (slot: string) => {
         if (slot === 'keys') return Promise.resolve(fake.keyPulls.shift() ?? null);
@@ -76,9 +77,11 @@ vi.mock('../src/api/sync', () => {
 import { decryptEnvelope, encryptToEnvelope } from '../src/shared/syncCrypto';
 import { serializeSyncPayload } from '@pocketshell/core';
 import { useHostsStore } from '../src/stores/hosts';
+import {useAuthStore} from '../src/stores/auth';
 import type { HostEntry } from '@pocketshell/core';
 
 const PASSPHRASE = 'correct horse';
+function jwt(sub:string){return `e30.${Buffer.from(JSON.stringify({sub,email:'synthetic@example.test',exp:4102444800})).toString('base64url')}.x`;}
 
 function host(name: string, hostname = `${name}.example.com`): HostEntry {
   return { name, hostname, port: 22, user: '', identityFile: null, proxyJump: null, forwardAgent: false, localForwards: [], remoteForwards: [], fromConfig: true };
@@ -98,9 +101,22 @@ beforeEach(() => {
   fake.reset();
   localStorage.clear();
   sessionStorage.clear();
+  useAuthStore().signIn(jwt('synthetic:a'));
 });
 
 describe('hosts store saveHost (the web pushing to the account slot)', () => {
+  it('never republishes the previous account list after selecting another Google subject',async()=>{
+    const store=useHostsStore();fake.pulls.push(await pullBlob(1,[host('private-a')]));await store.unlock(PASSPHRASE);
+    useAuthStore().signIn(jwt('synthetic:b'));
+    expect(store.unlocked).toBe(false);
+    await expect(store.saveHost(host('new-b'))).rejects.toThrow(/Unlock this account/);
+    expect(fake.pushes).toEqual([]);
+  });
+  it('an account switch during envelope encryption cancels before any host-list push',async()=>{
+    const store=useHostsStore();fake.pulls.push(await pullBlob(1,[host('private-a')]));await store.unlock(PASSPHRASE);
+    const pending=store.saveHost(host('new-a'));useAuthStore().signIn(jwt('synthetic:b'));
+    await expect(pending).rejects.toThrow(/account changed/);expect(fake.pushes).toEqual([]);
+  });
   it('pushes the pulled list with the new entry upserted, and adopts the returned version', async () => {
     const store = useHostsStore();
     fake.pulls.push(await pullBlob(4, [host('a')]));
@@ -136,6 +152,7 @@ describe('hosts store saveHost (the web pushing to the account slot)', () => {
   it('retries conflicts up to three rounds before surfacing the error', async () => {
     const store = useHostsStore();
     store.passphrase = PASSPHRASE;
+    store.ownerSub='synthetic:a';store.pulled=true;
     store.version = 3;
     store.hosts = [host('b')];
     // Two fresh blobs to re-base on during the two retries.
@@ -149,6 +166,7 @@ describe('hosts store saveHost (the web pushing to the account slot)', () => {
   it('refuses to resurrect a slot that was deleted between our pull and push', async () => {
     const store = useHostsStore();
     store.passphrase = PASSPHRASE;
+    store.ownerSub='synthetic:a';store.pulled=true;
     store.version = 3;
     store.hosts = [host('b')];
     fake.pulls.push(null);

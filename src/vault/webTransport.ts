@@ -7,8 +7,15 @@
 import { SyncApiError, SyncConflictError, type SyncService } from '../api/sync';
 import type { VaultSlotTransport } from '@pocketshell/core';
 
-export function makeVaultTransport(sync: () => SyncService): VaultSlotTransport {
+export function makeVaultTransport(sync: () => SyncService, scope: object = {}): VaultSlotTransport {
   return {
+    // The owner store fixes the Google subject. Preserve this opaque
+    // namespace across per-operation snapshots and ordinary vault locks.
+    scope,
+    scoped() {
+      const service = sync();
+      return makeVaultTransport(() => service,scope);
+    },
     async pull(slot) {
       try {
         const got = await sync().pull(slot);
