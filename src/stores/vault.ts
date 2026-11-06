@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
-import { makeSyncService } from '../api/sync';
+import { makeSyncService, NotSignedInError } from '../api/sync';
+import { createKeyVaultController, isValidNewVaultPassphrase, type KeyVaultController } from '@ui/app/keyVault';
 import { claimsOf } from '../auth/google';
 import { useAuthStore } from './auth';
 import {
@@ -54,7 +55,7 @@ export const vaultTuning = { kdf: { ...VAULT_KDF_DEFAULT } as { m: number; t: nu
  * state: the DEK it holds never reaches devtools, serialisation or
  * reactivity. Rebuilt when the account changes.
  */
-let core: { sub: string; store: KeyVaultStore; off: () => void } | null = null;
+let core: { sub: string; store: KeyVaultStore; controller: KeyVaultController; off: () => void } | null = null;
 let coreFactory: ((sub: string) => KeyVaultStore) | null = null;
 /** A passphrase change or reset is rewriting the header: a lock must wait
  * for it (locking mid-write can leave the vault unreadable). */
@@ -65,11 +66,20 @@ let lockDeferred = false;
 export function setKeyVaultFactoryForTests(factory: ((sub: string) => KeyVaultStore) | null): void {
   coreFactory = factory;
   core?.off();
+  core?.controller.cancelAddition();
+  core?.store.lock();
   core = null;
 }
 
 function accountSub(): string {
   return claimsOf(useAuthStore().idToken).sub;
+}
+
+/** A store belonging to A must never pick up B's token during an await. */
+function tokenForAccount(sub: string, forceRefresh = false): string {
+  const token = useAuthStore().getIdToken(forceRefresh);
+  if (claimsOf(token).sub !== sub) throw new NotSignedInError('The Google account changed. Start again.');
+  return token;
 }
 
 export function describeWriteFailure(r: Exclude<VaultWriteResult, { kind: 'ok' }> | { kind: 'tooLarge' }): string {
@@ -128,14 +138,18 @@ export const useVaultStore = defineStore('vault', {
       const sub = accountSub();
       if (core === null || core.sub !== sub) {
         core?.off();
+        core?.controller.lock();
         const store =
           coreFactory?.(sub) ??
           new KeyVaultStore({
-            transport: makeVaultTransport(() => makeSyncService(useAuthStore())),
-            verifier: makeServerVerifier(() => useAuthStore().getIdToken()),
+            transport: makeVaultTransport(() => makeSyncService({ getIdToken: (force) => tokenForAccount(sub, force) })),
+            verifier: makeServerVerifier(() => tokenForAccount(sub)),
             kdf: vaultTuning.kdf,
           });
-        core = { sub, store, off: store.subscribe(() => this.refresh()) };
+        const controller = createKeyVaultController({store, canUpload:true, accountId:async()=>{
+          try {return accountSub() === sub ? `google:${sub}` : null;} catch {return null;}
+        }});
+        core = { sub, store, controller, off: store.subscribe(() => this.refresh()) };
       }
       return core.store;
     },
@@ -239,6 +253,7 @@ export const useVaultStore = defineStore('vault', {
 
     /** First setup; the index records the sync passphrase. */
     async create(passphrase: string, syncPassphrase: string, remember: boolean): Promise<void> {
+      if(!isValidNewVaultPassphrase(passphrase))throw new Error('Use a vault passphrase with at least 12 characters, not a numeric PIN.');
       const r = await this.core().createVault(passphrase, { syncPassphrase });
       if (r.kind === 'exists') throw new Error('A vault was just created on another device. Reload and unlock it with that passphrase.');
       if (r.kind === 'indexFull') throw new Error(describeWriteFailure(r));
@@ -275,6 +290,7 @@ export const useVaultStore = defineStore('vault', {
     },
 
     lock(): void {
+      core?.controller.cancelAddition();
       if (headerOps > 0) {
         lockDeferred = true;
         return;
@@ -299,27 +315,38 @@ export const useVaultStore = defineStore('vault', {
 
     /** Sign-out forgets the remembered vault key too (design section 5). */
     async signOut(sub: string | null): Promise<void> {
+      const owner = core;
+      owner?.off();
+      owner?.controller.cancelAddition();
+      owner?.store.lock();
       if (sub !== null) await forgetDek(sub).catch(() => undefined);
-      core?.store.lock();
-      core?.off();
-      core = null;
-      this.$reset();
+      if (core === owner) {core = null; this.$reset();}
     },
 
     /* --- keys and bindings --------------------------------------------- */
 
-    async addKey(pem: string, name: string, keyPassphrase?: string): Promise<AddKeyResult> {
-      const r = await this.core().addKey(pem, clampVaultName(name, 'SSH key'), keyPassphrase);
-      this.refresh();
+    async addKey(pem: string, name: string, keyPassphrase?: string, vaultPassphrase?: string, binding?: {hostAlias:string;gatewayAuth:GatewayAuth}): Promise<AddKeyResult> {
+      const owner = this.core();
+      const sub=core!.sub;
+      const r = await core!.controller.addKey(pem, clampVaultName(name, 'SSH key'), keyPassphrase, vaultPassphrase, binding);
+      if (core?.store === owner) this.refresh();
+      if(r.kind==='ok' && binding && core?.store===owner && accountSub()===sub){this.markPending([binding.hostAlias]);await this.mirrorToHostList();}
+      if(r.kind==='ok' && (core?.store!==owner || accountSub()!==sub))return {kind:'locked'};
       return r;
     },
 
-    async addPassword(password: string, name: string): Promise<VaultKeyEntry> {
-      const r = await this.core().addPassword(password, clampVaultName(name, 'Password'));
+    async addPassword(password: string, name: string, vaultPassphrase?: string, binding?: {hostAlias:string;gatewayAuth:GatewayAuth}): Promise<VaultKeyEntry> {
+      const owner = this.core();
+      const sub=core!.sub;
+      const r = await core!.controller.addPassword(password, clampVaultName(name, 'Password'), vaultPassphrase, binding);
       if (r.kind !== 'ok') throw new Error(describeWriteFailure(r));
-      this.refresh();
+      if (core?.store === owner) this.refresh();
+      if(binding && core?.store===owner && accountSub()===sub){this.markPending([binding.hostAlias]);await this.mirrorToHostList();}
+      if(core?.store!==owner || accountSub()!==sub)throw new Error('Your account changed. Start again.');
       return r.entry;
     },
+
+    cancelAddition(): void {core?.controller.cancelAddition();},
 
     /** Deleting a key does not revoke it on hosts: their host agents keep
      * trusting its public key until "Apply to host", so flag them. */
@@ -336,23 +363,22 @@ export const useVaultStore = defineStore('vault', {
     },
 
     /** Rotate: add the new key, move every host from the old one onto it. */
-    async rotateKey(oldKeyId: string, pem: string, name: string, keyPassphrase?: string): Promise<AddKeyResult> {
-      const added = await this.core().addKey(pem, clampVaultName(name, 'SSH key'), keyPassphrase);
+    async rotateKey(oldKeyId: string, pem: string, name: string, keyPassphrase?: string, vaultPassphrase?: string): Promise<AddKeyResult> {
+      const owner = this.core();
+      const sub = core!.sub;
+      const moved = Object.entries(owner.listHostBindings()).filter(([, b]) => b.keyId === oldKeyId).map(([h]) => h);
+      const added = await core!.controller.rotateKey(oldKeyId,pem,clampVaultName(name,'SSH key'),keyPassphrase,vaultPassphrase);
       if (added.kind !== 'ok') return added;
-      if (added.entry.keyId === oldKeyId) {
-        return { kind: 'invalid', message: 'That is the same key. Upload the new key to rotate to.' };
-      }
-      const moved = Object.entries(this.core().listHostBindings())
-        .filter(([, b]) => b.keyId === oldKeyId)
-        .map(([h]) => h);
-      throwIfFailed(await this.core().rotateKey(oldKeyId, added.entry.keyId));
+      if (core?.store !== owner || accountSub() !== sub) return {kind:'locked'};
       // The old public key stays authorized on those hosts until re-pushed.
       this.markPending(moved);
       return added;
     },
 
-    async bindHost(host: string, keyId: string | null, gatewayAuth: GatewayAuth = 'both'): Promise<void> {
-      throwIfFailed(keyId === null ? await this.core().unbindHost(host) : await this.core().bindHost(host, keyId, gatewayAuth));
+    async bindHost(host: string, keyId: string | null, gatewayAuth: GatewayAuth = 'both', vaultPassphrase?: string): Promise<void> {
+      const owner=this.core();const sub=core!.sub;
+      throwIfFailed(await core!.controller.bindHost(host,keyId===null?null:{keyId,gatewayAuth},vaultPassphrase));
+      if(core?.store!==owner || accountSub()!==sub)throw new Error('Your account changed. Start again.');
       this.markPending([host]);
       await this.mirrorToHostList();
     },

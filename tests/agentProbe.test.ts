@@ -1,39 +1,20 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   PocketshellProbe,
-  parseAgentSubcommands,
-  parseHelperVersion,
+  parseEngineCatalog,
   parseProfilesEnvelope,
 } from '../src/workspace/agentProbe';
 import type { ExecOutcome } from '../src/terminal/connection';
 
-const FIXTURE = (name: string) =>
-  readFileSync(join(__dirname, 'fixtures', name), 'utf8');
-
-describe('parseAgentSubcommands', () => {
-  it('reads the Commands: block of the pinned 0.4.44 help', () => {
-    expect(parseAgentSubcommands(FIXTURE('v0.4.44-agent-help.txt'), 0)).toEqual([
-      'claude',
-      'codex',
-      'opencode',
-    ]);
+describe('parseEngineCatalog', () => {
+  it('keeps custom available IDs, deduplicates and excludes unavailable engines and shell',()=>{
+    expect(parseEngineCatalog(JSON.stringify([{name:'claude',available:true},{name:'custom-ai',available:true},{name:'custom-ai',available:true},{name:'codex',available:false},{name:'shell',available:true}]),0)).toEqual(['claude','custom-ai']);
   });
-
-  it('answers null on the exit 2 of a subcommand the helper lacks', () => {
-    expect(
-      parseAgentSubcommands(FIXTURE('v0.4.44-agent-no-such-command.stderr.txt'), 2),
-    ).toBeNull();
+  it('distinguishes a successful empty catalog from failure',()=>{
+    expect(parseEngineCatalog('[]',0)).toEqual([]);expect(parseEngineCatalog('[]',2)).toBeNull();
   });
-
-  it('answers null with no Commands: header even at exit 0', () => {
-    expect(parseAgentSubcommands('Usage: pocketshell agent [OPTIONS]\n', 0)).toBeNull();
-  });
-
-  it('carries PTY carriage returns fine and skips continuation lines', () => {
-    const text = 'Usage: x\r\n\r\nCommands:\r\n  claude    Launch `claude`.\r\n            more words\r\n  codex     Launch `codex`.\r\n';
-    expect(parseAgentSubcommands(text, 0)).toEqual(['claude', 'codex']);
+  it('refuses malformed JSON, rows, envelope and availability flags',()=>{
+    for(const s of ['bad','{}','[null]','[[]]','[{"name":"a","available":"yes"}]','[{"name":"","available":true}]'])expect(parseEngineCatalog(s,0)).toBeNull();
   });
 });
 
@@ -55,21 +36,14 @@ describe('parseProfilesEnvelope', () => {
   });
 });
 
-describe('parseHelperVersion', () => {
-  it('takes the first line only', () => {
-    expect(parseHelperVersion('pocketshell, version 0.4.44\nnext\n')).toBe('pocketshell, version 0.4.44');
-    expect(parseHelperVersion('\n')).toBeNull();
-  });
-});
-
 describe('PocketshellProbe', () => {
-  it('PATH-wraps both probe commands and reports the host answer', async () => {
+  it('PATH-wraps the live catalog command and reports the host answer', async () => {
     const calls: string[] = [];
     const transport = {
       async exec(command: string): Promise<ExecOutcome> {
         calls.push(command);
-        if (command.includes('agent --help')) {
-          return { exitCode: 0, stdout: FIXTURE('v0.4.44-agent-help.txt'), stderr: '', error: null };
+        if (command.includes('a engines --json')) {
+          return { exitCode: 0, stdout: JSON.stringify([{name:'claude',available:true},{name:'custom-ai',available:true}]), stderr: '', error: null };
         }
         return { exitCode: 0, stdout: 'pocketshell, version 0.4.44\n', stderr: '', error: null };
       },
@@ -77,21 +51,21 @@ describe('PocketshellProbe', () => {
     const probe = new PocketshellProbe(transport);
     const support = await probe.agentSupport();
     expect(calls.every((c) => c.includes('/bin/sh -lc') && c.includes('$HOME/.local/bin'))).toBe(true);
-    expect(support.subcommands).toEqual(['claude', 'codex', 'opencode']);
-    expect(support.helperVersion).toContain('0.4.44');
+    expect(support.engineIds).toEqual(['claude', 'custom-ai']);
+    expect(calls).toHaveLength(1);
 
     const profiles = await probe.listProfiles();
     expect(profiles).toEqual([]);
   });
 
-  it('never throws on a dead transport: null subcommands, empty profiles', async () => {
+  it('never throws on a dead transport: null catalog, empty profiles', async () => {
     const probe = new PocketshellProbe({
       async exec() {
         throw new Error('channel closed');
       },
     });
     const support = await probe.agentSupport();
-    expect(support.subcommands).toBeNull();
+    expect(support.engineIds).toBeNull();
     expect(await probe.listProfiles()).toEqual([]);
   });
 });

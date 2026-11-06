@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, type Ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import {claimsOf} from '../auth/google';
 import { useConnectionStore } from '@ui/app/stores/connection';
 import { useHostsStore } from '../stores/hosts';
 import { useWarningsStore } from '../stores/warnings';
@@ -38,6 +39,10 @@ const keyPolicy = ref<GatewayAuth>('both');
 const keyMode = ref<'pick' | 'upload' | 'password'>('pick');
 const passwordDraft = ref('');
 const passwordName = ref('');
+const passwordVaultPassphrase = ref('');
+const bindingVaultPassphrase = ref('');
+watch([keyHost,keyMode,keyPolicy],()=>{vault.cancelAddition();passwordDraft.value='';passwordVaultPassphrase.value='';bindingVaultPassphrase.value='';});
+onBeforeUnmount(()=>{vault.cancelAddition();passwordDraft.value='';passwordVaultPassphrase.value='';bindingVaultPassphrase.value='';hostVaultPassphrase.value='';});
 const keyError = ref('');
 const keyBusy = ref(false);
 
@@ -46,6 +51,9 @@ const draft = ref({ name: '', hostname: '', port: '22', user: '' });
 const draftIsEdit = ref(false);
 const saving = ref(false);
 const formError = ref('');
+const hostVaultPassphrase = ref('');
+const hostUsesVaultCredential = computed(()=>vault.bindings[draft.value.name.trim()]!==undefined);
+watch(formOpen,open=>{if(!open){vault.cancelAddition();hostVaultPassphrase.value='';}});
 /** The validation failure named the port field: #hf-port carries
  * aria-invalid (and the error border) until the form resets or saves. */
 const portInvalid = ref(false);
@@ -167,6 +175,7 @@ function editHost(host: HostEntry) {
 }
 
 async function saveHost() {
+  if(saving.value)return;
   const base = hosts.hosts.find((host) => host.name === draft.value.name.trim());
   const res = normalizeHostDraft(draft.value, base);
   if (!res.ok) {
@@ -177,7 +186,15 @@ async function saveHost() {
   saving.value = true;
   formError.value = '';
   portInvalid.value = false;
+  const confirmation=hostVaultPassphrase.value;hostVaultPassphrase.value='';
   try {
+    const sub=claimsOf(auth.getIdToken()).sub;
+    const bound=vault.bindings[res.entry.name];
+    if(bound){
+      if(!confirmation)throw new Error('Enter your vault passphrase before saving a host that uses a vault credential.');
+      await vault.bindHost(res.entry.name,bound.keyId,bound.gatewayAuth,confirmation);
+      if(!formOpen.value || claimsOf(auth.getIdToken()).sub!==sub)throw new Error('The host change was cancelled.');
+    }
     await hosts.saveHost(res.entry);
     setNotice(hostSaved, res.entry.name);
     formOpen.value = false;
@@ -211,17 +228,20 @@ function entryLabel(e: VaultKeyEntry): string {
 /** A key just uploaded from the dialog is the host's choice. */
 function onKeyUploaded(entry: VaultKeyEntry) {
   keyChoice.value = entry.keyId;
-  keyMode.value = 'pick';
+  if(keyHost.value)finishKeySaved(keyHost.value.name);
 }
 
 async function addPasswordEntry() {
-  if (keyHost.value === null || passwordDraft.value === '') return;
+  if (keyBusy.value || keyHost.value === null || passwordDraft.value === '' || passwordVaultPassphrase.value === '') return;
   keyBusy.value = true;
   keyError.value = '';
+  const confirmation=passwordVaultPassphrase.value;passwordVaultPassphrase.value='';
   try {
     const entry = await vault.addPassword(
       passwordDraft.value,
       passwordName.value.trim() || `${keyHost.value.name} ${keyHost.value.link ? 'relay token' : 'password'}`,
+      confirmation,
+      {hostAlias:keyHost.value.name,gatewayAuth:keyPolicy.value},
     );
     passwordDraft.value = '';
     onKeyUploaded(entry);
@@ -233,19 +253,25 @@ async function addPasswordEntry() {
 }
 
 async function saveKey() {
-  if (keyHost.value === null) return;
+  if (keyBusy.value || keyHost.value === null) return;
+  const host=keyHost.value.name;
+  const confirmation=bindingVaultPassphrase.value;bindingVaultPassphrase.value='';
   keyBusy.value = true;
   keyError.value = '';
   try {
-    await vault.bindHost(keyHost.value.name, keyChoice.value === '' ? null : keyChoice.value, keyPolicy.value);
-    setNotice(keySaved, keyHost.value.name);
-    keyHost.value = null;
+    await vault.bindHost(host, keyChoice.value === '' ? null : keyChoice.value, keyPolicy.value, confirmation);
+    if(keyHost.value?.name!==host)return;
+    finishKeySaved(host);
   } catch (e) {
     keyError.value = e instanceof Error ? e.message : String(e);
     return;
   } finally {
     keyBusy.value = false;
   }
+}
+
+function finishKeySaved(host:string) {
+  setNotice(keySaved,host);keyHost.value=null;
   if (importResume.value) {
     importResume.value = false;
     if (missingCredentials.value.length > 0) {
@@ -572,19 +598,24 @@ async function open(host: HostEntry) {
             <form class="hostform" @submit.prevent="saveHost">
               <div class="field f-name">
                 <label class="flabel" for="hf-name">Name</label>
-                <input id="hf-name" v-model="draft.name" placeholder="Name (e.g. prod-box)" :disabled="draftIsEdit" autocomplete="off" autofocus />
+                <input id="hf-name" v-model="draft.name" placeholder="Name (e.g. prod-box)" :disabled="draftIsEdit || saving" autocomplete="off" autofocus />
               </div>
               <div class="field f-host">
                 <label class="flabel" for="hf-host">Hostname</label>
-                <input id="hf-host" v-model="draft.hostname" placeholder="Hostname" autocomplete="off" />
+                <input id="hf-host" v-model="draft.hostname" placeholder="Hostname" autocomplete="off" :disabled="saving" />
               </div>
               <div class="field f-user">
                 <label class="flabel" for="hf-user">User</label>
-                <input id="hf-user" v-model="draft.user" placeholder="User (optional)" autocomplete="off" />
+                <input id="hf-user" v-model="draft.user" placeholder="User (optional)" autocomplete="off" :disabled="saving" />
               </div>
               <div class="field f-port">
                 <label class="flabel" for="hf-port">Port</label>
-                <input id="hf-port" v-model="draft.port" placeholder="Port" inputmode="numeric" :aria-invalid="portInvalid ? 'true' : undefined" />
+                <input id="hf-port" v-model="draft.port" placeholder="Port" inputmode="numeric" :aria-invalid="portInvalid ? 'true' : undefined" :disabled="saving" />
+              </div>
+              <div v-if="hostUsesVaultCredential" class="field">
+                <label class="flabel" for="hf-vaultpass">Vault passphrase</label>
+                <input id="hf-vaultpass" v-model="hostVaultPassphrase" type="password" autocomplete="current-password" autocapitalize="off" :disabled="saving" />
+                <p class="muted hint">Confirm your vault passphrase to use its credential for this host.</p>
               </div>
               <div class="form-actions">
                 <button class="primary" type="submit" :disabled="saving || draft.hostname.trim() === ''">
@@ -678,6 +709,12 @@ async function open(host: HostEntry) {
               Keys are stored in your vault, encrypted with your vault passphrase, decrypted in memory and sent to the
               bridge only when you connect.
             </p>
+            <fieldset class="policy">
+              <legend class="flabel">Through the PocketShell gateway, sign in with</legend>
+              <label class="unlock-remember"><input v-model="keyPolicy" type="radio" value="both" name="kf-policy" /><span>This vault key, then the host's own keys</span></label>
+              <label class="unlock-remember"><input v-model="keyPolicy" type="radio" value="managed" name="kf-policy" /><span>Only this vault key</span></label>
+              <label class="unlock-remember"><input v-model="keyPolicy" type="radio" value="host" name="kf-policy" /><span>Only the host's own keys (no vault needed)</span></label>
+            </fieldset>
             <div class="mode-tabs" role="tablist" aria-label="Key source">
               <button type="button" role="tab" :aria-selected="keyMode === 'pick'" :disabled="vault.entries.length === 0" @click="keyMode = 'pick'">From vault</button>
               <button type="button" role="tab" :aria-selected="keyMode === 'upload'" @click="keyMode = 'upload'">Upload a key</button>
@@ -687,20 +724,25 @@ async function open(host: HostEntry) {
             </div>
 
             <div v-if="keyMode === 'upload'">
-              <KeyUploadForm id-prefix="kf" submit-label="Add to vault" @added="onKeyUploaded" @cancel="keyMode = 'pick'" />
+              <KeyUploadForm id-prefix="kf" submit-label="Save key for host" :bind-host="{hostAlias:keyHost.name,gatewayAuth:keyPolicy}" @added="onKeyUploaded" @cancel="keyMode = 'pick'" />
             </div>
 
             <form v-else-if="keyMode === 'password'" class="pw-form" @submit.prevent="addPasswordEntry">
               <div class="field">
                 <label class="flabel" for="kf-pw">{{ keyHost.link ? 'Relay token' : 'Password' }}</label>
-                <input id="kf-pw" v-model="passwordDraft" type="password" autocomplete="new-password" />
+                <input id="kf-pw" v-model="passwordDraft" type="password" autocomplete="new-password" :disabled="keyBusy" />
               </div>
               <div class="field">
                 <label class="flabel" for="kf-pwname">Name</label>
-                <input id="kf-pwname" v-model="passwordName" :placeholder="`${keyHost.name} ${keyHost.link ? 'relay token' : 'password'}`" autocomplete="off" />
+                <input id="kf-pwname" v-model="passwordName" :placeholder="`${keyHost.name} ${keyHost.link ? 'relay token' : 'password'}`" autocomplete="off" :disabled="keyBusy" />
+              </div>
+              <div class="field">
+                <label class="flabel" for="kf-pwvault">Vault passphrase</label>
+                <input id="kf-pwvault" v-model="passwordVaultPassphrase" type="password" autocomplete="current-password" autocapitalize="off" :disabled="keyBusy" />
+                <p class="muted hint">Confirm your vault passphrase before adding this credential.</p>
               </div>
               <div class="form-actions">
-                <button class="primary" type="submit" :disabled="keyBusy || passwordDraft === ''">Add to vault</button>
+                <button class="primary" type="submit" :disabled="keyBusy || passwordDraft === '' || passwordVaultPassphrase === ''">Add to vault</button>
                 <button type="button" @click="keyMode = 'pick'">Cancel</button>
               </div>
             </form>
@@ -713,23 +755,13 @@ async function open(host: HostEntry) {
                   <option v-for="e in vault.entries" :key="e.keyId" :value="e.keyId">{{ entryLabel(e) }}</option>
                 </select>
               </div>
-              <fieldset class="policy">
-                <legend class="flabel">Through the PocketShell gateway, sign in with</legend>
-                <label class="unlock-remember">
-                  <input v-model="keyPolicy" type="radio" value="both" name="kf-policy" />
-                  <span>This vault key, then the host's own keys</span>
-                </label>
-                <label class="unlock-remember">
-                  <input v-model="keyPolicy" type="radio" value="managed" name="kf-policy" />
-                  <span>Only this vault key</span>
-                </label>
-                <label class="unlock-remember">
-                  <input v-model="keyPolicy" type="radio" value="host" name="kf-policy" />
-                  <span>Only the host's own keys (no vault needed)</span>
-                </label>
-              </fieldset>
+              <div v-if="keyChoice !== ''" class="field">
+                <label class="flabel" for="kf-vaultpass-existing">Vault passphrase</label>
+                <input id="kf-vaultpass-existing" v-model="bindingVaultPassphrase" type="password" autocomplete="current-password" autocapitalize="off" :disabled="keyBusy" />
+                <p class="muted hint">Confirm your vault passphrase to use this credential for this host.</p>
+              </div>
               <div class="form-actions">
-                <button class="primary" type="submit" :disabled="keyBusy">{{ keyBusy ? 'Saving…' : 'Save' }}</button>
+                <button class="primary" type="submit" :disabled="keyBusy || (keyChoice !== '' && bindingVaultPassphrase === '')">{{ keyBusy ? 'Saving…' : 'Save' }}</button>
                 <button type="button" @click="keyHost = null">Cancel</button>
               </div>
             </form>

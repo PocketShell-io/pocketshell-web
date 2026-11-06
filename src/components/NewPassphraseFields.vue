@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { MIN_LENGTH, passphraseStrength } from '../vault/strength';
+import {isValidNewVaultPassphrase,passphraseStrength,VAULT_PASSPHRASE_MIN_LENGTH as MIN_LENGTH} from '@ui/app/keyVault';
 
 /**
  * A new vault passphrase, entered twice, with a strength meter. Emits the
@@ -14,7 +14,7 @@ const second = ref('');
 const strength = computed(() => passphraseStrength(first.value));
 const mismatch = computed(() => second.value !== '' && first.value !== second.value);
 watch([first, second], () => {
-  emit('update:valid', first.value.length >= MIN_LENGTH && first.value === second.value ? first.value : '');
+  emit('update:valid', isValidNewVaultPassphrase(first.value) && first.value === second.value ? first.value : '');
 });
 defineExpose({
   clear() {
@@ -55,6 +55,7 @@ defineExpose({
       />
     </div>
     <p v-if="mismatch" class="error" role="alert">The two passphrases don't match.</p>
+    <p v-else-if="first !== '' && !isValidNewVaultPassphrase(first)" class="error" role="alert">Use at least {{MIN_LENGTH}} characters, not a numeric PIN.</p>
   </div>
 </template>
 

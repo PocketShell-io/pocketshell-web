@@ -1,6 +1,7 @@
 /** PocketShell design contract: status belongs in fills/text, never borders. */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import postcss from 'postcss';
 
 const statusToken = /--(?:accent|danger|warn|ok|success|error|focus-ring)(?:[\w-]*)\b/i;
@@ -57,8 +58,9 @@ export function accentBorderViolations(css, inheritedTokens = new Map()) {
 }
 
 export function styleSources(directory) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const file = join(directory, entry.name);
+  const folder = directory instanceof URL ? fileURLToPath(directory) : directory;
+  return readdirSync(folder, { withFileTypes: true }).flatMap(entry => {
+    const file = join(folder, entry.name);
     if (entry.isDirectory()) return styleSources(file);
     if (!['.css', '.vue'].includes(extname(file))) return [];
     const source = readFileSync(file, 'utf8');

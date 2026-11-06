@@ -11,12 +11,10 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  HELPER_BASELINE_KINDS,
-  HELPER_VERSION_WITHOUT_GROK,
-  LAUNCHABLE_KINDS,
+  OFFLINE_LAUNCHABLE_KINDS,
+  launchableKindsFor,
   buildLaunchCommand,
   isLaunchableKind,
-  kindNeedsNewerHelper,
   kindUnavailableReason,
   launchBlocker,
   supportsProfiles,
@@ -24,35 +22,22 @@ import {
 } from '@pocketshell/core';
 
 const readFixture = (name: string): string =>
-  readFileSync(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)), 'utf8');
+  readFileSync(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)), 'utf8').replace(/\r\n/g,'\n');
 
 describe('the 0.4.44 `pocketshell agent` contract, as captured', () => {
-  const groupHelp = readFixture('v0.4.44-agent-help.txt');
   const claudeHelp = readFixture('v0.4.44-agent-claude-help.txt');
   const opencodeHelp = readFixture('v0.4.44-agent-opencode-help.txt');
 
-  it('lists exactly the three subcommands the helper baseline accepts', () => {
-    const listed = [...groupHelp.matchAll(/^ {2}(\w+) {2,}Launch/gm)].map((m) => m[1]);
-    expect(listed).toEqual(['claude', 'codex', 'opencode']);
-    expect([...HELPER_BASELINE_KINDS]).toEqual(listed);
-    // LAUNCHABLE_KINDS is what the app can spell; the gap is probed for.
-    expect([...LAUNCHABLE_KINDS]).toEqual([...listed, 'grok', 'antigravity']);
-    for (const kind of HELPER_BASELINE_KINDS) expect(kindNeedsNewerHelper(kind)).toBe(false);
-    expect(kindNeedsNewerHelper('grok')).toBe(true);
-    expect(kindNeedsNewerHelper('antigravity')).toBe(true);
+  it('uses the live catalog including custom IDs and only falls back when no catalog is available', () => {
+    expect(launchableKindsFor(['claude','custom-ai'])).toEqual(['claude','custom-ai']);
+    expect(launchableKindsFor([])).toEqual([]);
+    expect(launchableKindsFor(null)).toEqual(OFFLINE_LAUNCHABLE_KINDS);
   });
 
-  it('refuses grok on a host whose captured help has no such subcommand', () => {
-    expect(groupHelp).not.toMatch(/^ {2}grok\b/m);
-    expect(readFixture('v0.4.44-agent-no-such-command.stderr.txt')).toContain(
-      "Error: No such command 'grok'.",
-    );
+  it('refuses an engine absent from an authoritative live catalog', () => {
     expect(isLaunchableKind('grok')).toBe(true);
-    const onPinnedHost = { subcommands: [...HELPER_BASELINE_KINDS] };
-    expect(kindUnavailableReason('grok', onPinnedHost)).toMatch(/too old to start Grok/);
-    expect(kindUnavailableReason('grok', onPinnedHost)).toContain(
-      `newer than ${HELPER_VERSION_WITHOUT_GROK}`,
-    );
+    const onPinnedHost = { engineIds: ['claude','codex','opencode'] };
+    expect(kindUnavailableReason('grok', onPinnedHost)).toMatch(/does not report an available Grok engine/);
     expect(launchBlocker({ kind: 'grok', dir: '/srv/app' }, onPinnedHost)).toBe(
       kindUnavailableReason('grok', onPinnedHost),
     );

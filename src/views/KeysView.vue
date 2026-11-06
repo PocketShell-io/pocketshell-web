@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useVaultStore, WrongPassphraseError } from '../stores/vault';
@@ -37,7 +37,13 @@ const notice = ref('');
 const error = ref('');
 const passwordDraft = ref('');
 const passwordName = ref('');
+const passwordVaultPassphrase = ref('');
+const passwordBusy = ref(false);
 const copied = ref('');
+watch(adding, (next,previous) => {
+  if (previous === 'password' && next !== 'password') {vault.cancelAddition();passwordDraft.value='';passwordVaultPassphrase.value='';}
+});
+onBeforeUnmount(()=>{vault.cancelAddition();passwordDraft.value='';passwordVaultPassphrase.value='';});
 
 const changeOpen = ref(false);
 const currentPass = ref('');
@@ -97,13 +103,15 @@ function onRotated(entry: VaultKeyEntry) {
 }
 
 async function addPassword() {
-  await guard(async () => {
-    const entry = await vault.addPassword(passwordDraft.value, passwordName.value.trim() || 'Password');
+  if (passwordBusy.value || !passwordVaultPassphrase.value || !passwordDraft.value) return;
+  const confirmation=passwordVaultPassphrase.value;passwordVaultPassphrase.value='';passwordBusy.value=true;
+  try {await guard(async () => {
+    const entry = await vault.addPassword(passwordDraft.value, passwordName.value.trim() || 'Password', confirmation);
     passwordDraft.value = '';
     passwordName.value = '';
     adding.value = 'none';
     say(`${entry.name} added to your vault.`);
-  });
+  });}finally{passwordBusy.value=false;}
 }
 
 function startRename(e: VaultKeyEntry) {
@@ -252,14 +260,19 @@ function created(iso: string): string {
           <form @submit.prevent="addPassword">
             <div class="field">
               <label class="flabel" for="pw-value">Password</label>
-              <input id="pw-value" v-model="passwordDraft" type="password" autocomplete="new-password" />
+              <input id="pw-value" v-model="passwordDraft" type="password" autocomplete="new-password" :disabled="passwordBusy" />
             </div>
             <div class="field">
               <label class="flabel" for="pw-name">Name</label>
-              <input id="pw-name" v-model="passwordName" placeholder="e.g. prod-box password" autocomplete="off" />
+              <input id="pw-name" v-model="passwordName" placeholder="e.g. prod-box password" autocomplete="off" :disabled="passwordBusy" />
+            </div>
+            <div class="field">
+              <label class="flabel" for="pw-vaultpass">Vault passphrase</label>
+              <input id="pw-vaultpass" v-model="passwordVaultPassphrase" type="password" autocomplete="current-password" autocapitalize="off" :disabled="passwordBusy" />
+              <p class="muted hint">Confirm your vault passphrase each time you add a password.</p>
             </div>
             <div class="form-actions">
-              <button class="primary" type="submit" :disabled="passwordDraft === ''">Add to vault</button>
+              <button class="primary" type="submit" :disabled="passwordBusy || passwordDraft === '' || passwordVaultPassphrase === ''">{{passwordBusy ? 'Adding…' : 'Add to vault'}}</button>
               <button type="button" @click="adding = 'none'">Cancel</button>
             </div>
           </form>
